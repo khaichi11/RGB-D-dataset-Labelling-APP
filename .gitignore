@@ -1,0 +1,24 @@
+# Hanya kode aplikasi dan dokumentasinya yang masuk repository.
+/*
+!/.gitignore
+!/README.md
+!/kode/
+/kode/*
+!/kode/requirements.txt
+!/kode/README.md
+!/kode/studio_rgbd/
+!/kode/studio_rgbd/**
+/kode/.venv/
+/kode/__pycache__/
+
+# Data yang dibuat aplikasi selalu lokal dan dapat sangat besar.
+/.venv/
+/dataset/
+/keluaran/
+/model/
+/runs*/
+*.bag
+*.ply
+*.pt
+__pycache__/
+*.pyc

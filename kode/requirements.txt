@@ -1,0 +1,8 @@
+# Lingkungan folder uji_kamera - laptop Windows/Linux x86
+# Jetson/ARM: pyrealsense2 TIDAK ada rodanya, lihat SETUP_jetson.sh
+numpy>=1.24
+opencv-python>=4.8
+pyrealsense2>=2.54
+Pillow>=10.0
+# baru diperlukan di 05_ukur_tangga_naik.py
+ultralytics>=8.3
