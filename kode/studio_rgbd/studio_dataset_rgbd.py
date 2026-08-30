@@ -2071,7 +2071,12 @@ class Studio(tk.Tk):
                 self.q.put(("ekspor_selesai", (sesi, root, 0, len(picks))))
                 return
             lama = baca_json(root / "export.json", {})
-            frame_meta = {int(x["index_bag"]): x for x in lama.get("frames", []) if "index_bag" in x}
+            # Paket yang pernah dibuang/dipindahkan tidak boleh tersisa hanya
+            # sebagai entri metadata; daftar ekspor harus merefleksikan disk.
+            frame_meta = {
+                int(x["index_bag"]): x for x in lama.get("frames", [])
+                if "index_bag" in x and "folder" in x and (root / x["folder"]).is_dir()
+            }
             meta_export={"sumber_bag":f"../source/{self.bag(sesi).name}","rentang_indeks_terakhir":[a,b],
                          "interval_frame_sumber":langkah,"non_destruktif":True,
                          "penamaan":"exports/frames/frame_<indeks_sumber>; satu frame sumber hanya disimpan sekali",
