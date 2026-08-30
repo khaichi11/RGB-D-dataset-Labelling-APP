@@ -328,6 +328,8 @@ class KanvasLabel(tk.Canvas):
         self.jarak_magnet = 12  # piksel layar, tetap nyaman pada setiap zoom
         self._render_terjadwal = False
         self._render_setelah = None
+        self._zoom_cepat = False
+        self._zoom_tajam_setelah = None
         self._photo = None
         self._photo_key = None
         self._canvas_background_key = None
@@ -441,7 +443,11 @@ class KanvasLabel(tk.Canvas):
         # Drag titik bisa memanggil render puluhan kali/detik. Gambar dasar
         # cukup dibuat sekali; yang berubah hanya garis poligon di atasnya.
         if self._photo_key != key or self._photo is None:
-            self._photo = ImageTk.PhotoImage(Image.fromarray(self.gambar_tampil()).resize(size, Image.LANCZOS))
+            # LANCZOS di setiap tick roda mouse mahal, terutama di RGB-D
+            # resolusi tinggi. Ketika zoom masih berlangsung gunakan BILINEAR,
+            # lalu render LANCZOS sekali setelah pengguna berhenti.
+            resample = Image.BILINEAR if self._zoom_cepat else Image.LANCZOS
+            self._photo = ImageTk.PhotoImage(Image.fromarray(self.gambar_tampil()).resize(size, resample))
             self._photo_key = key
         # Foto dasar mahal untuk digambar ulang. Saat titik digeser, yang
         # berubah hanyalah overlay sehingga gambar RGB tetap dipertahankan.
@@ -707,6 +713,17 @@ class KanvasLabel(tk.Canvas):
         self.scale = max(0.08, min(8.0, self.scale * faktor))
         if sebelumnya:
             self.ox, self.oy = e.x - sebelumnya[0] * self.scale, e.y - sebelumnya[1] * self.scale
+        self._zoom_cepat = True
+        if self._zoom_tajam_setelah is not None:
+            self.after_cancel(self._zoom_tajam_setelah)
+        self._zoom_tajam_setelah = self.after(160, self._zoom_selesai)
+        self.render_nanti()
+
+    def _zoom_selesai(self):
+        """Ganti preview cepat menjadi gambar tajam hanya sekali per zoom."""
+        self._zoom_tajam_setelah = None
+        self._zoom_cepat = False
+        self._photo_key = None
         self.render_nanti()
 
     def pan_mulai(self, e): self._drag = (e.x, e.y, self.ox, self.oy)
