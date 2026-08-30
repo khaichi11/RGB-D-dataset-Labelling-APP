@@ -619,7 +619,9 @@ class Studio(tk.Tk):
         self.kode = StringVar(value=preferensi.get("kode_adegan", ""))
         self.status = StringVar(value="Menyalakan D435…")
         self.durasi = StringVar(value="Belum ada rekaman dipilih.")
-        self.fps_ekspor = IntVar(value=args.fps)
+        # Jarak antar frame sumber. Nilai 10 pada rekaman ~30 FPS berarti
+        # sekitar 3 frame/detik, sehingga dataset tidak dipenuhi frame kembar.
+        self.langkah_ekspor = IntVar(value=10)
         self.awal = IntVar(value=0); self.akhir = IntVar(value=0)
         self.ekspor_awal = IntVar(value=0); self.ekspor_akhir = IntVar(value=0)
         self.rentang_manual = BooleanVar(value=False)
@@ -852,12 +854,13 @@ class Studio(tk.Tk):
     def ui_ekspor(self):
         f = tk.Frame(self.tab_ekspor, bg=BG); f.pack(fill="both", expand=True, padx=30, pady=28)
         b, i = self.card(f, "Ekspor frame RGB-D untuk dataset dan label YOLO") ; b.pack(fill="x")
-        tk.Label(i, text="FPS ekspor (maksimum = FPS rekaman)", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
-        tk.Spinbox(i, from_=1, to=self.args.fps, textvariable=self.fps_ekspor, width=8).grid(row=0, column=1, sticky="w", padx=10)
+        tk.Label(i, text="Ambil 1 frame setiap … frame sumber", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
+        tk.Spinbox(i, from_=1, to=9999, textvariable=self.langkah_ekspor, width=8).grid(row=0, column=1, sticky="w", padx=10)
         self.tombol(i, "Ekspor frame dari rentang pilihan", self.ekspor, GREEN).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(14, 4))
         self.tombol(i, "Buat video MP4 rentang (opsional)", self.ekspor_video_rentang, BLUE).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 4))
-        self.tombol(i, "Hapus semua hasil ekspor sesi ini", self.hapus_semua_ekspor, "#F3D8D4", INK).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 4))
-        tk.Label(i, text="Ekspor frame berjalan di worker latar belakang dan bersifat inkremental: jika 1–50 sudah ada lalu ekspor 40–60, hanya frame baru yang dibuat. Setiap paket langsung dari RAW berisi RGB, depth Z16 native/selaras, NPY, IR, timestamp, intrinsics, extrinsics, dan frame.json. Pemilihan memakai timestamp kamera, sehingga FPS asli yang tidak tepat 30 tidak membuat RGB/depth salah pasangan. Video MP4 di atas hanya salinan pendek untuk ditonton atau dibagikan; tidak diperlukan untuk labeling maupun ekspor frame.", bg=PANEL, fg=MUTED, wraplength=750, justify="left").grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.tombol(i, "Buang frame belum dilabeli", self.buang_frame_belum_dilabeli, "#F3D8D4", INK).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 4))
+        self.tombol(i, "Hapus semua hasil ekspor sesi ini", self.hapus_semua_ekspor, "#F3D8D4", INK).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 4))
+        tk.Label(i, text="Default 10 berarti mengambil frame 0, 10, 20, dan seterusnya dari rentang pilihan sehingga sampel lebih berbeda. Ekspor berjalan di worker latar belakang dan tidak menggandakan frame yang sudah ada. Tombol ‘Buang frame belum dilabeli’ menjaga paket yang sudah memiliki draft atau label YOLO, lalu Anda dapat ekspor ulang dengan interval baru. Video MP4 hanya untuk ditonton/dibagikan; tidak diperlukan untuk labeling.", bg=PANEL, fg=MUTED, wraplength=750, justify="left").grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.label_ekspor = tk.Label(f, text="Belum ada ekspor dipilih.", bg=BG, fg=ACCENT, justify="left"); self.label_ekspor.pack(anchor="w", pady=(18, 0))
 
     def ui_label(self):
@@ -1899,10 +1902,43 @@ class Studio(tk.Tk):
         if getattr(self, "_ekspor_thread", None) and self._ekspor_thread.is_alive():
             messagebox.showinfo("Sedang berjalan", "Ekspor lain masih berjalan.", parent=self); return
         sesi = self.sesi
-        fps = max(1, min(int(round(self.fps_asli(sesi))), int(self.fps_ekspor.get())))
-        self._ekspor_thread = threading.Thread(target=self._ekspor_worker, args=(sesi, fps), daemon=True)
+        langkah = max(1, int(self.langkah_ekspor.get()))
+        self._ekspor_thread = threading.Thread(target=self._ekspor_worker, args=(sesi, langkah), daemon=True)
         self._ekspor_thread.start()
-        self.status.set("Mengekspor… frame yang sudah ada akan dilewati, bukan diulang.")
+        self.status.set(f"Mengekspor setiap {langkah} frame sumber… frame yang sudah ada akan dilewati.")
+
+    @staticmethod
+    def _punya_label(frame: Path) -> bool:
+        """Draft maupun label jadi bukti frame pernah disentuh pengguna."""
+        label = frame / "label_yolo_seg.txt"
+        if label.exists() and label.read_text(encoding="utf-8").strip():
+            return True
+        draft = baca_json(frame / "label_draft.json", {})
+        return any(poly for daftar in draft.get("poligon", {}).values() for poly in daftar)
+
+    def buang_frame_belum_dilabeli(self):
+        """Reset aman untuk mengganti interval tanpa menghapus kerja labeling."""
+        if not self.sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman terlebih dahulu.", parent=self); return
+        if getattr(self, "_ekspor_thread", None) and self._ekspor_thread.is_alive():
+            messagebox.showinfo("Ekspor berjalan", "Tunggu ekspor yang sedang berjalan selesai.", parent=self); return
+        kandidat = [p for p in self.daftar_frame_ekspor() if not self._punya_label(p)]
+        if not kandidat:
+            messagebox.showinfo("Tidak ada yang dibuang", "Semua frame ekspor sudah memiliki draft/label, atau belum ada frame.", parent=self); return
+        if not messagebox.askyesno("Buang frame belum dilabeli",
+                                   f"Buang {len(kandidat)} paket frame yang BELUM memiliki draft/label?\n\n"
+                                   "Frame yang sudah Anda segmentasi tetap dipertahankan. RAW tidak disentuh.",
+                                   icon="warning", parent=self):
+            return
+        gagal = []
+        for p in kandidat:
+            try:
+                shutil.rmtree(p)
+            except OSError:
+                gagal.append(p.name)
+        self.label_path = None; self.label_info = None
+        self.muat_frame()
+        self.status.set(f"{len(kandidat) - len(gagal)} frame belum dilabeli dibuang. Ekspor ulang dengan interval {self.langkah_ekspor.get()}.")
 
     def hapus_semua_ekspor(self):
         """Buang seluruh turunan ekspor sesi aktif, tanpa menyentuh RAW."""
@@ -1933,9 +1969,8 @@ class Studio(tk.Tk):
         i = max(0, self.posisi.get())
         if getattr(self, "_ekspor_thread", None) and self._ekspor_thread.is_alive():
             messagebox.showinfo("Ekspor berjalan", "Tunggu ekspor yang sedang berjalan selesai.", parent=self); return
-        fps = max(1, min(int(round(self.fps_asli(self.sesi))), int(self.fps_ekspor.get())))
         self._label_setelah_ekspor = i
-        self._ekspor_thread = threading.Thread(target=self._ekspor_worker, args=(self.sesi, fps, (i, i)), daemon=True)
+        self._ekspor_thread = threading.Thread(target=self._ekspor_worker, args=(self.sesi, 1, (i, i)), daemon=True)
         self._ekspor_thread.start()
         self.status.set(f"Menyalin paket RAW frame {i} ke Label & Ukur…")
 
@@ -1973,37 +2008,12 @@ class Studio(tk.Tk):
         return {"depth_scale":float(ds.get_depth_scale()), "intrinsics_rgb_native":{"width":ci.width,"height":ci.height,"fx":ci.fx,"fy":ci.fy,"ppx":ci.ppx,"ppy":ci.ppy,"coeffs":list(ci.coeffs)}, "intrinsics_depth_native":{"width":di.width,"height":di.height,"fx":di.fx,"fy":di.fy,"ppx":di.ppx,"ppy":di.ppy,"coeffs":list(di.coeffs)}, "extrinsics_depth_ke_rgb":{"rotation_row_major":list(ex.rotation),"translation_meter":list(ex.translation)}}
 
     @staticmethod
-    def _rencana_picks(sesi: Path, a: int, b: int, fps_out: int) -> set[int] | None:
-        """Indeks sumber yang akan diekspor, dari TIMESTAMP di frame_index.csv.
+    def _rencana_picks(sesi: Path, a: int, b: int, langkah: int) -> set[int]:
+        """Indeks sumber dengan jarak tetap: 0, 10, 20 … bila langkah=10."""
+        del sesi  # Rentang memakai indeks sumber deterministik dari PembacaBag.
+        return set(range(a, b + 1, max(1, langkah)))
 
-        Rekaman D435 tidak tepat 30 fps dan kadang menjatuhkan frame, jadi
-        pemilihan berbasis nomor indeks meleset dalam hitungan waktu; patokan
-        yang benar adalah timestamp. Mengembalikan None bila CSV belum ada
-        (preview lama) - pemilihan jatuh kembali ke timestamp saat dekode.
-        """
-        p = sesi / "derived" / "frame_index.csv"
-        if not p.exists():
-            return None
-        picks: set[int] = set()
-        next_ts = None
-        try:
-            with p.open(newline="", encoding="utf-8") as f:
-                for row in csv.DictReader(f):
-                    i = int(row["i"])
-                    if i < a: continue
-                    if i > b: break
-                    ts = float(row["timestamp_ms"])
-                    if next_ts is None:
-                        next_ts = ts
-                    if ts + 1e-6 < next_ts:
-                        continue
-                    next_ts += 1000.0 / fps_out
-                    picks.add(i)
-        except (ValueError, KeyError):
-            return None
-        return picks
-
-    def _ekspor_worker(self, sesi: Path, fps_out: int, rentang_paksa: tuple[int, int] | None = None):
+    def _ekspor_worker(self, sesi: Path, langkah: int, rentang_paksa: tuple[int, int] | None = None):
         """Ekspor yang BISA DILANJUTKAN dan tidak pernah menggandakan frame.
 
         Tiga hal yang membuatnya begitu:
@@ -2021,7 +2031,6 @@ class Studio(tk.Tk):
         """
         try:
             a,b = rentang_paksa or self.rentang()
-            fps_nyata = self.fps_asli(sesi)
             # Satu folder frame kanonik per sesi, apa pun FPS pilihan. Dengan
             # begitu ekspor 30 FPS lalu 15 FPS tidak menggandakan frame sumber.
             root = sesi / "exports"; frames = root / "frames"
@@ -2038,7 +2047,7 @@ class Studio(tk.Tk):
                     if not (p/"frame.json").exists(): continue
                     try: sudah.setdefault(int(p.name.split("_", 1)[1]), p)
                     except ValueError: pass
-            picks = self._rencana_picks(sesi, a, b, fps_out)
+            picks = self._rencana_picks(sesi, a, b, langkah)
             if picks and picks <= sudah.keys() and (root/"export.json").exists():
                 self.q.put(("status", "Ekspor sudah lengkap; tidak ada satu frame pun yang diekspor ulang."))
                 self.q.put(("ekspor_selesai", (sesi, root, 0, len(picks))))
@@ -2046,22 +2055,15 @@ class Studio(tk.Tk):
             lama = baca_json(root / "export.json", {})
             frame_meta = {int(x["index_bag"]): x for x in lama.get("frames", []) if "index_bag" in x}
             meta_export={"sumber_bag":f"../source/{self.bag(sesi).name}","rentang_indeks_terakhir":[a,b],
-                         "fps_asli":round(fps_nyata,3),"fps_ekspor":fps_out,"non_destruktif":True,
+                         "interval_frame_sumber":langkah,"non_destruktif":True,
                          "penamaan":"exports/frames/frame_<indeks_sumber>; satu frame sumber hanya disimpan sekali",
-                         "pemilihan":"berbasis timestamp kamera, bukan nomor indeks",
+                         "pemilihan":"setiap N indeks frame sumber; frame RGB/depth tetap satu paket sinkron dari RAW",
                          "frames":[]}
-            langkah_ms = 1000.0 / fps_out
-            next_ts = None; n=0; dilewati=0
+            n=0; dilewati=0
             for i,(native,color,depth,aligned,profile) in enumerate(PembacaBag(self.bag(sesi)).iter_frame()):
                 if i<a: continue
                 if i>b: break
-                if picks is not None:
-                    if i not in picks: continue
-                else:
-                    ts_now = float(depth.get_timestamp())
-                    if next_ts is None: next_ts = ts_now
-                    if ts_now + 1e-6 < next_ts: continue
-                    next_ts += langkah_ms
+                if i not in picks: continue
                 folder = frames/f"frame_{i:06d}"
                 if i in sudah:
                     dilewati += 1
@@ -2235,11 +2237,26 @@ class Studio(tk.Tk):
         if not messagebox.askyesno("Hapus frame permanen", f"Hapus seluruh paket turunan {p.name}?\n\nRGB, depth, IR, mask, dan label pada frame ini akan hilang. RAW tidak dihapus.", parent=self):
             return
         try:
+            # Simpan kandidat sesudah frame kini SEBELUM folder dihapus. Dengan
+            # begitu alur label maju ke gambar berikutnya, bukan kembali awal.
+            try:
+                posisi = self.frame_paths.index(p)
+            except ValueError:
+                posisi = -1
+            berikut = self.frame_paths[posisi + 1] if 0 <= posisi < len(self.frame_paths) - 1 else None
+            sebelum = self.frame_paths[posisi - 1] if posisi > 0 else None
             shutil.rmtree(p)
             self.label_path = None; self.label_info = None
             self.kanvas.rgb = self.kanvas.depth = None; self.kanvas.delete("all")
             self.muat_frame()
-            self.status.set("Frame ekspor dihapus permanen. Rekaman RAW tetap aman.")
+            tujuan = berikut if berikut in self.frame_paths else sebelum if sebelum in self.frame_paths else None
+            if tujuan is not None:
+                indeks = self.frame_paths.index(tujuan)
+                self.list_frame.selection_set(indeks); self.list_frame.activate(indeks)
+                self._buka_frame_ekspor(tujuan)
+                self.status.set(f"Frame dihapus. Lanjut ke {tujuan.name}.")
+            else:
+                self.status.set("Frame ekspor dihapus permanen. Rekaman RAW tetap aman.")
         except OSError as e:
             messagebox.showerror("Hapus frame", str(e), parent=self)
 
