@@ -2312,11 +2312,14 @@ class Studio(tk.Tk):
             # mendapat proposal depth, bukan dipaksa ke model yang salah kelas.
             if kategori == "tangga_naik":
                 hasil = usulkan_yolo_depth(self.kanvas.rgb, self.kanvas.depth, self._intrinsics(info))
-                # SAM 2 memakai kandidat YOLO sebagai bounding-box prompt.
-                # Setiap kandidat tetap dipertahankan bila SAM gagal merapikan.
+                # Normal depth dipakai sebagai petunjuk LUNAK ketika memilih
+                # alternatif SAM, bukan dipakai memotong hasil secara keras.
+                depth_info = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
+                # SAM 2 memakai mask YOLO sebagai titik positif/negatif serta
+                # box prompt; setiap kandidat tetap dipertahankan bila gagal.
                 rapih = rapikan_sam2(self.kanvas.rgb, {
                     "tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"],
-                })
+                }, {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
                 rapih = verifikasi_depth(rapih, self.kanvas.depth)
                 hasil["tapakan"], hasil["bidang_tegak"] = rapih["tapakan"], rapih["bidang_tegak"]
                 hasil["sumber"] = "YOLO + SAM 2.1 Tiny + depth (GPU)"
