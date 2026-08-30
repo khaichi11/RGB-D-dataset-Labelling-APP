@@ -593,6 +593,7 @@ class Studio(tk.Tk):
         self._siapkan_root(); self._buat_ui()
         self.tabs.bind("<<NotebookTabChanged>>", self.ganti_tab)
         self.after(30, self._poll)
+        self.after(120, self.muat_daftar)   # daftar tangga langsung terlihat saat aplikasi dibuka
         self.status.set("Siap untuk labeling. Kamera dinyalakan hanya saat Preview Kamera atau Mulai rekam ditekan.")
 
     # ----- struktur data -----
@@ -721,9 +722,14 @@ class Studio(tk.Tk):
         left = tk.Frame(f, bg=BG, width=320); left.pack(side="left", fill="y", padx=(0, 12)); left.pack_propagate(False)
         right = tk.Frame(f, bg=BG); right.pack(side="left", fill="both", expand=True)
         b, i = self.card(left, "Rekaman") ; b.pack(fill="both", expand=True)
+        tk.Label(i, text="Kategori", bg=PANEL, fg=MUTED).pack(anchor="w")
+        pilih_kategori = ttk.Combobox(i, textvariable=self.filter_sesi, values=KATEGORI,
+                                      state="readonly")
+        pilih_kategori.pack(fill="x", pady=(2, 8))
+        pilih_kategori.bind("<<ComboboxSelected>>", lambda _e: self.muat_daftar())
         self.list_sesi = tk.Listbox(i, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT, activestyle="none", height=22)
         self.list_sesi.pack(fill="both", expand=True); self.list_sesi.bind("<<ListboxSelect>>", lambda e: self.pilih_sesi())
-        self.tombol(i, "Muat daftar", self.muat_daftar, "#E8DDD5", INK).pack(fill="x", pady=(10, 3))
+        self.tombol(i, "Muat ulang daftar", self.muat_daftar, "#E8DDD5", INK).pack(fill="x", pady=(10, 3))
         self.tombol(i, "Pindah ke tempat sampah / pulihkan", self.toggle_sampah, "#E8DDD5", INK).pack(fill="x")
         tk.Checkbutton(i, text="\U0001f5d1 Tampilkan isi tempat sampah", variable=self.tampil_sampah,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
@@ -767,9 +773,9 @@ class Studio(tk.Tk):
         self.scale_pos.pack(fill="x", pady=(6, 0))
 
         ukur = tk.Frame(bawah, bg=PANEL); ukur.pack(fill="x", pady=(6, 0))
-        tk.Checkbutton(ukur, text="Mode ukur", variable=self.mode_ukur,
+        tk.Checkbutton(ukur, text="Ukur 2 titik (preview lengkap)", variable=self.mode_ukur,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
-                       command=self._gambar_ulang_kanvas).pack(side="left")
+                       command=self.ubah_mode_ukur).pack(side="left")
         ttk.Combobox(ukur, textvariable=self.cara_ukur, width=34, state="readonly",
                      values=(CARA_BIDANG, CARA_JARAK)).pack(side="left", padx=8)
         self.tombol(ukur, "Hapus garis", self._hapus_ukur, "#E8DDD5", INK).pack(side="right")
@@ -779,8 +785,19 @@ class Studio(tk.Tk):
         self.scale_awal = tk.Scale(bawah, from_=0, to=0, orient="horizontal", variable=self.awal, label="Awal potongan", bg=PANEL, fg=INK, highlightthickness=0)
         self.scale_akhir = tk.Scale(bawah, from_=0, to=0, orient="horizontal", variable=self.akhir, label="Akhir potongan", bg=PANEL, fg=INK, highlightthickness=0)
         self.scale_awal.pack(fill="x"); self.scale_akhir.pack(fill="x")
+        manual = tk.Frame(bawah, bg=PANEL); manual.pack(fill="x", pady=(4, 0))
+        tk.Label(manual, text="Atau ketik frame", bg=PANEL, fg=MUTED).pack(side="left")
+        ent_awal = tk.Spinbox(manual, from_=0, to=999999, textvariable=self.awal, width=8,
+                               command=lambda: self.rentang_manual.set(True))
+        ent_awal.pack(side="left", padx=(6, 2)); ent_awal.bind("<FocusOut>", lambda _e: self.rentang_manual.set(True))
+        tk.Label(manual, text="s.d.", bg=PANEL, fg=MUTED).pack(side="left")
+        ent_akhir = tk.Spinbox(manual, from_=0, to=999999, textvariable=self.akhir, width=8,
+                                command=lambda: self.rentang_manual.set(True))
+        ent_akhir.pack(side="left", padx=2); ent_akhir.bind("<FocusOut>", lambda _e: self.rentang_manual.set(True))
+        self.tombol(manual, "Awal = frame kini", self.tetapkan_awal_kini, "#E8DDD5", INK).pack(side="left", padx=(8, 2))
+        self.tombol(manual, "Akhir = frame kini", self.tetapkan_akhir_kini, "#E8DDD5", INK).pack(side="left", padx=2)
         self.tombol(bawah, "Simpan rentang potong (non-destruktif)", self.simpan_potong, GREEN).pack(fill="x", pady=(8, 0))
-        tk.Label(bawah, text="Putar dapat langsung dari RAW tanpa menunggu. Preview lengkap hanya perlu dibuat sekali bila ingin lompat frame, menyimpan rentang, ekspor terpilih, atau mengukur 3-D.", bg=PANEL, fg=MUTED, wraplength=720, justify="left").pack(anchor="w", pady=(6, 0))
+        tk.Label(bawah, text="Putar dan ekspor frame yang sedang dijeda dapat langsung dari RAW. Preview lengkap hanya diperlukan untuk slider/lompat frame dan pengukuran 3-D dari dua klik.", bg=PANEL, fg=MUTED, wraplength=720, justify="left").pack(anchor="w", pady=(6, 0))
 
     def ui_ekspor(self):
         f = tk.Frame(self.tab_ekspor, bg=BG); f.pack(fill="both", expand=True, padx=30, pady=28)
@@ -1196,11 +1213,17 @@ class Studio(tk.Tk):
         self.list_sesi.delete(0, "end")
         self._map_sesi = []
         for p in self.daftar_sesi():
+            if p.parent.name != self.filter_sesi.get():
+                continue
             state = self._state(p)
             if state.get("di_sampah") != self.tampil_sampah.get(): continue
             ikon = "\U0001f5d1 " if state.get("di_sampah") else ""
             self._map_sesi.append(p); self.list_sesi.insert("end", f"{ikon}{p.parent.name}  |  {p.name}")
-        self.status.set(f"{len(self._map_sesi)} rekaman ditampilkan.")
+        if self._map_sesi:
+            target = self._map_sesi.index(self.sesi) if self.sesi in self._map_sesi else 0
+            self.list_sesi.selection_set(target); self.list_sesi.activate(target)
+            self.after_idle(self.pilih_sesi)
+        self.status.set(f"{len(self._map_sesi)} rekaman {self.filter_sesi.get()} ditampilkan.")
 
     def pilih_sesi(self):
         sel = self.list_sesi.curselection()
@@ -1223,7 +1246,20 @@ class Studio(tk.Tk):
         else:
             self.kanvas_tinjau.delete("all")
             self.kanvas_tinjau.create_text(12, 12, anchor="nw", fill="white",
-                font=("Segoe UI", 10), text="Preview belum ada. Tekan Buat preview.")
+                font=("Segoe UI", 10), text="Tekan Putar untuk melihat RAW langsung.")
+        self.muat_frame()  # frame ekspor langsung tersedia saat rekaman berganti
+
+    def tetapkan_awal_kini(self):
+        if getattr(self, "_bingkai_kini", None) is None:
+            messagebox.showinfo("Putar rekaman", "Putar atau jeda rekaman pada frame yang ingin dijadikan awal.", parent=self); return
+        self.awal.set(self.posisi.get()); self.rentang_manual.set(True)
+        self.status.set(f"Awal ekspor: frame {self.awal.get()}.")
+
+    def tetapkan_akhir_kini(self):
+        if getattr(self, "_bingkai_kini", None) is None:
+            messagebox.showinfo("Putar rekaman", "Putar atau jeda rekaman pada frame yang ingin dijadikan akhir.", parent=self); return
+        self.akhir.set(self.posisi.get()); self.rentang_manual.set(True)
+        self.status.set(f"Akhir ekspor: frame {self.akhir.get()}.")
 
     @staticmethod
     def pindahkan_sesi(sesi: Path, kategori_baru: str, kategori_lama_daftar=KATEGORI) -> Path:
@@ -1373,10 +1409,13 @@ class Studio(tk.Tk):
         except Exception as e: self.q.put(("error", f"Gagal membuat preview: {e}"))
 
     def simpan_potong(self):
-        if not self.sesi or not self.indeks: messagebox.showinfo("Preview belum siap", "Buat preview dahulu agar rentang frame diketahui.", parent=self); return
+        if not self.sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman dahulu.", parent=self); return
         a,b = sorted((self.awal.get(), self.akhir.get()))
+        if not self.indeks and not self.rentang_manual.get():
+            messagebox.showinfo("Tentukan rentang", "Jeda video lalu gunakan tombol Awal/Akhir = frame kini, atau ketik nomor frame yang diinginkan.", parent=self); return
         edit = self.sesi / "edit"; edit.mkdir(exist_ok=True)
-        tulis_json(edit / "rentang.json", {"awal_indeks": a, "akhir_indeks": b, "jumlah_total": len(self.indeks),
+        tulis_json(edit / "rentang.json", {"awal_indeks": a, "akhir_indeks": b, "jumlah_total": len(self.indeks) or None,
             "non_destruktif": True, "dibuat_iso": datetime.now().isoformat(timespec="seconds")})
         self.status.set(f"Rentang {a}–{b} disimpan. Rekaman asli tetap utuh.")
 
@@ -1611,13 +1650,20 @@ class Studio(tk.Tk):
         sah = petak[(petak > .15) & (petak < 10)]
         return float(np.median(sah)) if sah.size >= 3 else None
 
+    def ubah_mode_ukur(self):
+        """Jangan biarkan checkbox ukur tampak aktif tetapi klik tidak bekerja."""
+        if self.mode_ukur.get() and (not self.sesi or not (self.sesi / "derived" / "kamera.json").exists()):
+            self.mode_ukur.set(False)
+            self.hasil_ukur.set("Pengukuran dua titik memerlukan preview lengkap karena depth frame harus dapat dipanggil ulang. Untuk cara cepat, buat mask merah + biru di Label & Ukur; tinggi dihitung otomatis.")
+        self._gambar_ulang_kanvas()
+
     def _klik_kanvas(self, e):
         if not self.mode_ukur.get(): return
         bgr = getattr(self, "_bingkai_kini", None)
         if bgr is None:
             # Dulu klik diam saja tanpa penjelasan - terlihat seperti mode
             # ukur rusak padahal preview-nya yang belum ada.
-            self.hasil_ukur.set("Belum ada gambar untuk diukur. Pilih rekaman lalu tekan Buat preview dahulu.")
+            self.hasil_ukur.set("Belum ada gambar. Putar RAW dahulu; untuk ukur dua titik gunakan preview lengkap, atau ukur otomatis dari mask di Label & Ukur.")
             return
         sk = getattr(self, "_skala_tampil", 1.0) or 1.0
         x, y = int(e.x / sk), int(e.y / sk)
@@ -1738,6 +1784,8 @@ class Studio(tk.Tk):
         if not self.sesi: return (0, -1)
         x=baca_json(self.sesi/"edit"/"rentang.json", {})
         if x: return int(x["awal_indeks"]), int(x["akhir_indeks"])
+        if self.rentang_manual.get():
+            return tuple(sorted((self.awal.get(), self.akhir.get())))
         return (0, len(self.indeks)-1)
 
     def fps_asli(self, sesi: Path) -> float:
@@ -1758,7 +1806,11 @@ class Studio(tk.Tk):
         return float(self.args.fps)
 
     def ekspor(self):
-        if not self.sesi or not self.indeks: messagebox.showinfo("Preview belum siap", "Pilih rekaman dan buat preview dahulu.", parent=self); return
+        if not self.sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman dahulu.", parent=self); return
+        a, b = self.rentang()
+        if b < a:
+            messagebox.showinfo("Tentukan rentang", "Jeda video lalu tetapkan Awal dan Akhir = frame kini, atau ketik nomor frame.", parent=self); return
         if getattr(self, "_ekspor_thread", None) and self._ekspor_thread.is_alive():
             messagebox.showinfo("Sedang berjalan", "Ekspor lain masih berjalan.", parent=self); return
         sesi = self.sesi
@@ -2166,6 +2218,7 @@ class Studio(tk.Tk):
         self.status.set(f"Dataset YOLO diperbarui: {count} frame berlabel dari sesi ini masuk split {split}. Raw tetap ada di sesi.")
 
     def hitung_ukuran(self):
+        self.jadwalkan_autosave()
         if not self.label_path or not self.label_info:return
         obj,ref=self._mask("objek"),self._mask("acuan")
         if obj is None or ref is None or obj.sum()<3 or ref.sum()<3:return
