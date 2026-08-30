@@ -15,7 +15,14 @@ IMGSZ_TANGGA = 512
 
 
 def bobot_tangga() -> Path:
-    return Path(__file__).resolve().parents[2] / "bobot" / "aktif" / "tangga_yolo26s_seg_512_best.pt"
+    root = Path(__file__).resolve().parents[2]
+    # Label manual pengguna difine-tune sebagai kandidat tanpa menimpa bobot
+    # lama. Bila checkpoint ada, jadikan ia default rekomendasi; fallback
+    # tetap aman ke bobot aktif bawaan.
+    kandidat = root / "bobot" / "kandidat" / "manual_tangga" / "weights" / "best.pt"
+    if kandidat.exists() and kandidat.stat().st_size > 10_000_000:
+        return kandidat
+    return root / "bobot" / "aktif" / "tangga_yolo26s_seg_512_best.pt"
 
 
 def _model(path: Path):
