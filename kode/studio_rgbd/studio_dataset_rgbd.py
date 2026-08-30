@@ -920,7 +920,18 @@ class KanvasLabel(tk.Canvas):
         self._zoom_tajam_setelah = None
         self._zoom_cepat = False
         self._photo_key = None
-        self.render_nanti()
+        self._canvas_background_key = None
+        # Jangan menunggu event mouse berikutnya: beberapa driver Tk dapat
+        # kehilangan layer PhotoImage setelah resize cepat.
+        self.render()
+
+    def muat_ulang_gambar(self):
+        """Pulihkan layer RGB bila compositor Tk sempat hanya menampilkan mask."""
+        if self.rgb is None:
+            return
+        self._photo = self._photo_key = None
+        self._canvas_background_key = None
+        self.render()
 
     def pan_mulai(self, e): self._drag = (e.x, e.y, self.ox, self.oy)
     def pan(self, e):
@@ -1260,6 +1271,8 @@ class Studio(tk.Tk):
                              width=70).pack(side="left", fill="x", expand=True, padx=(0, 2))
         self.tombol_ringkas(nav, "→", lambda: self.pindah_frame_keyboard(1), "#E8DDD5", INK,
                              width=70).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        self.tombol_ringkas(nav, "↻ Gambar", self.kanvas.muat_ulang_gambar, "#E8DDD5", INK,
+                             width=82).pack(side="left", fill="x", expand=True, padx=(2, 0))
         tk.Label(i, text="Pilih PgUp (merah) atau PgDn (biru), lalu gunakan ←/→ atau tombol panah.",
                  bg=PANEL, fg=MUTED, wraplength=300, justify="left", font=("Segoe UI", 8)).pack(anchor="w", pady=(1, 0))
         kelola = tk.Frame(i, bg=PANEL); kelola.pack(fill="x", pady=(4, 0))
