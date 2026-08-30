@@ -230,13 +230,13 @@ class TombolRounded(tk.Canvas):
         self._siap = False
         # Canvas default meminta lebar ~394 px. Pada dua tombol sejajar hal
         # itu mendorong tombol kedua keluar panel, jadi mulai dari width=1.
-        super().__init__(master, width=1, height=38, bg=master.cget("bg"),
+        super().__init__(master, width=1, height=32, bg=master.cget("bg"),
                          highlightthickness=0, bd=0, cursor="hand2")
         self.command, self.color, self.fg, self.text = command, color, fg, text
         self.enabled = True
         self._hover = False
         self._siap = True
-        self._ukuran = (1, 38)
+        self._ukuran = (1, 32)
         self.bind("<Configure>", self._ubah_ukuran)
         self.bind("<Button-1>", self._klik)
         self.bind("<Enter>", self._masuk)
@@ -813,33 +813,24 @@ class Studio(tk.Tk):
         f = tk.Frame(self.tab_label, bg=BG); f.pack(fill="both", expand=True, padx=14, pady=14)
         left = tk.Frame(f, bg=BG); left.pack(side="left", fill="both", expand=True, padx=(0, 12))
         self.kanvas = KanvasLabel(left, self.hitung_ukuran); self.kanvas.pack(fill="both", expand=True)
-        # Sidebar yang bisa digulir: kontrol tetap bisa dipakai pada layar
-        # pendek/kecil, tidak seperti Frame tetap yang memotong tombol bawah.
+        # Panel tetap tanpa scrollbar: kontrol dipadatkan dan disusun vertikal
+        # agar alur kerja terlihat sekaligus seperti panel aplikasi desktop.
         right = tk.Frame(f, bg=BG, width=390); right.pack(side="left", fill="y"); right.pack_propagate(False)
-        gulir = tk.Canvas(right, bg=BG, highlightthickness=0, bd=0, width=390)
-        batang = ttk.Scrollbar(right, orient="vertical", command=gulir.yview)
-        gulir.configure(yscrollcommand=batang.set)
-        batang.pack(side="right", fill="y"); gulir.pack(side="left", fill="both", expand=True)
-        isi_gulir = tk.Frame(gulir, bg=BG)
-        jendela_gulir = gulir.create_window((0, 0), window=isi_gulir, anchor="nw")
-        isi_gulir.bind("<Configure>", lambda _e: gulir.configure(scrollregion=gulir.bbox("all")))
-        gulir.bind("<Configure>", lambda e: gulir.itemconfigure(jendela_gulir, width=e.width))
-        gulir.bind("<MouseWheel>", lambda e: gulir.yview_scroll(-1 if e.delta > 0 else 1, "units"))
-        gulir.bind("<Button-4>", lambda _e: gulir.yview_scroll(-1, "units"))
-        gulir.bind("<Button-5>", lambda _e: gulir.yview_scroll(1, "units"))
-        b, i = self.card(isi_gulir, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 10))
-        self.list_frame = tk.Listbox(i, height=11, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT)
+        b, i = self.card(right, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 7))
+        self.list_frame = tk.Listbox(i, height=5, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT)
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
         self.tombol(i, "Muat frame dari sesi", self.muat_frame, "#E8DDD5", INK).pack(fill="x", pady=(8, 0))
         self.tombol(i, "Ekspor frame video saat ini ke Label", self.ekspor_frame_kini_ke_label, GREEN).pack(fill="x", pady=(4, 0))
-        self.tombol(i, "← Frame sebelumnya", lambda: self.pindah_frame_label(-1), "#E8DDD5", INK).pack(fill="x", pady=(4, 0))
-        self.tombol(i, "Frame berikutnya →", lambda: self.pindah_frame_label(1), "#E8DDD5", INK).pack(fill="x", pady=(4, 0))
-        self.tombol(i, "Pindah/pulihkan frame dari sampah", self.toggle_sampah_frame, "#E8DDD5", INK).pack(fill="x", pady=(4, 0))
-        self.tombol(i, "Hapus frame ini permanen", self.hapus_frame_permanen, "#F3D8D4", INK).pack(fill="x", pady=(4, 0))
+        nav = tk.Frame(i, bg=PANEL); nav.pack(fill="x", pady=(4, 0))
+        self.tombol(nav, "← Sebelumnya", lambda: self.pindah_frame_label(-1), "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.tombol(nav, "Berikutnya →", lambda: self.pindah_frame_label(1), "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        kelola = tk.Frame(i, bg=PANEL); kelola.pack(fill="x", pady=(4, 0))
+        self.tombol(kelola, "Sampah frame", self.toggle_sampah_frame, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.tombol(kelola, "Hapus permanen", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
         tk.Checkbutton(i, text="\U0001f5d1 Tampilkan sampah frame", variable=self.tampil_sampah_frame,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.muat_frame).pack(anchor="w", pady=(6, 0))
-        b, i = self.card(isi_gulir, "Label dan depth") ; b.pack(fill="x", pady=(0, 10))
+        b, i = self.card(right, "Label dan depth") ; b.pack(fill="x", pady=(0, 7))
         self.rb_objek = tk.Radiobutton(i, variable=self.mode_label, value="objek", indicatoron=False, command=self.ganti_mode,
                                        bg="#FFF9F4", selectcolor=RED, activebackground=RED, fg=INK, relief="flat", pady=7)
         self.rb_acuan = tk.Radiobutton(i, variable=self.mode_label, value="acuan", indicatoron=False, command=self.ganti_mode,
@@ -849,26 +840,24 @@ class Studio(tk.Tk):
         self.tombol(i, "✨ Rekomendasi mask dari depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
         tk.Label(i, text="Depth memberi rekomendasi awal mask. Periksa, tarik titik yang kurang tepat, lalu lanjutkan—perubahan tersimpan otomatis sebagai draft.",
                  bg=PANEL, fg=MUTED, wraplength=280, justify="left").pack(anchor="w", pady=(0, 6))
-        self.tombol(i, "+ Mask baru", lambda: self.mulai_mask_baru(), "#E8DDD5", INK).pack(fill="x", pady=(0, 2))
-        self.tombol(i, "+ Tambah titik", self.mulai_tambah_titik, "#E8DDD5", INK).pack(fill="x", pady=(3, 0))
-        self.tombol(i, "− Hapus titik terakhir", self.kanvas.undo, "#E8DDD5", INK).pack(fill="x", pady=(3, 0))
+        edit = tk.Frame(i, bg=PANEL); edit.pack(fill="x", pady=(2, 0))
+        self.tombol(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.tombol(edit, "+ Titik", self.mulai_tambah_titik, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=2)
+        self.tombol(edit, "− Titik", self.kanvas.undo, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
         nomor = tk.Frame(i, bg=PANEL); nomor.pack(fill="x", pady=(4, 0))
         tk.Label(nomor, text="Nomor mask aktif", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
         tk.Spinbox(nomor, from_=1, to=999, textvariable=self.nomor_mask, width=5).grid(row=0, column=1, sticky="w", padx=6)
         self.tombol(nomor, "Atur nomor", self.atur_nomor_mask, "#E8DDD5", INK).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 0))
         nomor.columnconfigure(0, weight=1)
-        row = tk.Frame(i, bg=PANEL); row.pack(fill="x", pady=(8, 0))
-        self.tombol(row, "Undo titik terakhir", self.kanvas.undo, "#E8DDD5", INK).pack(fill="x", pady=(0, 3))
-        self.btn_hapus_objek = self.tombol(row, "Hapus mask objek", lambda: self.kanvas.bersihkan("objek"), "#F3D8D4", INK)
-        self.btn_hapus_acuan = self.tombol(row, "Hapus mask acuan", lambda: self.kanvas.bersihkan("acuan"), "#E8DDD5", INK)
-        self.btn_hapus_objek.pack(fill="x", pady=3)
-        self.btn_hapus_acuan.pack(fill="x", pady=3)
-        self.tombol(i, "Hapus mask aktif", self.kanvas.hapus_mask_aktif, "#F3D8D4", INK).pack(fill="x", pady=(4, 0))
-        self.tombol(i, "Buang semua rekomendasi", self.buang_rekomendasi, "#F3D8D4", INK).pack(fill="x", pady=(4, 0))
+        hapus = tk.Frame(i, bg=PANEL); hapus.pack(fill="x", pady=(5, 0))
+        self.btn_hapus_objek = self.tombol(hapus, "Hapus mask aktif", self.kanvas.hapus_mask_aktif, "#F3D8D4", INK)
+        self.btn_hapus_acuan = self.tombol(hapus, "Buang rekomendasi", self.buang_rekomendasi, "#F3D8D4", INK)
+        self.btn_hapus_objek.pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.btn_hapus_acuan.pack(side="left", fill="x", expand=True, padx=(2, 0))
         self.tombol(i, "Simpan label YOLO sekarang", self.simpan_label, ACCENT).pack(fill="x", pady=(10, 2))
         self.tombol(i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
-        tk.Label(i, text="Mask baru → klik gambar untuk tambah titik. Tarik titik untuk memindahkan; Hapus titik hanya menghapus titik terakhir; Hapus mask aktif tidak menghapus mask lain.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(7, 0))
-        b, i = self.card(isi_gulir, "Cocokkan dengan depth") ; b.pack(fill="x")
+        tk.Label(i, text="Klik kanan titik untuk menghapus titik itu. Tarik titik untuk memindahkan.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(5, 0))
+        b, i = self.card(right, "Cocokkan dengan depth") ; b.pack(fill="x")
         tk.Label(i, textvariable=self.ukur_status, bg=PANEL, fg=INK, wraplength=300, justify="left", font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self.perbarui_konteks_label()
 
@@ -1777,8 +1766,6 @@ class Studio(tk.Tk):
         if hasattr(self, "rb_objek"):
             self.rb_objek.configure(text=f"Mask {objek.replace('_', ' ')}  (MERAH)")
             self.rb_acuan.configure(text=f"Mask {acuan.replace('_', ' ')} / bidang acuan  (BIRU)")
-            self.btn_hapus_objek.configure(text=f"Hapus mask {objek}")
-            self.btn_hapus_acuan.configure(text=f"Hapus mask {acuan}")
 
     def rentang(self):
         if not self.sesi: return (0, -1)
