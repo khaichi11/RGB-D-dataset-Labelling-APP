@@ -571,7 +571,7 @@ class KanvasLabel(tk.Canvas):
         self._render_setelah = None
         self.render()
 
-    def _titik_dekat(self, x, y, batas=11, nama=None):
+    def _titik_dekat(self, x, y, batas=8, nama=None):
         """Cari titik hanya di kelas aktif bila ``nama`` diberikan.
 
         Ini mencegah vertex merah dan biru yang berdekatan saling mengambil
@@ -605,7 +605,7 @@ class KanvasLabel(tk.Canvas):
                         terbaik = (jarak, kandidat)
         return terbaik[1] if terbaik is not None else titik
 
-    def _sisi_terdekat(self, x, y, nama=None, batas=14, aktif_saja=False, kecualikan=()):
+    def _sisi_terdekat(self, x, y, nama=None, batas=8, aktif_saja=False, kecualikan=()):
         """Cari sisi terdekat dan titik proyeksinya dalam koordinat gambar."""
         terbaik = None
         sumber = self.poligon.items() if nama is None else ((nama, self.poligon[nama]),)
