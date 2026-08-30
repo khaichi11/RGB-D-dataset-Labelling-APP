@@ -54,7 +54,7 @@ if __package__:
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from .segmentasi_yolo_depth import usulkan as usulkan_yolo_depth, verifikasi_depth
-    from .segmentasi_sam2 import rapikan_kelompok as rapikan_sam2
+    from .segmentasi_sam2 import hangatkan as hangatkan_sam2, rapikan_kelompok as rapikan_sam2
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from studio_rgbd.kamera_rgbd import (KameraRGBD, cari_rekaman, nama_aman, nama_rekaman,
@@ -64,7 +64,7 @@ else:
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd.segmentasi_yolo_depth import usulkan as usulkan_yolo_depth, verifikasi_depth
-    from studio_rgbd.segmentasi_sam2 import rapikan_kelompok as rapikan_sam2
+    from studio_rgbd.segmentasi_sam2 import hangatkan as hangatkan_sam2, rapikan_kelompok as rapikan_sam2
 
 
 BG = "#F3EEE7"
@@ -310,6 +310,7 @@ class KanvasLabel(tk.Canvas):
         self.ox = 0.0
         self.oy = 0.0
         self.depth_alpha = 0.0
+        self.mask_alpha = 0.42
         self.mode = "objek"
         # Tiap kelas menampung BANYAK poligon: satu anak tangga = satu instance.
         # Dulu hanya satu poligon per kelas, jadi tangga dengan lima anak tangga
@@ -441,8 +442,9 @@ class KanvasLabel(tk.Canvas):
                 pts = [(x * self.scale + self.ox, y * self.scale + self.oy) for x, y in poly]
                 aktif = idx - 1 == self.aktif_indeks.get(nama)
                 if len(pts) >= 3:
+                    pola = "gray12" if self.mask_alpha <= .20 else "gray25" if self.mask_alpha <= .38 else "gray50" if self.mask_alpha <= .62 else "gray75"
                     self.create_polygon(pts, fill=garis, outline="#FFFFFF" if aktif else garis,
-                                        stipple="gray50", width=3 if aktif else 2)
+                                        stipple=pola, width=3 if aktif else 2)
                     cx = sum(p[0] for p in pts) / len(pts); cy = sum(p[1] for p in pts) / len(pts)
                     self.create_text(cx, cy, text=str(idx), fill="white",
                                      font=("Segoe UI", 11, "bold"))
@@ -643,6 +645,7 @@ class Studio(tk.Tk):
         self.nomor_mask = IntVar(value=1)
         self._autosave_setelah = None
         self.depth_alpha = DoubleVar(value=0.28)
+        self.mask_alpha = DoubleVar(value=0.42)
         self.mode_label = StringVar(value="objek")
         self.ukur_status = StringVar(value="Tandai sisi tinggi/riser (merah) dan permukaan datar/tapakan (biru).")
         self.tampil_sampah = BooleanVar(value=False)
@@ -651,6 +654,7 @@ class Studio(tk.Tk):
         self.tabs.bind("<<NotebookTabChanged>>", self.ganti_tab)
         self.after(30, self._poll)
         self.after(120, self.muat_daftar)   # daftar tangga langsung terlihat saat aplikasi dibuka
+        self.after(500, self._hangatkan_sam2_async)
         self.status.set("Siap untuk labeling. Kamera dinyalakan hanya saat Preview Kamera atau Mulai rekam ditekan.")
 
     # ----- struktur data -----
@@ -906,7 +910,11 @@ class Studio(tk.Tk):
         tk.Scale(i, from_=0, to=0.75, resolution=.05, orient="horizontal", variable=self.depth_alpha,
                  command=lambda _: self.ganti_depth(), label="Overlay depth (samar)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=260).pack(fill="x", pady=(4, 0))
+        tk.Scale(i, from_=0.12, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
+                 command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
+                 highlightthickness=0, length=260).pack(fill="x", pady=(2, 0))
         self.tombol(i, "✨ Rekomendasi tangga: YOLO + SAM 2 + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
+        self.tombol(i, "⚡ Batch auto-label frame baru", self.batch_auto_label, BLUE).pack(fill="x", pady=(4, 2))
         tk.Label(i, text="Tangga: YOLO memberi kandidat, SAM 2 GPU merapikan batas, depth ternormalisasi memeriksa serpihan/outlier. Batu/ramp memakai depth. Semua perubahan disimpan otomatis.",
                  bg=PANEL, fg=MUTED, wraplength=280, justify="left").pack(anchor="w", pady=(0, 6))
         edit = tk.Frame(i, bg=PANEL); edit.pack(fill="x", pady=(2, 0))
@@ -2169,6 +2177,72 @@ class Studio(tk.Tk):
         self.status.set(f"Auto-segmentasi YOLO + SAM 2 untuk {target.name}…")
         self.usulkan_segmentasi()
 
+    def _hangatkan_sam2_async(self):
+        def kerja():
+            try:
+                hangatkan_sam2(); self.q.put(("sam_siap", None))
+            except Exception as e:  # noqa: BLE001
+                self.q.put(("sam_gagal", str(e)))
+        self._sam_warm_thread = threading.Thread(target=kerja, daemon=True)
+        self._sam_warm_thread.start()
+
+    def _rekomendasi_tangga_data(self, rgb, depth, info):
+        """Versi tanpa Tk untuk worker batch; sama dengan saran tangga UI."""
+        k = self._intrinsics(info)
+        hasil = usulkan_yolo_depth(rgb, depth, k)
+        depth_info = usulkan_segmentasi(depth, k)
+        rapih = rapikan_sam2(rgb, {"tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"]},
+                              {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
+        rapih = verifikasi_depth(rapih, depth)
+        return {"acuan": rapih["tapakan"], "objek": rapih["bidang_tegak"]}
+
+    def batch_auto_label(self):
+        if not self.sesi:
+            messagebox.showinfo("Pilih sesi", "Pilih sesi pada tab Tinjau dahulu.", parent=self); return
+        if getattr(self, "_batch_thread", None) and self._batch_thread.is_alive():
+            messagebox.showinfo("Batch berjalan", "Tunggu auto-label batch selesai.", parent=self); return
+        if getattr(self, "_sam_warm_thread", None) and self._sam_warm_thread.is_alive():
+            self.status.set("SAM 2 sedang dimuat ke GPU; batch akan tersedia sesaat lagi."); return
+        target = [p for p in self.daftar_frame_ekspor() if not self._punya_label(p)]
+        if not target:
+            messagebox.showinfo("Tidak ada frame baru", "Semua frame sudah memiliki draft atau label.", parent=self); return
+        if not messagebox.askyesno("Batch auto-label", f"Buat draft + label otomatis untuk {len(target)} frame baru?\n\nLabel/draft manual tidak akan ditimpa.", parent=self): return
+        sesi = self.sesi
+        self._batch_thread = threading.Thread(target=self._batch_auto_worker, args=(sesi, target), daemon=True)
+        self._batch_thread.start()
+        self.status.set(f"Batch auto-label dimulai untuk {len(target)} frame…")
+
+    def _batch_auto_worker(self, sesi: Path, target: list[Path]):
+        jadi = gagal = 0
+        for no, p in enumerate(target, 1):
+            try:
+                if self._punya_label(p):
+                    continue
+                info = baca_json(p / "frame.json", {})
+                if info.get("kategori", sesi.parent.name) != "tangga_naik":
+                    continue
+                bgr = cv2.imread(str(p / "color_raw.png")); depth = np.load(p / "depth_aligned_to_color.npy")
+                if bgr is None or "intrinsics_rgb_native" not in info:
+                    raise ValueError("RGB/depth/intrinsics tidak lengkap")
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                poligon = self._rekomendasi_tangga_data(rgb, depth, info)
+                h, w = rgb.shape[:2]
+                baris = []
+                for mode, cls in (("acuan", 0), ("objek", 1)):
+                    for poly in poligon[mode]:
+                        if len(poly) >= 3:
+                            baris.append(str(cls) + " " + " ".join(f"{v:.6f}" for x, y in poly for v in (x / w, y / h)))
+                tulis_json(p / "label_draft.json", {"versi": 1, "otomatis": True, "sumber": "batch YOLO+SAM2+depth",
+                                                       "disimpan_iso": datetime.now().isoformat(timespec="seconds"), "poligon": poligon})
+                if baris:
+                    (p / "label_yolo_seg.txt").write_text("\n".join(baris) + "\n", encoding="utf-8")
+                jadi += 1
+            except Exception as e:  # noqa: BLE001
+                gagal += 1; self.q.put(("status", f"Batch melewati {p.name}: {e}"))
+            if no == 1 or no % 3 == 0:
+                self.q.put(("status", f"Batch auto-label {no}/{len(target)} — {jadi} selesai, {gagal} gagal"))
+        self.q.put(("batch_auto_selesai", (jadi, gagal)))
+
     def pindah_frame_label(self, arah: int):
         if not self.frame_paths:
             self.muat_frame()
@@ -2360,6 +2434,7 @@ class Studio(tk.Tk):
 
     def ganti_mode(self): self.kanvas.mode=self.mode_label.get(); self.kanvas.render()
     def ganti_depth(self): self.kanvas.depth_alpha=float(self.depth_alpha.get()); self.kanvas.render()
+    def ganti_opasitas_mask(self): self.kanvas.mask_alpha=float(self.mask_alpha.get()); self.kanvas.render()
 
     def _mask(self, nama):
         """Masker gabungan SEMUA instance kelas ini (untuk pengukuran)."""
@@ -2466,6 +2541,13 @@ class Studio(tk.Tk):
             while True:
                 k,v=self.q.get_nowait()
                 if k=="status":self.status.set(str(v))
+                elif k=="sam_siap":
+                    self.status.set("SAM 2 siap di GPU. Batch auto-label dapat dijalankan tanpa memuat ulang model.")
+                elif k=="sam_gagal":
+                    self.status.set(f"SAM 2 belum siap: {v}")
+                elif k=="batch_auto_selesai":
+                    jadi, gagal = v; self.muat_frame()
+                    self.status.set(f"Batch auto-label selesai: {jadi} frame dibuat, {gagal} gagal. Periksa dan rapikan hasilnya.")
                 elif k=="error":
                     self.preview_diminta = False
                     self.btn_preview_kamera.configure(text="Aktifkan preview kamera", state="normal")
