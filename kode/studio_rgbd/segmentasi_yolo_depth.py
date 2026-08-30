@@ -35,6 +35,29 @@ def _poligon(mask: np.ndarray) -> list[tuple[int, int]] | None:
     return [(int(x), int(y)) for x, y in p] if len(p) >= 3 else None
 
 
+def verifikasi_depth(kelompok: dict[str, list[list[tuple[int, int]]]], depth: np.ndarray) -> dict[str, list[list[tuple[int, int]]]]:
+    """Depth sebagai pemeriksa akhir SAM, bukan pemotong batas utama.
+
+    D435 sering berlubang di tepi, maka piksel valid dilebarkan sedikit dan
+    hasil depth hanya dipakai jika tetap mempertahankan >=90% mask SAM.
+    """
+    valid = (depth > 0).astype(np.uint8)
+    dukung = cv2.morphologyEx(valid, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    dukung = cv2.dilate(dukung, np.ones((5, 5), np.uint8))
+    h, w = depth.shape[:2]
+    hasil: dict[str, list[list[tuple[int, int]]]] = {}
+    for nama, daftar in kelompok.items():
+        hasil[nama] = []
+        for poly in daftar:
+            mask = np.zeros((h, w), np.uint8)
+            cv2.fillPoly(mask, [np.asarray(poly, np.int32)], 1)
+            kandidat = cv2.bitwise_and(mask, dukung)
+            akhir = kandidat if int(kandidat.sum()) >= .90 * int(mask.sum()) else mask
+            akhir = cv2.morphologyEx(akhir, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+            hasil[nama].append(_poligon(akhir) or poly)
+    return hasil
+
+
 def usulkan(rgb: np.ndarray, depth: np.ndarray, k: dict, confidence: float = .28) -> dict:
     """YOLO sebagai kandidat awal; depth tidak dipakai memotong mask."""
     path = bobot_tangga()

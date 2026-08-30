@@ -53,7 +53,7 @@ if __package__:
     from .geometri import Z_MAX, Z_MIN
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
-    from .segmentasi_yolo_depth import usulkan as usulkan_yolo_depth
+    from .segmentasi_yolo_depth import usulkan as usulkan_yolo_depth, verifikasi_depth
     from .segmentasi_sam2 import rapikan_kelompok as rapikan_sam2
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -63,7 +63,7 @@ else:
     from studio_rgbd.geometri import Z_MAX, Z_MIN
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
-    from studio_rgbd.segmentasi_yolo_depth import usulkan as usulkan_yolo_depth
+    from studio_rgbd.segmentasi_yolo_depth import usulkan as usulkan_yolo_depth, verifikasi_depth
     from studio_rgbd.segmentasi_sam2 import rapikan_kelompok as rapikan_sam2
 
 
@@ -872,9 +872,9 @@ class Studio(tk.Tk):
         tk.Spinbox(i, from_=1, to=9999, textvariable=self.langkah_ekspor, width=8).grid(row=0, column=1, sticky="w", padx=10)
         self.tombol(i, "Ekspor frame dari rentang pilihan", self.ekspor, GREEN).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(14, 4))
         self.tombol(i, "Buat video MP4 rentang (opsional)", self.ekspor_video_rentang, BLUE).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 4))
-        self.tombol(i, "Buang frame belum dilabeli", self.buang_frame_belum_dilabeli, "#F3D8D4", INK).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 4))
+        self.tombol(i, "Terapkan interval: bersihkan & ekspor ulang", self.buang_frame_belum_dilabeli, "#F3D8D4", INK).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 4))
         self.tombol(i, "Hapus semua hasil ekspor sesi ini", self.hapus_semua_ekspor, "#F3D8D4", INK).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 4))
-        tk.Label(i, text="Default 10 berarti mengambil frame 0, 10, 20, dan seterusnya dari rentang pilihan sehingga sampel lebih berbeda. Ekspor berjalan di worker latar belakang dan tidak menggandakan frame yang sudah ada. Tombol ‘Buang frame belum dilabeli’ menjaga paket yang sudah memiliki draft atau label YOLO, lalu Anda dapat ekspor ulang dengan interval baru. Video MP4 hanya untuk ditonton/dibagikan; tidak diperlukan untuk labeling.", bg=PANEL, fg=MUTED, wraplength=750, justify="left").grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        tk.Label(i, text="Default 10 berarti mengambil frame 0, 10, 20, dan seterusnya dari rentang pilihan sehingga sampel lebih berbeda. Tombol ‘Terapkan interval’ membuang hanya paket tanpa draft/label, lalu langsung ekspor ulang. Video MP4 hanya untuk ditonton/dibagikan; tidak diperlukan untuk labeling.", bg=PANEL, fg=MUTED, wraplength=750, justify="left").grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.label_ekspor = tk.Label(f, text="Belum ada ekspor dipilih.", bg=BG, fg=ACCENT, justify="left"); self.label_ekspor.pack(anchor="w", pady=(18, 0))
 
     def ui_label(self):
@@ -906,8 +906,8 @@ class Studio(tk.Tk):
         tk.Scale(i, from_=0, to=0.75, resolution=.05, orient="horizontal", variable=self.depth_alpha,
                  command=lambda _: self.ganti_depth(), label="Overlay depth (samar)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=260).pack(fill="x", pady=(4, 0))
-        self.tombol(i, "✨ Rekomendasi tangga: YOLO + SAM 2", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
-        tk.Label(i, text="Tangga: YOLO memberi kandidat lalu SAM 2 GPU merapikan batas; depth hanya untuk ukur. Batu/ramp memakai depth. Semua perubahan disimpan otomatis.",
+        self.tombol(i, "✨ Rekomendasi tangga: YOLO + SAM 2 + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
+        tk.Label(i, text="Tangga: YOLO memberi kandidat, SAM 2 GPU merapikan batas, depth ternormalisasi memeriksa serpihan/outlier. Batu/ramp memakai depth. Semua perubahan disimpan otomatis.",
                  bg=PANEL, fg=MUTED, wraplength=280, justify="left").pack(anchor="w", pady=(0, 6))
         edit = tk.Frame(i, bg=PANEL); edit.pack(fill="x", pady=(2, 0))
         self.tombol_ringkas(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK, width=72).pack(side="left", fill="x", expand=True, padx=(0, 2))
@@ -1952,7 +1952,11 @@ class Studio(tk.Tk):
                 gagal.append(p.name)
         self.label_path = None; self.label_info = None
         self.muat_frame()
-        self.status.set(f"{len(kandidat) - len(gagal)} frame belum dilabeli dibuang. Ekspor ulang dengan interval {self.langkah_ekspor.get()}.")
+        if gagal:
+            self.status.set(f"{len(kandidat) - len(gagal)} frame dibuang; {len(gagal)} gagal dihapus. Ekspor ulang dibatalkan.")
+            return
+        self.status.set(f"{len(kandidat)} frame belum dilabeli dibuang. Mengekspor ulang setiap {self.langkah_ekspor.get()} frame…")
+        self.ekspor()
 
     def hapus_semua_ekspor(self):
         """Buang seluruh turunan ekspor sesi aktif, tanpa menyentuh RAW."""
@@ -2147,8 +2151,18 @@ class Studio(tk.Tk):
                                         for nama, daftar in self.kanvas.poligon.items()}
             self.kanvas.after(25, self.kanvas.fit)
             self.status.set(f"Draft mask {p.name} dipulihkan otomatis.")
+        elif not self._punya_label(p):
+            # Frame baru selalu mendapat usulan terlebih dahulu. Pengguna lalu
+            # tinggal mengoreksi; draft/label yang sudah ada tidak ditimpa.
+            self.after(180, lambda target=p: self._auto_segmentasi(target))
         self.perbarui_konteks_label(self.label_info.get("kategori"))
         self.ukur_status.set("Tandai mask objek dan, untuk tinggi, bidang acuan.")
+
+    def _auto_segmentasi(self, target: Path):
+        if target != self.label_path or self._punya_label(target):
+            return
+        self.status.set(f"Auto-segmentasi YOLO + SAM 2 untuk {target.name}…")
+        self.usulkan_segmentasi()
 
     def pindah_frame_label(self, arah: int):
         if not self.frame_paths:
@@ -2298,8 +2312,9 @@ class Studio(tk.Tk):
                 rapih = rapikan_sam2(self.kanvas.rgb, {
                     "tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"],
                 })
+                rapih = verifikasi_depth(rapih, self.kanvas.depth)
                 hasil["tapakan"], hasil["bidang_tegak"] = rapih["tapakan"], rapih["bidang_tegak"]
-                hasil["sumber"] = "YOLO + SAM 2.1 Tiny (GPU)"
+                hasil["sumber"] = "YOLO + SAM 2.1 Tiny + depth (GPU)"
             else:
                 hasil = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
                 hasil["sumber"] = "depth (bobot YOLO tangga tidak dipakai untuk kategori ini)"
