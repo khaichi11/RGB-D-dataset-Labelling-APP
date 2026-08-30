@@ -777,16 +777,10 @@ class KanvasLabel(tk.Canvas):
                 aktif.insert(setelah + 1, titik_baru)
                 self._beritahu_aktif(self.mode, ip)
             else:
-                # Setelah tiga vertex, mask dianggap lengkap. Klik bebas
-                # pertama hanya melepaskan pilihan mask; klik bebas berikutnya
-                # baru menjadi instance baru. Ini melindungi dari klik ngasal.
-                if len(aktif) >= 3 and not self._mask_dipilih_eksplisit:
-                    if not sebelumnya_tidak_dipilih:
-                        self.aktif_indeks[self.mode] = None
-                        self.titik_dipilih.clear()
-                        self._beritahu_aktif(self.mode, None)
-                        self.render()
-                        return
+                # Mask baru hanya dimulai setelah operator dengan sengaja
+                # unselect memakai klik kanan di area kosong. Klik kiri biasa
+                # tetap meneruskan mask yang sedang dipilih.
+                if len(aktif) >= 3 and not self._mask_dipilih_eksplisit and sebelumnya_tidak_dipilih:
                     self.poligon[self.mode].append([])
                     self.aktif_indeks[self.mode] = len(self.poligon[self.mode]) - 1
                     aktif = self.poligon[self.mode][-1]
@@ -879,6 +873,13 @@ class KanvasLabel(tk.Canvas):
         """Klik kanan hanya menghapus vertex yang dipilih, tidak yang terakhir."""
         dekat = self._titik_dekat(e.x, e.y, batas=14, nama=self.mode)
         if dekat is None:
+            # Klik kanan kosong adalah aksi unselect yang eksplisit. Dengan
+            # demikian klik kiri berikutnya aman untuk memulai mask baru.
+            self.aktif_indeks[self.mode] = None
+            self._mask_dipilih_eksplisit = False
+            self.titik_dipilih.clear()
+            self._beritahu_aktif(self.mode, None)
+            self.render()
             return
         nama, ip, it = dekat
         poly = self.poligon[nama][ip]
@@ -1348,7 +1349,7 @@ class Studio(tk.Tk):
         tk.Label(i, text="● AUTO-SAVE AKTIF — draft dan label YOLO tersimpan setelah Anda berhenti mengubah mask.",
                  bg=PANEL, fg=GREEN, wraplength=300, justify="left", font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(8, 2))
         self.tombol(i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
-        tk.Label(i, text="Klik dekat garis untuk menyisipkan titik pada sisi itu. Ctrl+Z = Undo; Ctrl+Shift+Z = Redo. Klik kanan menghapus titik warna aktif; Shift+tarik memilih banyak titik.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(5, 0))
+        tk.Label(i, text="Klik dekat garis untuk menyisipkan titik pada sisi itu. Klik kanan kosong = unselect; klik kanan titik = hapus. Setelah unselect, klik kiri membuat mask baru. Ctrl+Z = Undo; Ctrl+Shift+Z = Redo.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(5, 0))
         tk.Label(i, textvariable=self.ukur_status, bg=PANEL, fg=INK, wraplength=300, justify="left", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(5, 0))
         self.perbarui_konteks_label()
 
