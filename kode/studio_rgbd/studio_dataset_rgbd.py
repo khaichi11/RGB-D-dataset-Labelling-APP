@@ -228,7 +228,9 @@ class TombolRounded(tk.Canvas):
 
     def __init__(self, master, text, command, color=ACCENT, fg="white"):
         self._siap = False
-        super().__init__(master, height=38, bg=master.cget("bg"),
+        # Canvas default meminta lebar ~394 px. Pada dua tombol sejajar hal
+        # itu mendorong tombol kedua keluar panel, jadi mulai dari width=1.
+        super().__init__(master, width=1, height=38, bg=master.cget("bg"),
                          highlightthickness=0, bd=0, cursor="hand2")
         self.command, self.color, self.fg, self.text = command, color, fg, text
         self.enabled = True
@@ -317,7 +319,7 @@ class KanvasLabel(tk.Canvas):
         self.bind("<Button-1>", self.tambah)
         self.bind("<B1-Motion>", self.geser_titik)
         self.bind("<ButtonRelease-1>", self.selesai_geser_titik)
-        self.bind("<Button-3>", self.undo)
+        self.bind("<Button-3>", self.hapus_titik_dipilih)
         self.bind("<MouseWheel>", self.zoom)
         self.bind("<Button-4>", lambda e: self.zoom_langkah(e, 1.15))
         self.bind("<Button-5>", lambda e: self.zoom_langkah(e, 1 / 1.15))
@@ -331,10 +333,17 @@ class KanvasLabel(tk.Canvas):
         self.after(20, self.fit)
 
     def poligon_baru(self, nama: str | None = None):
-        """Tutup poligon yang sedang digambar, mulai instance berikutnya."""
+        """Mulai instance baru tanpa menghapus mask yang sudah ada."""
         nama = nama or self.mode
-        if self.poligon[nama] and len(self.poligon[nama][-1]) >= 3:
+        if not self.poligon[nama] or self.poligon[nama][-1]:
             self.poligon[nama].append([])
+            self.render(); self.on_change()
+
+    def hapus_mask_aktif(self):
+        """Hapus instance terakhir mode aktif, bukan seluruh kelas mask."""
+        daftar = self.poligon[self.mode]
+        if daftar:
+            daftar.pop()
             self.render(); self.on_change()
 
     def _aktif(self, nama: str) -> list:
@@ -385,7 +394,7 @@ class KanvasLabel(tk.Canvas):
         # yang merah sebagai objek yang diukur tingginya terhadap bidang itu.
         specs = (("objek", "#FF5A5A", "#FFD9D9"), ("acuan", "#5AA9FF", "#D7E9FF"))
         for nama, garis, titik in specs:
-            for idx, poly in enumerate(self.poligon[nama]):
+            for idx, poly in enumerate(self.poligon[nama], start=1):
                 pts = [(x * self.scale + self.ox, y * self.scale + self.oy) for x, y in poly]
                 if len(pts) >= 3:
                     self.create_polygon(pts, fill=garis, outline=garis, stipple="gray50", width=2)
@@ -483,6 +492,19 @@ class KanvasLabel(tk.Canvas):
             daftar.pop()                    # poligon kosong ikut dibuang
         self.render(); self.on_change()
 
+    def hapus_titik_dipilih(self, e):
+        """Klik kanan hanya menghapus vertex yang dipilih, tidak yang terakhir."""
+        dekat = self._titik_dekat(e.x, e.y, batas=14)
+        if dekat is None:
+            return
+        nama, ip, it = dekat
+        poly = self.poligon[nama][ip]
+        poly.pop(it)
+        # Instance kosong tidak perlu dibiarkan sebagai mask semu.
+        if not poly:
+            self.poligon[nama].pop(ip)
+        self.render(); self.on_change()
+
     def bersihkan(self, nama):
         self.poligon[nama] = []
         self.render(); self.on_change()
@@ -559,6 +581,10 @@ class Studio(tk.Tk):
         self.fps_ekspor = IntVar(value=args.fps)
         self.awal = IntVar(value=0); self.akhir = IntVar(value=0)
         self.ekspor_awal = IntVar(value=0); self.ekspor_akhir = IntVar(value=0)
+        self.rentang_manual = BooleanVar(value=False)
+        self.filter_sesi = StringVar(value="tangga_naik")
+        self.nomor_mask = IntVar(value=1)
+        self._autosave_setelah = None
         self.depth_alpha = DoubleVar(value=0.28)
         self.mode_label = StringVar(value="objek")
         self.ukur_status = StringVar(value="Tandai sisi tinggi/riser (merah) dan permukaan datar/tapakan (biru).")
@@ -770,38 +796,62 @@ class Studio(tk.Tk):
         f = tk.Frame(self.tab_label, bg=BG); f.pack(fill="both", expand=True, padx=14, pady=14)
         left = tk.Frame(f, bg=BG); left.pack(side="left", fill="both", expand=True, padx=(0, 12))
         self.kanvas = KanvasLabel(left, self.hitung_ukuran); self.kanvas.pack(fill="both", expand=True)
-        right = tk.Frame(f, bg=BG, width=360); right.pack(side="left", fill="y"); right.pack_propagate(False)
-        b, i = self.card(right, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 10))
+        # Sidebar yang bisa digulir: kontrol tetap bisa dipakai pada layar
+        # pendek/kecil, tidak seperti Frame tetap yang memotong tombol bawah.
+        right = tk.Frame(f, bg=BG, width=390); right.pack(side="left", fill="y"); right.pack_propagate(False)
+        gulir = tk.Canvas(right, bg=BG, highlightthickness=0, bd=0, width=390)
+        batang = ttk.Scrollbar(right, orient="vertical", command=gulir.yview)
+        gulir.configure(yscrollcommand=batang.set)
+        batang.pack(side="right", fill="y"); gulir.pack(side="left", fill="both", expand=True)
+        isi_gulir = tk.Frame(gulir, bg=BG)
+        jendela_gulir = gulir.create_window((0, 0), window=isi_gulir, anchor="nw")
+        isi_gulir.bind("<Configure>", lambda _e: gulir.configure(scrollregion=gulir.bbox("all")))
+        gulir.bind("<Configure>", lambda e: gulir.itemconfigure(jendela_gulir, width=e.width))
+        gulir.bind("<MouseWheel>", lambda e: gulir.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        gulir.bind("<Button-4>", lambda _e: gulir.yview_scroll(-1, "units"))
+        gulir.bind("<Button-5>", lambda _e: gulir.yview_scroll(1, "units"))
+        b, i = self.card(isi_gulir, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 10))
         self.list_frame = tk.Listbox(i, height=11, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT)
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
         self.tombol(i, "Muat frame dari sesi", self.muat_frame, "#E8DDD5", INK).pack(fill="x", pady=(8, 0))
         self.tombol(i, "Ekspor frame video saat ini ke Label", self.ekspor_frame_kini_ke_label, GREEN).pack(fill="x", pady=(4, 0))
+        self.tombol(i, "← Frame sebelumnya", lambda: self.pindah_frame_label(-1), "#E8DDD5", INK).pack(fill="x", pady=(4, 0))
+        self.tombol(i, "Frame berikutnya →", lambda: self.pindah_frame_label(1), "#E8DDD5", INK).pack(fill="x", pady=(4, 0))
         self.tombol(i, "Pindah/pulihkan frame dari sampah", self.toggle_sampah_frame, "#E8DDD5", INK).pack(fill="x", pady=(4, 0))
         self.tombol(i, "Hapus frame ini permanen", self.hapus_frame_permanen, "#F3D8D4", INK).pack(fill="x", pady=(4, 0))
         tk.Checkbutton(i, text="\U0001f5d1 Tampilkan sampah frame", variable=self.tampil_sampah_frame,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.muat_frame).pack(anchor="w", pady=(6, 0))
-        b, i = self.card(right, "Label dan depth") ; b.pack(fill="x", pady=(0, 10))
+        b, i = self.card(isi_gulir, "Label dan depth") ; b.pack(fill="x", pady=(0, 10))
         self.rb_objek = tk.Radiobutton(i, variable=self.mode_label, value="objek", indicatoron=False, command=self.ganti_mode,
                                        bg="#FFF9F4", selectcolor=RED, activebackground=RED, fg=INK, relief="flat", pady=7)
         self.rb_acuan = tk.Radiobutton(i, variable=self.mode_label, value="acuan", indicatoron=False, command=self.ganti_mode,
                                        bg="#FFF9F4", selectcolor=BLUE, activebackground=BLUE, fg=INK, relief="flat", pady=7)
         self.rb_objek.pack(fill="x", pady=2); self.rb_acuan.pack(fill="x", pady=2)
         tk.Scale(i, from_=0, to=0.75, resolution=.05, variable=self.depth_alpha, command=lambda _: self.ganti_depth(), label="Overlay depth (samar)", bg=PANEL, fg=INK, highlightthickness=0).pack(fill="x", pady=(8, 0))
-        self.tombol(i, "\u2728 Usulkan segmentasi dari depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
-        tk.Label(i, text="Menghitung arah normal tiap permukaan: yang mendatar diusulkan sebagai tapakan (biru), yang tegak sebagai riser (merah). Periksa dan koreksi seperlunya.",
+        self.tombol(i, "✨ Rekomendasi mask dari depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
+        tk.Label(i, text="Depth memberi rekomendasi awal mask. Periksa, tarik titik yang kurang tepat, lalu lanjutkan—perubahan tersimpan otomatis sebagai draft.",
                  bg=PANEL, fg=MUTED, wraplength=280, justify="left").pack(anchor="w", pady=(0, 6))
-        self.tombol(i, "Poligon baru (instance berikutnya)", lambda: self.kanvas.poligon_baru(), "#E8DDD5", INK).pack(fill="x", pady=(0, 2))
+        self.tombol(i, "+ Mask baru", lambda: self.mulai_mask_baru(), "#E8DDD5", INK).pack(fill="x", pady=(0, 2))
+        self.tombol(i, "+ Tambah titik", self.mulai_tambah_titik, "#E8DDD5", INK).pack(fill="x", pady=(3, 0))
+        self.tombol(i, "− Hapus titik terakhir", self.kanvas.undo, "#E8DDD5", INK).pack(fill="x", pady=(3, 0))
+        nomor = tk.Frame(i, bg=PANEL); nomor.pack(fill="x", pady=(4, 0))
+        tk.Label(nomor, text="Nomor mask aktif", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
+        tk.Spinbox(nomor, from_=1, to=999, textvariable=self.nomor_mask, width=5).grid(row=0, column=1, sticky="w", padx=6)
+        self.tombol(nomor, "Atur nomor", self.atur_nomor_mask, "#E8DDD5", INK).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 0))
+        nomor.columnconfigure(0, weight=1)
         row = tk.Frame(i, bg=PANEL); row.pack(fill="x", pady=(8, 0))
-        self.tombol(row, "Undo", self.kanvas.undo, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 3))
+        self.tombol(row, "Undo titik terakhir", self.kanvas.undo, "#E8DDD5", INK).pack(fill="x", pady=(0, 3))
         self.btn_hapus_objek = self.tombol(row, "Hapus mask objek", lambda: self.kanvas.bersihkan("objek"), "#F3D8D4", INK)
         self.btn_hapus_acuan = self.tombol(row, "Hapus mask acuan", lambda: self.kanvas.bersihkan("acuan"), "#E8DDD5", INK)
-        self.btn_hapus_objek.pack(side="left", fill="x", expand=True, padx=3)
-        self.btn_hapus_acuan.pack(side="left", fill="x", expand=True, padx=(3, 0))
-        self.tombol(i, "Simpan label YOLO segmentation", self.simpan_label, ACCENT).pack(fill="x", pady=(10, 2))
+        self.btn_hapus_objek.pack(fill="x", pady=3)
+        self.btn_hapus_acuan.pack(fill="x", pady=3)
+        self.tombol(i, "Hapus mask aktif", self.kanvas.hapus_mask_aktif, "#F3D8D4", INK).pack(fill="x", pady=(4, 0))
+        self.tombol(i, "Buang semua rekomendasi", self.buang_rekomendasi, "#F3D8D4", INK).pack(fill="x", pady=(4, 0))
+        self.tombol(i, "Simpan label YOLO sekarang", self.simpan_label, ACCENT).pack(fill="x", pady=(10, 2))
         self.tombol(i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
-        tk.Label(i, text="Klik kosong: tambah titik • tarik titik: pindahkan + lup • klik kanan: undo • roda: zoom di kursor • roda tengah: geser", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(7, 0))
-        b, i = self.card(right, "Cocokkan dengan depth") ; b.pack(fill="x")
+        tk.Label(i, text="Mask baru → klik gambar untuk tambah titik. Tarik titik untuk memindahkan; Hapus titik hanya menghapus titik terakhir; Hapus mask aktif tidak menghapus mask lain.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(7, 0))
+        b, i = self.card(isi_gulir, "Cocokkan dengan depth") ; b.pack(fill="x")
         tk.Label(i, textvariable=self.ukur_status, bg=PANEL, fg=INK, wraplength=300, justify="left", font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self.perbarui_konteks_label()
 
@@ -1894,8 +1944,75 @@ class Studio(tk.Tk):
         bgr=cv2.imread(str(p/"color_raw.png")); dep=np.load(p/"depth_aligned_to_color.npy")
         if bgr is None: return
         self.label_path=p; self.label_info=baca_json(p/"frame.json"); self.kanvas.set_frame(cv2.cvtColor(bgr,cv2.COLOR_BGR2RGB),dep)
+        draft = baca_json(p / "label_draft.json", {})
+        if draft.get("poligon"):
+            self.kanvas.poligon = {nama: [list(map(tuple, poly)) for poly in draft["poligon"].get(nama, [])]
+                                   for nama in ("objek", "acuan")}
+            self.kanvas.after(25, self.kanvas.fit)
+            self.status.set(f"Draft mask {p.name} dipulihkan otomatis.")
         self.perbarui_konteks_label(self.label_info.get("kategori"))
         self.ukur_status.set("Tandai mask objek dan, untuk tinggi, bidang acuan.")
+
+    def pindah_frame_label(self, arah: int):
+        if not self.frame_paths:
+            self.muat_frame()
+        if not self.frame_paths:
+            messagebox.showinfo("Belum ada frame", "Ekspor satu frame dari video atau pilih rentang untuk diekspor dahulu.", parent=self); return
+        try:
+            kini = self.frame_paths.index(self.label_path)
+        except ValueError:
+            kini = -1 if arah > 0 else 0
+        tujuan = max(0, min(kini + arah, len(self.frame_paths) - 1))
+        self.list_frame.selection_clear(0, "end"); self.list_frame.selection_set(tujuan); self.list_frame.activate(tujuan)
+        self._buka_frame_ekspor(self.frame_paths[tujuan])
+
+    def atur_nomor_mask(self):
+        """Pindahkan instance terakhir mode aktif ke nomor yang pengguna pilih."""
+        daftar = self.kanvas.poligon[self.mode_label.get()]
+        if not daftar:
+            messagebox.showinfo("Belum ada mask", "Buat atau pilih mask terlebih dahulu.", parent=self); return
+        tujuan = max(0, min(self.nomor_mask.get() - 1, len(daftar) - 1))
+        aktif = daftar.pop()
+        daftar.insert(tujuan, aktif)
+        self.kanvas.render(); self.hitung_ukuran()
+        self.status.set(f"Mask aktif dipindahkan ke nomor {tujuan + 1}.")
+
+    def mulai_mask_baru(self):
+        self.kanvas.poligon_baru(self.mode_label.get())
+        self.kanvas.focus_set()
+        self.status.set("Mask baru siap. Klik pada gambar untuk menambah titik pertama.")
+
+    def mulai_tambah_titik(self):
+        self.kanvas.focus_set()
+        self.status.set("Klik lokasi pada gambar untuk menambah titik ke mask aktif.")
+
+    def buang_rekomendasi(self):
+        if not any(self.kanvas.poligon.values()):
+            return
+        if messagebox.askyesno("Buang rekomendasi", "Hapus seluruh mask rekomendasi/yang sedang tampil? Anda dapat membuat mask baru dari nol.", parent=self):
+            self.kanvas.poligon = {"objek": [], "acuan": []}
+            self.kanvas.render(); self.hitung_ukuran()
+            self.status.set("Semua mask rekomendasi dibuang. Mask baru siap dibuat.")
+
+    def jadwalkan_autosave(self):
+        if not self.label_path or self.kanvas.rgb is None:
+            return
+        if self._autosave_setelah is not None:
+            self.after_cancel(self._autosave_setelah)
+        self._autosave_setelah = self.after(450, self.simpan_draft_label)
+
+    def simpan_draft_label(self):
+        self._autosave_setelah = None
+        if not self.label_path or self.kanvas.rgb is None:
+            return
+        tulis_json(self.label_path / "label_draft.json", {
+            "versi": 1, "otomatis": True,
+            "disimpan_iso": datetime.now().isoformat(timespec="seconds"),
+            "poligon": self.kanvas.poligon,
+        })
+        if any(len(poly) >= 3 for daftar in self.kanvas.poligon.values() for poly in daftar):
+            self.simpan_label(senyap=True)
+        self.status.set(f"Draft mask otomatis disimpan: {self.label_path.name}")
 
     def toggle_sampah_frame(self):
         if not self.label_path:
@@ -1991,14 +2108,16 @@ class Studio(tk.Tk):
                 cv2.fillPoly(m, [np.round(poly).astype(np.int32)], 1)
         return m
 
-    def simpan_label(self):
+    def simpan_label(self, senyap: bool = False):
         """Tulis label YOLO-seg: SATU BARIS PER INSTANCE, dua kelas semantik.
 
         Poligon biru (acuan) ikut jadi label - pada dataset lama 'tapakan'
         memang kelas 0 yang dilatih, bukan sekadar alat bantu ukur.
         """
         if not self.label_path or self.kanvas.rgb is None:
-            messagebox.showinfo("Pilih frame", "Pilih satu frame ekspor dahulu.", parent=self); return
+            if not senyap:
+                messagebox.showinfo("Pilih frame", "Pilih satu frame ekspor dahulu.", parent=self)
+            return
         kategori = (self.label_info or {}).get("kategori", "tangga_naik")
         peta = KELAS_MODE.get(kategori, KELAS_MODE["tangga_naik"])
         h, w = self.kanvas.rgb.shape[:2]
@@ -2011,14 +2130,16 @@ class Studio(tk.Tk):
                 norm = " ".join(f"{v:.6f}" for pt in poly for v in (pt[0]/w, pt[1]/h))
                 baris.append(f"{cls} {norm}")
         if not baris:
-            messagebox.showwarning("Poligon belum cukup",
-                "Belum ada poligon dengan minimal tiga titik.", parent=self); return
+            if not senyap:
+                messagebox.showwarning("Poligon belum cukup", "Belum ada poligon dengan minimal tiga titik.", parent=self)
+            return
         (self.label_path/"label_yolo_seg.txt").write_text("\n".join(baris) + "\n", encoding="utf-8")
         obj = self._mask("objek"); ref = self._mask("acuan")
         if obj is not None and obj.any(): cv2.imwrite(str(self.label_path/"mask_objek.png"), obj*255)
         if ref is not None and ref.any(): cv2.imwrite(str(self.label_path/"mask_acuan.png"), ref*255)
         rinci = ", ".join(f"{k}={v}" for k, v in jumlah.items())
-        self.status.set(f"Label disimpan untuk {self.label_path.name}: {len(baris)} instance ({rinci}).")
+        if not senyap:
+            self.status.set(f"Label disimpan untuk {self.label_path.name}: {len(baris)} instance ({rinci}).")
 
     def bangun_yolo(self):
         """Buat turunan siap Ultralytics tanpa memindahkan/menghapus raw frame."""
