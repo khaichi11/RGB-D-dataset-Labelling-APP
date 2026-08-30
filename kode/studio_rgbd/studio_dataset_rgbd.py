@@ -837,8 +837,8 @@ class Studio(tk.Tk):
                                        bg="#FFF9F4", selectcolor=BLUE, activebackground=BLUE, fg=INK, relief="flat", pady=7)
         self.rb_objek.pack(fill="x", pady=2); self.rb_acuan.pack(fill="x", pady=2)
         tk.Scale(i, from_=0, to=0.75, resolution=.05, variable=self.depth_alpha, command=lambda _: self.ganti_depth(), label="Overlay depth (samar)", bg=PANEL, fg=INK, highlightthickness=0).pack(fill="x", pady=(8, 0))
-        self.tombol(i, "✨ Rekomendasi mask dari depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
-        tk.Label(i, text="Depth memberi rekomendasi awal mask. Periksa, tarik titik yang kurang tepat, lalu lanjutkan—perubahan tersimpan otomatis sebagai draft.",
+        self.tombol(i, "✨ Rekomendasi mask YOLO + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
+        tk.Label(i, text="Tangga: YOLO terlatih mendeteksi tiap tapakan/riser, depth merapikan batasnya. Batu/ramp memakai depth sampai tersedia bobot khusus. Semua perubahan disimpan otomatis.",
                  bg=PANEL, fg=MUTED, wraplength=280, justify="left").pack(anchor="w", pady=(0, 6))
         edit = tk.Frame(i, bg=PANEL); edit.pack(fill="x", pady=(2, 0))
         self.tombol(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
@@ -854,7 +854,8 @@ class Studio(tk.Tk):
         self.btn_hapus_acuan = self.tombol(hapus, "Buang rekomendasi", self.buang_rekomendasi, "#F3D8D4", INK)
         self.btn_hapus_objek.pack(side="left", fill="x", expand=True, padx=(0, 2))
         self.btn_hapus_acuan.pack(side="left", fill="x", expand=True, padx=(2, 0))
-        self.tombol(i, "Simpan label YOLO sekarang", self.simpan_label, ACCENT).pack(fill="x", pady=(10, 2))
+        tk.Label(i, text="● AUTO-SAVE AKTIF — draft dan label YOLO tersimpan setelah Anda berhenti mengubah mask.",
+                 bg=PANEL, fg=GREEN, wraplength=300, justify="left", font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(8, 2))
         self.tombol(i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
         tk.Label(i, text="Klik kanan titik untuk menghapus titik itu. Tarik titik untuk memindahkan.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(5, 0))
         b, i = self.card(right, "Cocokkan dengan depth") ; b.pack(fill="x")
