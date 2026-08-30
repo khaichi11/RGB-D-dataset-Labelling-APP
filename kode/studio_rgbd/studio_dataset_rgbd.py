@@ -575,7 +575,7 @@ class KanvasLabel(tk.Canvas):
         """Cari titik hanya di kelas aktif bila ``nama`` diberikan.
 
         Ini mencegah vertex merah dan biru yang berdekatan saling mengambil
-        klik/drag. Pengguna memilih kelasnya dulu lewat PgUp atau PgDn.
+        klik/drag. Pengguna memilih kelasnya dulu lewat A atau S.
         """
         terbaik = None
         sumber = ((nama, self.poligon[nama]),) if nama is not None else self.poligon.items()
@@ -1035,6 +1035,8 @@ class Studio(tk.Tk):
         self.mask_alpha = DoubleVar(value=0.42)
         self.magnet_titik = BooleanVar(value=True)
         self.mode_label = StringVar(value="objek")
+        self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
+        self._space_terakhir = 0.0
         # Navigasi frame dikunci sampai operator sengaja memilih warna mask.
         # Ini menghindari frame berganti saat sedang menyunting titik.
         self._mode_label_dipilih = False
@@ -1276,10 +1278,7 @@ class Studio(tk.Tk):
         f = tk.Frame(self.tab_label, bg=BG); f.pack(fill="both", expand=True, padx=14, pady=14)
         left = tk.Frame(f, bg=BG); left.pack(side="left", fill="both", expand=True, padx=(0, 12))
         self.kanvas = KanvasLabel(left, self.hitung_ukuran, self._aktif_mask_berubah); self.kanvas.pack(fill="both", expand=True)
-        self.kanvas.bind("<Prior>", lambda _e: self.pilih_mode_keyboard("objek"))   # PgUp
-        self.kanvas.bind("<Next>", lambda _e: self.pilih_mode_keyboard("acuan"))    # PgDn
-        self.kanvas.bind("<Left>", lambda _e: self.pindah_frame_keyboard(-1))
-        self.kanvas.bind("<Right>", lambda _e: self.pindah_frame_keyboard(1))
+        self.kanvas.bind("<KeyPress>", self._shortcut_label, add="+")
         # Fokus dapat berpindah ke spinbox/panel; shortcut tetap harus hidup
         # selama pengguna berada di tab Label.
         self.bind_all("<KeyPress>", self._shortcut_label, add="+")
@@ -1291,14 +1290,8 @@ class Studio(tk.Tk):
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
         self.tombol_ringkas(i, "Ekspor frame saat ini ke Label", self.ekspor_frame_kini_ke_label, GREEN, width=220).pack(fill="x", pady=(4, 0))
         nav = tk.Frame(i, bg=PANEL); nav.pack(fill="x", pady=(4, 0))
-        self.tombol_ringkas(nav, "←", lambda: self.pindah_frame_keyboard(-1), "#E8DDD5", INK,
-                             width=70).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        self.tombol_ringkas(nav, "→", lambda: self.pindah_frame_keyboard(1), "#E8DDD5", INK,
-                             width=70).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        self.tombol_ringkas(nav, "↻ Gambar", self.kanvas.muat_ulang_gambar, "#E8DDD5", INK,
-                             width=82).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        tk.Label(i, text="Pilih PgUp (merah) atau PgDn (biru), lalu gunakan ←/→ atau tombol panah.",
-                 bg=PANEL, fg=MUTED, wraplength=300, justify="left", font=("Segoe UI", 8)).pack(anchor="w", pady=(1, 0))
+        self.tombol_ringkas(nav, "↻ Muat ulang gambar", self.kanvas.muat_ulang_gambar, "#E8DDD5", INK,
+                             width=180).pack(fill="x")
         kelola = tk.Frame(i, bg=PANEL); kelola.pack(fill="x", pady=(4, 0))
         self.tombol_ringkas(kelola, "Sampahkan", self.toggle_sampah_frame, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
         self.tombol_ringkas(kelola, "Hapus permanen", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
@@ -1306,33 +1299,49 @@ class Studio(tk.Tk):
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.muat_frame).pack(anchor="w", pady=(6, 0))
         b, i = self.card(right, "Label dan depth") ; b.pack(fill="x", pady=(0, 7))
-        self.rb_objek = tk.Radiobutton(i, variable=self.mode_label, value="objek", indicatoron=False, command=self.ganti_mode,
+        panel_label = ttk.Notebook(i); panel_label.pack(fill="both", expand=True)
+        edit_i = tk.Frame(panel_label, bg=PANEL); otomatis_i = tk.Frame(panel_label, bg=PANEL)
+        panel_label.add(edit_i, text="Edit mask")
+        panel_label.add(otomatis_i, text="Otomatis")
+        kontrol = tk.Frame(otomatis_i, bg=PANEL); kontrol.pack(fill="x", pady=(6, 2))
+        tk.Label(kontrol, text="PILIH KONTROL", bg=PANEL, fg=ACCENT, font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        tk.Radiobutton(kontrol, text="Mudah: A/S/Space", variable=self.kontrol_label, value="mudah",
+                       command=self.ganti_kontrol_label, bg=PANEL, fg=INK, selectcolor=PANEL,
+                       activebackground=PANEL, font=("Segoe UI", 8)).pack(side="left")
+        tk.Radiobutton(kontrol, text="Klasik: PgUp/PgDn/←→", variable=self.kontrol_label, value="klasik",
+                       command=self.ganti_kontrol_label, bg=PANEL, fg=INK, selectcolor=PANEL,
+                       activebackground=PANEL, font=("Segoe UI", 8)).pack(side="left", padx=(4, 0))
+        self.label_bantuan_kontrol = tk.Label(otomatis_i, text=self.teks_kontrol_label(), bg=PANEL, fg=MUTED,
+                                              wraplength=300, justify="left", font=("Segoe UI", 8))
+        self.label_bantuan_kontrol.pack(anchor="w", pady=(1, 5))
+        self.rb_objek = tk.Radiobutton(edit_i, variable=self.mode_label, value="objek", indicatoron=False, command=self.ganti_mode,
                                        bg="#FFF9F4", selectcolor=RED, activebackground=RED, fg=INK, relief="flat", pady=7)
-        self.rb_acuan = tk.Radiobutton(i, variable=self.mode_label, value="acuan", indicatoron=False, command=self.ganti_mode,
+        self.rb_acuan = tk.Radiobutton(edit_i, variable=self.mode_label, value="acuan", indicatoron=False, command=self.ganti_mode,
                                        bg="#FFF9F4", selectcolor=BLUE, activebackground=BLUE, fg=INK, relief="flat", pady=7)
         self.rb_objek.pack(fill="x", pady=2); self.rb_acuan.pack(fill="x", pady=2)
-        tk.Scale(i, from_=0, to=0.75, resolution=.05, orient="horizontal", variable=self.depth_alpha,
+        tk.Scale(edit_i, from_=0, to=0.75, resolution=.05, orient="horizontal", variable=self.depth_alpha,
                  command=lambda _: self.ganti_depth(), label="Overlay depth (samar)", bg=PANEL, fg=INK,
-                 highlightthickness=0, length=260).pack(fill="x", pady=(4, 0))
-        tk.Scale(i, from_=0, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
+                 highlightthickness=0, length=220).pack(fill="x", pady=(2, 0))
+        tk.Scale(edit_i, from_=0, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
                  command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
-                 highlightthickness=0, length=260).pack(fill="x", pady=(2, 0))
-        magnet = tk.Frame(i, bg=PANEL); magnet.pack(fill="x", pady=(1, 0))
+                 highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
+        magnet = tk.Frame(edit_i, bg=PANEL); magnet.pack(fill="x", pady=(1, 0))
         tk.Checkbutton(magnet, text="Magnet titik & garis", variable=self.magnet_titik,
                        command=self.ganti_magnet_titik, bg=PANEL, fg=INK, selectcolor=PANEL,
                        activebackground=PANEL).pack(side="left")
         self.tombol_ringkas(magnet, "🧲 Rapikan semua", self.rapikan_magnet_semua,
                              "#E8DDD5", INK, width=138).pack(side="right")
-        self.tombol(i, "✨ Rekomendasi tangga: YOLO + SAM 2 + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
-        self.tombol(i, "⚡ Batch auto-label frame baru", self.batch_auto_label, BLUE).pack(fill="x", pady=(4, 2))
-        tk.Label(i, text="Tangga: YOLO memberi kandidat, SAM 2 GPU merapikan batas, depth ternormalisasi memeriksa serpihan/outlier. Batu/ramp memakai depth. Semua perubahan disimpan otomatis.",
-                 bg=PANEL, fg=MUTED, wraplength=280, justify="left").pack(anchor="w", pady=(0, 6))
-        edit = tk.Frame(i, bg=PANEL); edit.pack(fill="x", pady=(2, 0))
+        self.tombol(otomatis_i, "✨ Rekomendasi tangga: YOLO + SAM 2 + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(8, 2))
+        self.tombol(otomatis_i, "⚡ Batch auto-label frame baru", self.batch_auto_label, BLUE).pack(fill="x", pady=(4, 2))
+        self.tombol(otomatis_i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
+        tk.Label(otomatis_i, text="Tangga: YOLO memberi kandidat, SAM 2 GPU merapikan batas, depth memeriksa outlier. Batu/ramp memakai depth. Perubahan mask tersimpan otomatis.",
+                 bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(3, 0))
+        edit = tk.Frame(edit_i, bg=PANEL); edit.pack(fill="x", pady=(4, 0))
         self.tombol_ringkas(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=(0, 2))
         self.tombol_ringkas(edit, "+ Titik", self.mulai_tambah_titik, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=2)
         self.tombol_ringkas(edit, "Undo", self.kanvas.undo_riwayat, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=2)
         self.tombol_ringkas(edit, "Redo", self.kanvas.redo_riwayat, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        nomor = tk.Frame(i, bg=PANEL); nomor.pack(fill="x", pady=(4, 0))
+        nomor = tk.Frame(edit_i, bg=PANEL); nomor.pack(fill="x", pady=(4, 0))
         tk.Label(nomor, text="Mask yang diedit", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
         self.spin_nomor_mask = tk.Spinbox(nomor, from_=1, to=999, textvariable=self.nomor_mask, width=5,
                                            command=lambda: self.atur_nomor_mask(senyap=True))
@@ -1341,16 +1350,15 @@ class Studio(tk.Tk):
         self.spin_nomor_mask.bind("<FocusOut>", lambda _e: self.atur_nomor_mask(senyap=True))
         self.tombol_ringkas(nomor, "Pilih mask", self.atur_nomor_mask, "#E8DDD5", INK, width=130).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 0))
         nomor.columnconfigure(0, weight=1)
-        hapus = tk.Frame(i, bg=PANEL); hapus.pack(fill="x", pady=(5, 0))
+        hapus = tk.Frame(edit_i, bg=PANEL); hapus.pack(fill="x", pady=(5, 0))
         self.btn_hapus_objek = self.tombol_ringkas(hapus, "Hapus mask", self.kanvas.hapus_mask_aktif, "#F3D8D4", INK)
         self.btn_hapus_acuan = self.tombol_ringkas(hapus, "Buang saran", self.buang_rekomendasi, "#F3D8D4", INK)
         self.btn_hapus_objek.pack(side="left", fill="x", expand=True, padx=(0, 2))
         self.btn_hapus_acuan.pack(side="left", fill="x", expand=True, padx=(2, 0))
-        tk.Label(i, text="● AUTO-SAVE AKTIF — draft dan label YOLO tersimpan setelah Anda berhenti mengubah mask.",
-                 bg=PANEL, fg=GREEN, wraplength=300, justify="left", font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(8, 2))
-        self.tombol(i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
-        tk.Label(i, text="Klik dekat garis untuk menyisipkan titik pada sisi itu. Klik kanan kosong = unselect; klik kanan titik = hapus. Setelah unselect, klik kiri membuat mask baru. Ctrl+Z = Undo; Ctrl+Shift+Z = Redo.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(5, 0))
-        tk.Label(i, textvariable=self.ukur_status, bg=PANEL, fg=INK, wraplength=300, justify="left", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(5, 0))
+        tk.Label(edit_i, text="● AUTO-SAVE AKTIF", bg=PANEL, fg=GREEN,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(6, 1))
+        tk.Label(edit_i, text="Klik kanan kosong = unselect; klik kanan titik = hapus. Setelah unselect, klik kiri membuat mask baru. Ctrl+Z = Undo; Ctrl+Shift+Z = Redo.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(2, 0))
+        tk.Label(edit_i, textvariable=self.ukur_status, bg=PANEL, fg=INK, wraplength=300, justify="left", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(3, 0))
         self.perbarui_konteks_label()
 
     # ----- rekam -----
@@ -1359,7 +1367,8 @@ class Studio(tk.Tk):
 
     def simpan_preferensi(self):
         tulis_json(self.path_preferensi, {"kategori": self.kategori.get(), "split": self.split.get(),
-                                          "kode_adegan": self.kode.get().strip()})
+                                          "kode_adegan": self.kode.get().strip(),
+                                          "kontrol_label": self.kontrol_label.get()})
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
@@ -2566,7 +2575,7 @@ class Studio(tk.Tk):
     def _buka_frame_ekspor(self, p: Path):
         bgr=cv2.imread(str(p/"color_raw.png")); dep=np.load(p/"depth_aligned_to_color.npy")
         if bgr is None: return
-        # Pilihan PgUp/PgDn dipertahankan antar-frame. Penguncian hanya
+        # Pilihan A/S dipertahankan antar-frame. Penguncian hanya
         # diperlukan sebelum navigasi pertama, bukan setiap kali frame baru
         # dibuka; jika tidak tombol panah berhenti setelah satu perpindahan.
         self.label_path=p; self.label_info=baca_json(p/"frame.json"); self.kanvas.set_frame(cv2.cvtColor(bgr,cv2.COLOR_BGR2RGB),dep)
@@ -2584,7 +2593,9 @@ class Studio(tk.Tk):
             # tinggal mengoreksi; draft/label yang sudah ada tidak ditimpa.
             self.after(180, lambda target=p: self._auto_segmentasi(target))
         self.perbarui_konteks_label(self.label_info.get("kategori"))
-        self.ukur_status.set("Pilih PgUp (merah) atau PgDn (biru), lalu klik/tarik titik. ←/→ baru aktif sesudahnya.")
+        self.ukur_status.set(("Tekan A (merah) atau S (biru), lalu klik/tarik titik. Space berpindah frame."
+                              if self.kontrol_label.get() == "mudah" else
+                              "Tekan PgUp (merah) atau PgDn (biru), lalu klik/tarik titik. Panah berpindah frame."))
         self.after(40, self.kanvas.focus_set)
 
     def _auto_segmentasi(self, target: Path):
@@ -2682,15 +2693,35 @@ class Studio(tk.Tk):
         shift = bool(event.state & 0x1)
         if ctrl and event.keysym.lower() == "z":
             return self.kanvas.redo_riwayat() if shift or event.keysym == "Z" else self.kanvas.undo_riwayat()
-        if event.keysym in {"Prior", "Page_Up", "KP_Prior"}:
-            return self.pilih_mode_keyboard("objek")
-        if event.keysym in {"Next", "Page_Down", "KP_Next"}:
-            return self.pilih_mode_keyboard("acuan")
-        if event.keysym == "Left":
-            return self.pindah_frame_keyboard(-1)
-        if event.keysym == "Right":
-            return self.pindah_frame_keyboard(1)
+        if self.kontrol_label.get() == "mudah":
+            if event.keysym.lower() == "a":
+                return self.pilih_mode_keyboard("objek")
+            if event.keysym.lower() == "s":
+                return self.pilih_mode_keyboard("acuan")
+            if event.keysym == "space":
+                return self.space_pindah_frame(event)
+        else:
+            if event.keysym in {"Prior", "Page_Up", "KP_Prior"}:
+                return self.pilih_mode_keyboard("objek")
+            if event.keysym in {"Next", "Page_Down", "KP_Next"}:
+                return self.pilih_mode_keyboard("acuan")
+            if event.keysym == "Left":
+                return self.pindah_frame_keyboard(-1)
+            if event.keysym == "Right":
+                return self.pindah_frame_keyboard(1)
         return None
+
+    def teks_kontrol_label(self):
+        return ("A = merah • S = biru • Space = berikutnya • Space 2× cepat = kembali • Ctrl+Z = Undo"
+                if self.kontrol_label.get() == "mudah" else
+                "PgUp = merah • PgDn = biru • ←/→ = frame • Ctrl+Z = Undo")
+
+    def ganti_kontrol_label(self):
+        self._space_terakhir = 0.0
+        if hasattr(self, "label_bantuan_kontrol"):
+            self.label_bantuan_kontrol.configure(text=self.teks_kontrol_label())
+        self.simpan_preferensi()
+        self.status.set("Kontrol label disimpan: " + ("Mudah (A/S/Space)." if self.kontrol_label.get() == "mudah" else "Klasik (PgUp/PgDn/panah)."))
 
     def pilih_mode_keyboard(self, nama: str):
         """Pilih warna mask secara sadar sebelum mengedit/navigasi."""
@@ -2708,10 +2739,19 @@ class Studio(tk.Tk):
 
     def pindah_frame_keyboard(self, arah: int):
         if not self._mode_label_dipilih:
-            self.status.set("Tekan PgUp untuk mask merah atau PgDn untuk mask biru sebelum memakai ←/→.")
+            self.status.set("Pilih mode mask dahulu: " + ("A atau S." if self.kontrol_label.get() == "mudah" else "PgUp atau PgDn."))
             return "break"
         self.pindah_frame_label(arah)
         return "break"
+
+    def space_pindah_frame(self, _event=None):
+        """Satu Space maju; dua Space cepat kembali satu frame."""
+        kini = time.monotonic()
+        if kini - self._space_terakhir <= .35:
+            self._space_terakhir = 0.0
+            return self.pindah_frame_keyboard(-1)
+        self._space_terakhir = kini
+        return self.pindah_frame_keyboard(1)
 
     def _aktif_mask_berubah(self, nama: str, indeks: int | None):
         """Sinkronkan nomor di panel ketika titik/mask dipilih langsung."""
