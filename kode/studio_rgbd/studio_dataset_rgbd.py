@@ -438,39 +438,25 @@ class KanvasLabel(tk.Canvas):
         if self.rgb is None:
             return
         h, w = self.rgb.shape[:2]
-        # Pada zoom besar jangan resize seluruh foto (bisa beberapa puluh MB).
-        # Cukup render potongan yang berada di area kanvas saat ini.
+        # Gambar penuh lebih stabil daripada tile saat kanvas digeser cepat:
+        # tile sempat dapat menyisakan area gelap. Beban zoom tetap dibatasi
+        # lewat render cepat BILINEAR dan overlay ringan di bawah.
         cw, ch = max(1, self.winfo_width()), max(1, self.winfo_height())
-        # Buffer layar lebar mencegah tepi coklat/gelap terlihat ketika pan
-        # atau zoom berpindah sebelum tile gambar berikutnya selesai dibuat.
-        margin = 256
-        if w * self.scale <= cw + 2 * margin:
-            x0, x1 = 0, w
-        else:
-            x0 = max(0, int(np.floor((-self.ox - margin) / self.scale)))
-            x1 = min(w, int(np.ceil((cw - self.ox + margin) / self.scale)))
-        if h * self.scale <= ch + 2 * margin:
-            y0, y1 = 0, h
-        else:
-            y0 = max(0, int(np.floor((-self.oy - margin) / self.scale)))
-            y1 = min(h, int(np.ceil((ch - self.oy + margin) / self.scale)))
-        x0, y0, x1, y1 = min(x0, w - 1), min(y0, h - 1), max(x0 + 1, x1), max(y0 + 1, y1)
-        crop = (x0, y0, x1, y1)
-        size = (max(1, round((x1 - x0) * self.scale)), max(1, round((y1 - y0) * self.scale)))
-        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.scale, 5), crop, size)
+        margin = 12
+        size = (max(1, round(w * self.scale)), max(1, round(h * self.scale)))
+        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.scale, 5), size)
         # Drag titik bisa memanggil render puluhan kali/detik. Gambar dasar
         # cukup dibuat sekali; yang berubah hanya garis poligon di atasnya.
         if self._photo_key != key or self._photo is None:
             # LANCZOS di setiap tick roda mouse mahal, terutama di RGB-D
             # resolusi tinggi. Ketika zoom masih berlangsung gunakan BILINEAR,
             # lalu render LANCZOS sekali setelah pengguna berhenti.
-            resample = Image.BILINEAR if self._zoom_cepat else Image.LANCZOS
-            citra = self.gambar_tampil()[y0:y1, x0:x1]
-            self._photo = ImageTk.PhotoImage(Image.fromarray(citra).resize(size, resample))
+            resample = Image.BILINEAR if self._zoom_cepat or size[0] * size[1] > 3_000_000 else Image.LANCZOS
+            self._photo = ImageTk.PhotoImage(Image.fromarray(self.gambar_tampil()).resize(size, resample))
             self._photo_key = key
         # Foto dasar mahal untuk digambar ulang. Saat titik digeser, yang
         # berubah hanyalah overlay sehingga gambar RGB tetap dipertahankan.
-        gambar_x, gambar_y = self.ox + x0 * self.scale, self.oy + y0 * self.scale
+        gambar_x, gambar_y = self.ox, self.oy
         background_key = (self._photo_key, round(gambar_x, 2), round(gambar_y, 2))
         if self._canvas_background_key != background_key:
             self.delete("gambar")
@@ -825,7 +811,9 @@ class KanvasLabel(tk.Canvas):
         if self.rgb is None:
             return
         sebelumnya = self.canvas_ke_gambar(e.x, e.y)
-        self.scale = max(0.08, min(8.0, self.scale * faktor))
+        # Lup 6× memberi presisi lebih baik daripada membuat gambar dasar
+        # sampai 8× (yang terlalu berat untuk Tk pada resolusi D435).
+        self.scale = max(0.08, min(4.0, self.scale * faktor))
         if sebelumnya:
             self.ox, self.oy = e.x - sebelumnya[0] * self.scale, e.y - sebelumnya[1] * self.scale
         self._zoom_cepat = True
@@ -1200,7 +1188,7 @@ class Studio(tk.Tk):
                  command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
                  highlightthickness=0, length=260).pack(fill="x", pady=(2, 0))
         magnet = tk.Frame(i, bg=PANEL); magnet.pack(fill="x", pady=(1, 0))
-        tk.Checkbutton(magnet, text="Magnet titik", variable=self.magnet_titik,
+        tk.Checkbutton(magnet, text="Magnet titik & garis", variable=self.magnet_titik,
                        command=self.ganti_magnet_titik, bg=PANEL, fg=INK, selectcolor=PANEL,
                        activebackground=PANEL).pack(side="left")
         self.tombol_ringkas(magnet, "🧲 Rapikan semua", self.rapikan_magnet_semua,
