@@ -319,6 +319,9 @@ class KanvasLabel(tk.Canvas):
         # Mask aktif tidak selalu yang terakhir: pengguna dapat memilih mask
         # nomor 2 lalu menambah/menghapus titik hanya pada mask tersebut.
         self.aktif_indeks = {"objek": None, "acuan": None}
+        # Klik area kosong setelah mask selesai membuat instance baru. Flag ini
+        # berubah hanya jika operator sengaja memilih/edit mask yang sudah ada.
+        self._mask_dipilih_eksplisit = False
         self._drag = None
         self._drag_titik = None
         self._seleksi_awal = None
@@ -358,6 +361,7 @@ class KanvasLabel(tk.Canvas):
         self.rgb, self.depth = rgb, depth
         self.poligon = {"objek": [], "acuan": []}
         self.aktif_indeks = {"objek": None, "acuan": None}
+        self._mask_dipilih_eksplisit = False
         self.titik_dipilih.clear()
         self._photo = self._photo_key = self._tampil_cache = self._tampil_key = None
         self._canvas_background_key = None
@@ -416,6 +420,7 @@ class KanvasLabel(tk.Canvas):
             return False
         self.mode = nama
         self.aktif_indeks[nama] = indeks
+        self._mask_dipilih_eksplisit = True
         self._beritahu_aktif(nama, indeks)
         self.render()
         return True
@@ -426,6 +431,7 @@ class KanvasLabel(tk.Canvas):
         if not self.poligon[nama] or self.poligon[nama][-1]:
             self.poligon[nama].append([])
         self.aktif_indeks[nama] = len(self.poligon[nama]) - 1
+        self._mask_dipilih_eksplisit = False
         self._beritahu_aktif(nama, self.aktif_indeks[nama])
         self.catat_riwayat(); self.render(); self.on_change()
 
@@ -740,6 +746,7 @@ class KanvasLabel(tk.Canvas):
         if dekat is not None:
             nama, ip, it = dekat
             self.aktif_indeks[nama] = ip
+            self._mask_dipilih_eksplisit = True
             self._beritahu_aktif(nama, ip)
             kunci = (nama, ip, it)
             if kunci not in self.titik_dipilih:
@@ -762,12 +769,21 @@ class KanvasLabel(tk.Canvas):
             if sisi is not None:
                 _nama, ip, setelah, titik_baru = sisi
                 self.aktif_indeks[self.mode] = ip
+                self._mask_dipilih_eksplisit = True
                 aktif = self.poligon[self.mode][ip]
                 # Klik di atas garis selalu menyisipkan titik di sisi itu;
                 # urutan polygon terjaga sehingga bagian atas tidak bolong.
                 aktif.insert(setelah + 1, titik_baru)
                 self._beritahu_aktif(self.mode, ip)
             else:
+                # Setelah tiga vertex, mask dianggap lengkap. Klik bebas
+                # berikutnya harus menjadi instance baru supaya polygon lama
+                # tidak tersambung/bengkok tanpa sengaja.
+                if len(aktif) >= 3 and not self._mask_dipilih_eksplisit:
+                    self.poligon[self.mode].append([])
+                    self.aktif_indeks[self.mode] = len(self.poligon[self.mode]) - 1
+                    aktif = self.poligon[self.mode][-1]
+                    self._beritahu_aktif(self.mode, self.aktif_indeks[self.mode])
                 if titik_baru == p:
                     titik_baru = self._magnet_garis(p)
                 aktif.append(titik_baru)
