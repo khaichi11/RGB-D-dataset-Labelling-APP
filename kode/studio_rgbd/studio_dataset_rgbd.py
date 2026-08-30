@@ -438,8 +438,26 @@ class KanvasLabel(tk.Canvas):
         if self.rgb is None:
             return
         h, w = self.rgb.shape[:2]
-        size = (max(1, round(w * self.scale)), max(1, round(h * self.scale)))
-        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), size)
+        # Pada zoom besar jangan resize seluruh foto (bisa beberapa puluh MB).
+        # Cukup render potongan yang berada di area kanvas saat ini.
+        cw, ch = max(1, self.winfo_width()), max(1, self.winfo_height())
+        # Buffer layar lebar mencegah tepi coklat/gelap terlihat ketika pan
+        # atau zoom berpindah sebelum tile gambar berikutnya selesai dibuat.
+        margin = 256
+        if w * self.scale <= cw + 2 * margin:
+            x0, x1 = 0, w
+        else:
+            x0 = max(0, int(np.floor((-self.ox - margin) / self.scale)))
+            x1 = min(w, int(np.ceil((cw - self.ox + margin) / self.scale)))
+        if h * self.scale <= ch + 2 * margin:
+            y0, y1 = 0, h
+        else:
+            y0 = max(0, int(np.floor((-self.oy - margin) / self.scale)))
+            y1 = min(h, int(np.ceil((ch - self.oy + margin) / self.scale)))
+        x0, y0, x1, y1 = min(x0, w - 1), min(y0, h - 1), max(x0 + 1, x1), max(y0 + 1, y1)
+        crop = (x0, y0, x1, y1)
+        size = (max(1, round((x1 - x0) * self.scale)), max(1, round((y1 - y0) * self.scale)))
+        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.scale, 5), crop, size)
         # Drag titik bisa memanggil render puluhan kali/detik. Gambar dasar
         # cukup dibuat sekali; yang berubah hanya garis poligon di atasnya.
         if self._photo_key != key or self._photo is None:
@@ -447,28 +465,37 @@ class KanvasLabel(tk.Canvas):
             # resolusi tinggi. Ketika zoom masih berlangsung gunakan BILINEAR,
             # lalu render LANCZOS sekali setelah pengguna berhenti.
             resample = Image.BILINEAR if self._zoom_cepat else Image.LANCZOS
-            self._photo = ImageTk.PhotoImage(Image.fromarray(self.gambar_tampil()).resize(size, resample))
+            citra = self.gambar_tampil()[y0:y1, x0:x1]
+            self._photo = ImageTk.PhotoImage(Image.fromarray(citra).resize(size, resample))
             self._photo_key = key
         # Foto dasar mahal untuk digambar ulang. Saat titik digeser, yang
         # berubah hanyalah overlay sehingga gambar RGB tetap dipertahankan.
-        background_key = (self._photo_key, round(self.ox, 2), round(self.oy, 2))
+        gambar_x, gambar_y = self.ox + x0 * self.scale, self.oy + y0 * self.scale
+        background_key = (self._photo_key, round(gambar_x, 2), round(gambar_y, 2))
         if self._canvas_background_key != background_key:
             self.delete("gambar")
-            self.create_image(self.ox, self.oy, anchor="nw", image=self._photo, tags=("gambar",))
+            self.create_image(gambar_x, gambar_y, anchor="nw", image=self._photo, tags=("gambar",))
             self._canvas_background_key = background_key
         self.delete("overlay")
         # merah = sisi tinggi (riser), biru = permukaan datar (tapakan).
         # Warna ini bukan hiasan: yang biru dipakai RANSAC sebagai BIDANG ACUAN,
         # yang merah sebagai objek yang diukur tingginya terhadap bidang itu.
         specs = (("objek", "#FF5A5A", "#FFD9D9"), ("acuan", "#5AA9FF", "#D7E9FF"))
+        cepat = self._drag_titik is not None or self._zoom_cepat
         for nama, garis, titik in specs:
             for idx, poly in enumerate(self.poligon[nama], start=1):
                 pts = [(x * self.scale + self.ox, y * self.scale + self.oy) for x, y in poly]
+                if pts and (max(x for x, _ in pts) < -margin or min(x for x, _ in pts) > cw + margin
+                            or max(y for _, y in pts) < -margin or min(y for _, y in pts) > ch + margin):
+                    continue
                 aktif = idx - 1 == self.aktif_indeks.get(nama)
                 if len(pts) >= 3:
                     # Opacity 0 berarti hanya garis: titik tetap mudah dipilih
                     # tanpa menutupi warna RGB/depth di belakangnya.
-                    if self.mask_alpha <= .01:
+                    if cepat:
+                        self.create_line(pts + [pts[0]], fill="#FFFFFF" if aktif else garis,
+                                         width=2 if aktif else 1, tags=("overlay",))
+                    elif self.mask_alpha <= .01:
                         self.create_polygon(pts, fill="", outline="#FFFFFF" if aktif else garis,
                                             width=3 if aktif else 2, tags=("overlay",))
                     else:
@@ -476,26 +503,29 @@ class KanvasLabel(tk.Canvas):
                         self.create_polygon(pts, fill=garis, outline="#FFFFFF" if aktif else garis,
                                             stipple=pola, width=3 if aktif else 2, tags=("overlay",))
                     cx = sum(p[0] for p in pts) / len(pts); cy = sum(p[1] for p in pts) / len(pts)
-                    self.create_text(cx, cy, text=str(idx), fill=garis if self.mask_alpha <= .01 else "white",
-                                     font=("Segoe UI", 11, "bold"), tags=("overlay",))
+                    if not cepat:
+                        self.create_text(cx, cy, text=str(idx), fill=garis if self.mask_alpha <= .01 else "white",
+                                         font=("Segoe UI", 11, "bold"), tags=("overlay",))
                 elif len(pts) >= 2:
                     self.create_line(pts, fill=garis, width=2, tags=("overlay",))
                 for it, (x, y) in enumerate(pts):
                     dipilih = (nama, idx - 1, it) in self.titik_dipilih
+                    if cepat and not aktif and not dipilih:
+                        continue
                     self.create_oval(x - (6 if dipilih else 4), y - (6 if dipilih else 4),
                                      x + (6 if dipilih else 4), y + (6 if dipilih else 4),
                                      fill=titik, outline="#FFD400" if dipilih else garis,
                                      width=2 if dipilih else 1, tags=("overlay",))
         if self._drag_titik is not None:
-            self._gambar_lup(self._drag_titik[3], self._drag_titik[4])
+            self._gambar_lup(*self._drag_titik["layar"])
 
-    def render_nanti(self):
+    def render_nanti(self, jeda=33):
         """Koaleskan redraw saat roda/drag; UI tidak mengantre ratusan resize."""
         if not self._render_terjadwal:
             self._render_terjadwal = True
             # Maksimum ~30 redraw/detik ketika drag/zoom, sehingga event
             # mouse tidak menumpuk ketika satu frame berisi banyak poligon.
-            self._render_setelah = self.after(33, self._render_tertunda)
+            self._render_setelah = self.after(jeda, self._render_tertunda)
 
     def _render_tertunda(self):
         self._render_terjadwal = False
@@ -535,6 +565,80 @@ class KanvasLabel(tk.Canvas):
                     if jarak <= batas ** 2 and (terbaik is None or jarak < terbaik[0]):
                         terbaik = (jarak, kandidat)
         return terbaik[1] if terbaik is not None else titik
+
+    def _sisi_terdekat(self, x, y, nama, batas=14):
+        """Cari sisi poligon terdekat dalam koordinat layar untuk insert titik."""
+        terbaik = None
+        for ip, poly in enumerate(self.poligon[nama]):
+            if len(poly) < 2:
+                continue
+            # Poligon lengkap memiliki sisi penutup terakhir -> pertama.
+            jumlah_sisi = len(poly) if len(poly) >= 3 else len(poly) - 1
+            for i in range(jumlah_sisi):
+                a, b = poly[i], poly[(i + 1) % len(poly)]
+                ax, ay = a[0] * self.scale + self.ox, a[1] * self.scale + self.oy
+                bx, by = b[0] * self.scale + self.ox, b[1] * self.scale + self.oy
+                dx, dy = bx - ax, by - ay
+                panjang2 = dx * dx + dy * dy
+                if panjang2 <= 1e-6:
+                    continue
+                t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / panjang2))
+                sx, sy = ax + t * dx, ay + t * dy
+                jarak2 = (x - sx) ** 2 + (y - sy) ** 2
+                if jarak2 <= batas ** 2 and (terbaik is None or jarak2 < terbaik[0]):
+                    terbaik = (jarak2, ip, i)
+        return None if terbaik is None else terbaik[1:]
+
+    def rapikan_semua_magnet(self):
+        """Satukan kelompok vertex yang sudah berdekatan pada label lama."""
+        titik = [(nama, ip, it, xy)
+                 for nama, daftar in self.poligon.items()
+                 for ip, poly in enumerate(daftar)
+                 for it, xy in enumerate(poly)]
+        if len(titik) < 2:
+            return 0, 0
+        batas = self.jarak_magnet / max(self.scale, .01)
+        induk = list(range(len(titik)))
+
+        def akar(i):
+            while induk[i] != i:
+                induk[i] = induk[induk[i]]
+                i = induk[i]
+            return i
+
+        def gabung(a, b):
+            a, b = akar(a), akar(b)
+            if a != b:
+                induk[b] = a
+
+        # Grid kecil menghindari pemeriksaan semua pasangan pada frame dengan
+        # ratusan titik.
+        sel: dict[tuple[int, int], list[int]] = {}
+        for i, (_, _, _, (x, y)) in enumerate(titik):
+            gx, gy = int(np.floor(x / batas)), int(np.floor(y / batas))
+            for yy in range(gy - 1, gy + 2):
+                for xx in range(gx - 1, gx + 2):
+                    for j in sel.get((xx, yy), []):
+                        u, v = titik[j][3]
+                        if (u - x) ** 2 + (v - y) ** 2 <= batas ** 2:
+                            gabung(i, j)
+            sel.setdefault((gx, gy), []).append(i)
+
+        kelompok: dict[int, list[int]] = {}
+        for i in range(len(titik)):
+            kelompok.setdefault(akar(i), []).append(i)
+        grup = [anggota for anggota in kelompok.values() if len(anggota) > 1]
+        for anggota in grup:
+            # Median tahan terhadap satu vertex salah posisi di dekat batas.
+            xs = [titik[i][3][0] for i in anggota]; ys = [titik[i][3][1] for i in anggota]
+            target = (float(np.median(xs)), float(np.median(ys)))
+            for i in anggota:
+                nama, ip, it, _ = titik[i]
+                self.poligon[nama][ip][it] = target
+        if grup:
+            self.titik_dipilih.clear()
+            self.render(); self.on_change()
+        return len(grup), sum(len(x) for x in grup)
 
     def _gambar_lup(self, x, y):
         """Lup kecil pada titik aktif agar batas masking presisi saat zoom."""
@@ -587,7 +691,18 @@ class KanvasLabel(tk.Canvas):
         p = self.canvas_ke_gambar(e.x, e.y)
         if p:
             aktif = self._aktif(self.mode)
-            aktif.append(self._titik_magnet(p))
+            sisi = self._sisi_terdekat(e.x, e.y, self.mode)
+            titik_baru = self._titik_magnet(p)
+            if sisi is not None:
+                ip, setelah = sisi
+                self.aktif_indeks[self.mode] = ip
+                aktif = self.poligon[self.mode][ip]
+                # Klik di atas garis selalu menyisipkan titik di sisi itu;
+                # urutan polygon terjaga sehingga bagian atas tidak bolong.
+                aktif.insert(setelah + 1, titik_baru)
+                self._beritahu_aktif(self.mode, ip)
+            else:
+                aktif.append(titik_baru)
             self._urutkan_dari_bawah(self.mode, aktif)
             self.titik_dipilih.clear()
             self.render(); self.on_change()
@@ -717,7 +832,7 @@ class KanvasLabel(tk.Canvas):
         if self._zoom_tajam_setelah is not None:
             self.after_cancel(self._zoom_tajam_setelah)
         self._zoom_tajam_setelah = self.after(160, self._zoom_selesai)
-        self.render_nanti()
+        self.render_nanti(80)
 
     def _zoom_selesai(self):
         """Ganti preview cepat menjadi gambar tajam hanya sekali per zoom."""
@@ -730,8 +845,16 @@ class KanvasLabel(tk.Canvas):
     def pan(self, e):
         if self._drag:
             x, y, ox, oy = self._drag
-            self.ox, self.oy = ox + e.x - x, oy + e.y - y
-            self.render_nanti()
+            baru_x, baru_y = ox + e.x - x, oy + e.y - y
+            dx, dy = baru_x - self.ox, baru_y - self.oy
+            self.ox, self.oy = baru_x, baru_y
+            # Panning tidak membutuhkan resize atau membangun ulang ribuan
+            # titik; Canvas dapat menggeser dua layer secara native.
+            self.move("gambar", dx, dy); self.move("overlay", dx, dy)
+            self._canvas_background_key = None
+            # Setelah gerakan berhenti sejenak, muat tile baru yang menutup
+            # viewport. Selama drag, Canvas tetap memakai geser native cepat.
+            self.render_nanti(80)
 
 
 class Studio(tk.Tk):
@@ -1041,6 +1164,9 @@ class Studio(tk.Tk):
         self.kanvas.bind("<Next>", lambda _e: self.pilih_mode_keyboard("acuan"))    # PgDn
         self.kanvas.bind("<Left>", lambda _e: self.pindah_frame_keyboard(-1))
         self.kanvas.bind("<Right>", lambda _e: self.pindah_frame_keyboard(1))
+        # Fokus dapat berpindah ke spinbox/panel; shortcut tetap harus hidup
+        # selama pengguna berada di tab Label.
+        self.bind_all("<KeyPress>", self._shortcut_label, add="+")
         # Panel tetap tanpa scrollbar: kontrol dipadatkan dan disusun vertikal
         # agar alur kerja terlihat sekaligus seperti panel aplikasi desktop.
         right = tk.Frame(f, bg=BG, width=390); right.pack(side="left", fill="y"); right.pack_propagate(False)
@@ -1049,8 +1175,12 @@ class Studio(tk.Tk):
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
         self.tombol_ringkas(i, "Ekspor frame saat ini ke Label", self.ekspor_frame_kini_ke_label, GREEN, width=220).pack(fill="x", pady=(4, 0))
         nav = tk.Frame(i, bg=PANEL); nav.pack(fill="x", pady=(4, 0))
-        tk.Label(nav, text="PgUp: merah  •  PgDn: biru  •  ←/→: frame", bg=PANEL, fg=MUTED,
-                 justify="center", font=("Segoe UI", 8, "bold")).pack(fill="x", pady=4)
+        self.tombol_ringkas(nav, "←", lambda: self.pindah_frame_keyboard(-1), "#E8DDD5", INK,
+                             width=70).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.tombol_ringkas(nav, "→", lambda: self.pindah_frame_keyboard(1), "#E8DDD5", INK,
+                             width=70).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        tk.Label(i, text="Pilih PgUp (merah) atau PgDn (biru), lalu gunakan ←/→ atau tombol panah.",
+                 bg=PANEL, fg=MUTED, wraplength=300, justify="left", font=("Segoe UI", 8)).pack(anchor="w", pady=(1, 0))
         kelola = tk.Frame(i, bg=PANEL); kelola.pack(fill="x", pady=(4, 0))
         self.tombol_ringkas(kelola, "Sampahkan", self.toggle_sampah_frame, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
         self.tombol_ringkas(kelola, "Hapus permanen", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
@@ -1069,9 +1199,12 @@ class Studio(tk.Tk):
         tk.Scale(i, from_=0, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
                  command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
                  highlightthickness=0, length=260).pack(fill="x", pady=(2, 0))
-        tk.Checkbutton(i, text="Magnet titik (sambungkan batas dekat)", variable=self.magnet_titik,
+        magnet = tk.Frame(i, bg=PANEL); magnet.pack(fill="x", pady=(1, 0))
+        tk.Checkbutton(magnet, text="Magnet titik", variable=self.magnet_titik,
                        command=self.ganti_magnet_titik, bg=PANEL, fg=INK, selectcolor=PANEL,
-                       activebackground=PANEL).pack(anchor="w", pady=(1, 0))
+                       activebackground=PANEL).pack(side="left")
+        self.tombol_ringkas(magnet, "🧲 Rapikan semua", self.rapikan_magnet_semua,
+                             "#E8DDD5", INK, width=138).pack(side="right")
         self.tombol(i, "✨ Rekomendasi tangga: YOLO + SAM 2 + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
         self.tombol(i, "⚡ Batch auto-label frame baru", self.batch_auto_label, BLUE).pack(fill="x", pady=(4, 2))
         tk.Label(i, text="Tangga: YOLO memberi kandidat, SAM 2 GPU merapikan batas, depth ternormalisasi memeriksa serpihan/outlier. Batu/ramp memakai depth. Semua perubahan disimpan otomatis.",
@@ -1097,7 +1230,7 @@ class Studio(tk.Tk):
         tk.Label(i, text="● AUTO-SAVE AKTIF — draft dan label YOLO tersimpan setelah Anda berhenti mengubah mask.",
                  bg=PANEL, fg=GREEN, wraplength=300, justify="left", font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(8, 2))
         self.tombol(i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
-        tk.Label(i, text="Klik kanan menghapus titik warna aktif. Tarik titik untuk memindahkan; Shift+tarik area kosong untuk memilih banyak titik lalu tarik salah satunya.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(5, 0))
+        tk.Label(i, text="Klik dekat garis untuk menyisipkan titik pada sisi itu. Klik kanan menghapus titik warna aktif; Shift+tarik memilih banyak titik.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(5, 0))
         tk.Label(i, textvariable=self.ukur_status, bg=PANEL, fg=INK, wraplength=300, justify="left", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(5, 0))
         self.perbarui_konteks_label()
 
@@ -2627,6 +2760,15 @@ class Studio(tk.Tk):
     def ganti_depth(self): self.kanvas.depth_alpha=float(self.depth_alpha.get()); self.kanvas.render()
     def ganti_opasitas_mask(self): self.kanvas.mask_alpha=float(self.mask_alpha.get()); self.kanvas.render()
     def ganti_magnet_titik(self): self.kanvas.magnet_aktif=bool(self.magnet_titik.get())
+    def rapikan_magnet_semua(self):
+        if not any(self.kanvas.poligon.values()):
+            messagebox.showinfo("Belum ada mask", "Buka frame yang memiliki mask terlebih dahulu.", parent=self)
+            return
+        if not messagebox.askyesno("Rapikan semua titik", "Satukan semua vertex yang jaraknya sangat dekat. Perubahan disimpan otomatis.", parent=self):
+            return
+        grup, titik = self.kanvas.rapikan_semua_magnet()
+        self.status.set(f"Magnet merapikan {titik} titik dalam {grup} sambungan." if grup else
+                        "Tidak ada titik yang cukup dekat untuk disatukan.")
 
     def _mask(self, nama):
         """Masker gabungan SEMUA instance kelas ini (untuk pengukuran)."""
