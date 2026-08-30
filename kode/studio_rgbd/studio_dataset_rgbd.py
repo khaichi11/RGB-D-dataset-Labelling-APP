@@ -328,7 +328,9 @@ class KanvasLabel(tk.Canvas):
         self._seleksi_kotak = None
         self.titik_dipilih: set[tuple[str, int, int]] = set()
         self.magnet_aktif = True
-        self.jarak_magnet = 12  # piksel layar, tetap nyaman pada setiap zoom
+        # Cukup dekat untuk merapatkan batas, tetapi tidak sampai menarik
+        # vertex ke garis/titik lain saat operator sedang membetulkan detail.
+        self.jarak_magnet = 7  # piksel layar, tetap nyaman pada setiap zoom
         self._riwayat: list[dict[str, list[list[tuple[float, float]]]]] = []
         self._riwayat_pos = -1
         self._render_terjadwal = False
@@ -805,6 +807,14 @@ class KanvasLabel(tk.Canvas):
             if tempel == calon_utama:
                 tempel = self._magnet_garis(calon_utama, drag["kelompok"])
             dx, dy = tempel[0] - utama_asal[0], tempel[1] - utama_asal[1]
+            # Bila beberapa titik dipilih, batasi translasi berdasarkan
+            # SELURUH grup. Dulu hanya titik utama yang aman, sehingga vertex
+            # lain dapat terdorong keluar dari citra seperti pada screenshot.
+            h, w = self.rgb.shape[:2]
+            xs = [drag["asal"][k][0] for k in drag["kelompok"]]
+            ys = [drag["asal"][k][1] for k in drag["kelompok"]]
+            dx = min(max(dx, -min(xs)), (w - 1) - max(xs))
+            dy = min(max(dy, -min(ys)), (h - 1) - max(ys))
             for nama, ip, it in drag["kelompok"]:
                 x0, y0 = drag["asal"][(nama, ip, it)]
                 self.poligon[nama][ip][it] = (x0 + dx, y0 + dy)
