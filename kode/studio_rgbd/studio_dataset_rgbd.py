@@ -54,6 +54,7 @@ if __package__:
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from .segmentasi_yolo_depth import usulkan as usulkan_yolo_depth
+    from .segmentasi_sam2 import rapikan_kelompok as rapikan_sam2
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from studio_rgbd.kamera_rgbd import (KameraRGBD, cari_rekaman, nama_aman, nama_rekaman,
@@ -63,6 +64,7 @@ else:
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd.segmentasi_yolo_depth import usulkan as usulkan_yolo_depth
+    from studio_rgbd.segmentasi_sam2 import rapikan_kelompok as rapikan_sam2
 
 
 BG = "#F3EEE7"
@@ -320,6 +322,9 @@ class KanvasLabel(tk.Canvas):
         self._drag_titik = None
         self._render_terjadwal = False
         self._photo = None
+        self._photo_key = None
+        self._tampil_cache = None
+        self._tampil_key = None
         self.bind("<Button-1>", self.tambah)
         self.bind("<B1-Motion>", self.geser_titik)
         self.bind("<ButtonRelease-1>", self.selesai_geser_titik)
@@ -335,6 +340,7 @@ class KanvasLabel(tk.Canvas):
         self.rgb, self.depth = rgb, depth
         self.poligon = {"objek": [], "acuan": []}
         self.aktif_indeks = {"objek": None, "acuan": None}
+        self._photo = self._photo_key = self._tampil_cache = self._tampil_key = None
         self.after(20, self.fit)
 
     def _beritahu_aktif(self, nama: str, indeks: int | None):
@@ -397,6 +403,9 @@ class KanvasLabel(tk.Canvas):
 
     def gambar_tampil(self) -> np.ndarray:
         assert self.rgb is not None
+        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3))
+        if self._tampil_key == key and self._tampil_cache is not None:
+            return self._tampil_cache
         out = self.rgb.copy()
         if self.depth is not None and self.depth_alpha > 0:
             d = self.depth.astype(np.float32)
@@ -407,15 +416,20 @@ class KanvasLabel(tk.Canvas):
                 warna = cv2.applyColorMap(vis, cv2.COLORMAP_TURBO)
                 warna = cv2.cvtColor(warna, cv2.COLOR_BGR2RGB)
                 out = cv2.addWeighted(out, 1 - self.depth_alpha, warna, self.depth_alpha, 0)
+        self._tampil_key, self._tampil_cache = key, out
         return out
 
     def render(self):
         if self.rgb is None:
             return
         h, w = self.rgb.shape[:2]
-        img = self.gambar_tampil()
         size = (max(1, round(w * self.scale)), max(1, round(h * self.scale)))
-        self._photo = ImageTk.PhotoImage(Image.fromarray(img).resize(size, Image.LANCZOS))
+        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), size)
+        # Drag titik bisa memanggil render puluhan kali/detik. Gambar dasar
+        # cukup dibuat sekali; yang berubah hanya garis poligon di atasnya.
+        if self._photo_key != key or self._photo is None:
+            self._photo = ImageTk.PhotoImage(Image.fromarray(self.gambar_tampil()).resize(size, Image.LANCZOS))
+            self._photo_key = key
         self.delete("all")
         self.create_image(self.ox, self.oy, anchor="nw", image=self._photo)
         # merah = sisi tinggi (riser), biru = permukaan datar (tapakan).
@@ -892,8 +906,8 @@ class Studio(tk.Tk):
         tk.Scale(i, from_=0, to=0.75, resolution=.05, orient="horizontal", variable=self.depth_alpha,
                  command=lambda _: self.ganti_depth(), label="Overlay depth (samar)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=260).pack(fill="x", pady=(4, 0))
-        self.tombol(i, "✨ Rekomendasi mask YOLO + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
-        tk.Label(i, text="Tangga memakai bentuk YOLO; depth ternormalisasi hanya merapikan noise. Batu/ramp memakai depth. Semua perubahan disimpan otomatis.",
+        self.tombol(i, "✨ Rekomendasi tangga: YOLO + SAM 2", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
+        tk.Label(i, text="Tangga: YOLO memberi kandidat lalu SAM 2 GPU merapikan batas; depth hanya untuk ukur. Batu/ramp memakai depth. Semua perubahan disimpan otomatis.",
                  bg=PANEL, fg=MUTED, wraplength=280, justify="left").pack(anchor="w", pady=(0, 6))
         edit = tk.Frame(i, bg=PANEL); edit.pack(fill="x", pady=(2, 0))
         self.tombol_ringkas(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK, width=72).pack(side="left", fill="x", expand=True, padx=(0, 2))
@@ -2279,6 +2293,13 @@ class Studio(tk.Tk):
             # mendapat proposal depth, bukan dipaksa ke model yang salah kelas.
             if kategori == "tangga_naik":
                 hasil = usulkan_yolo_depth(self.kanvas.rgb, self.kanvas.depth, self._intrinsics(info))
+                # SAM 2 memakai kandidat YOLO sebagai bounding-box prompt.
+                # Setiap kandidat tetap dipertahankan bila SAM gagal merapikan.
+                rapih = rapikan_sam2(self.kanvas.rgb, {
+                    "tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"],
+                })
+                hasil["tapakan"], hasil["bidang_tegak"] = rapih["tapakan"], rapih["bidang_tegak"]
+                hasil["sumber"] = "YOLO + SAM 2.1 Tiny (GPU)"
             else:
                 hasil = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
                 hasil["sumber"] = "depth (bobot YOLO tangga tidak dipakai untuk kategori ini)"
