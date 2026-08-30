@@ -298,9 +298,10 @@ class TombolRounded(tk.Canvas):
 class KanvasLabel(tk.Canvas):
     """Editor poligon responsif: tambah, pindah titik, zoom di posisi kursor."""
 
-    def __init__(self, master, on_change, **kw):
+    def __init__(self, master, on_change, on_active=None, **kw):
         super().__init__(master, bg="#241F1D", highlightthickness=0, **kw)
         self.on_change = on_change
+        self.on_active = on_active
         self.rgb: np.ndarray | None = None
         self.depth: np.ndarray | None = None
         self.scale = 1.0
@@ -312,6 +313,9 @@ class KanvasLabel(tk.Canvas):
         # Dulu hanya satu poligon per kelas, jadi tangga dengan lima anak tangga
         # mustahil dilabeli sesuai dataset lama yang rata-rata 4,75 instance.
         self.poligon = {"objek": [], "acuan": []}
+        # Mask aktif tidak selalu yang terakhir: pengguna dapat memilih mask
+        # nomor 2 lalu menambah/menghapus titik hanya pada mask tersebut.
+        self.aktif_indeks = {"objek": None, "acuan": None}
         self._drag = None
         self._drag_titik = None
         self._render_terjadwal = False
@@ -330,28 +334,53 @@ class KanvasLabel(tk.Canvas):
     def set_frame(self, rgb: np.ndarray, depth: np.ndarray):
         self.rgb, self.depth = rgb, depth
         self.poligon = {"objek": [], "acuan": []}
+        self.aktif_indeks = {"objek": None, "acuan": None}
         self.after(20, self.fit)
+
+    def _beritahu_aktif(self, nama: str, indeks: int | None):
+        if self.on_active is not None:
+            self.on_active(nama, indeks)
+
+    def pilih_mask(self, nama: str, nomor: int) -> bool:
+        """Pilih instance bernomor 1-based untuk diedit, tanpa memindah urutan."""
+        indeks = nomor - 1
+        if indeks < 0 or indeks >= len(self.poligon[nama]):
+            return False
+        self.mode = nama
+        self.aktif_indeks[nama] = indeks
+        self._beritahu_aktif(nama, indeks)
+        self.render()
+        return True
 
     def poligon_baru(self, nama: str | None = None):
         """Mulai instance baru tanpa menghapus mask yang sudah ada."""
         nama = nama or self.mode
         if not self.poligon[nama] or self.poligon[nama][-1]:
             self.poligon[nama].append([])
-            self.render(); self.on_change()
+        self.aktif_indeks[nama] = len(self.poligon[nama]) - 1
+        self._beritahu_aktif(nama, self.aktif_indeks[nama])
+        self.render(); self.on_change()
 
     def hapus_mask_aktif(self):
-        """Hapus instance terakhir mode aktif, bukan seluruh kelas mask."""
+        """Hapus instance aktif mode aktif, bukan seluruh kelas mask."""
         daftar = self.poligon[self.mode]
         if daftar:
-            daftar.pop()
+            indeks = self.aktif_indeks.get(self.mode)
+            indeks = len(daftar) - 1 if indeks is None else min(indeks, len(daftar) - 1)
+            daftar.pop(indeks)
+            self.aktif_indeks[self.mode] = min(indeks, len(daftar) - 1) if daftar else None
+            self._beritahu_aktif(self.mode, self.aktif_indeks[self.mode])
             self.render(); self.on_change()
 
     def _aktif(self, nama: str) -> list:
-        if not self.poligon[nama] or len(self.poligon[nama][-1]) >= 3 and False:
-            pass
         if not self.poligon[nama]:
             self.poligon[nama].append([])
-        return self.poligon[nama][-1]
+        indeks = self.aktif_indeks.get(nama)
+        if indeks is None or indeks >= len(self.poligon[nama]):
+            indeks = len(self.poligon[nama]) - 1
+            self.aktif_indeks[nama] = indeks
+            self._beritahu_aktif(nama, indeks)
+        return self.poligon[nama][indeks]
 
     def fit_bila_baru(self):
         if self.rgb is not None and not any(self.poligon["objek"]) and not any(self.poligon["acuan"]):
@@ -396,8 +425,10 @@ class KanvasLabel(tk.Canvas):
         for nama, garis, titik in specs:
             for idx, poly in enumerate(self.poligon[nama], start=1):
                 pts = [(x * self.scale + self.ox, y * self.scale + self.oy) for x, y in poly]
+                aktif = idx - 1 == self.aktif_indeks.get(nama)
                 if len(pts) >= 3:
-                    self.create_polygon(pts, fill=garis, outline=garis, stipple="gray50", width=2)
+                    self.create_polygon(pts, fill=garis, outline="#FFFFFF" if aktif else garis,
+                                        stipple="gray50", width=3 if aktif else 2)
                     cx = sum(p[0] for p in pts) / len(pts); cy = sum(p[1] for p in pts) / len(pts)
                     self.create_text(cx, cy, text=str(idx), fill="white",
                                      font=("Segoe UI", 11, "bold"))
@@ -459,6 +490,8 @@ class KanvasLabel(tk.Canvas):
         dekat = self._titik_dekat(e.x, e.y)
         if dekat is not None:
             nama, ip, it = dekat
+            self.mode = nama; self.aktif_indeks[nama] = ip
+            self._beritahu_aktif(nama, ip)
             self._drag_titik = (nama, ip, it, e.x, e.y)
             self.render()
             return
@@ -486,10 +519,15 @@ class KanvasLabel(tk.Canvas):
         daftar = self.poligon[self.mode]
         if not daftar:
             return
-        if daftar[-1]:
-            daftar[-1].pop()
-        if not daftar[-1] and len(daftar) > 1:
-            daftar.pop()                    # poligon kosong ikut dibuang
+        indeks = self.aktif_indeks.get(self.mode)
+        indeks = len(daftar) - 1 if indeks is None else min(indeks, len(daftar) - 1)
+        if daftar[indeks]:
+            daftar[indeks].pop()
+        if not daftar[indeks] and len(daftar) > 1:
+            daftar.pop(indeks)
+            indeks = min(indeks, len(daftar) - 1)
+        self.aktif_indeks[self.mode] = indeks if daftar else None
+        self._beritahu_aktif(self.mode, self.aktif_indeks[self.mode])
         self.render(); self.on_change()
 
     def hapus_titik_dipilih(self, e):
@@ -503,6 +541,9 @@ class KanvasLabel(tk.Canvas):
         # Instance kosong tidak perlu dibiarkan sebagai mask semu.
         if not poly:
             self.poligon[nama].pop(ip)
+        daftar = self.poligon[nama]
+        self.aktif_indeks[nama] = min(ip, len(daftar) - 1) if daftar else None
+        self._beritahu_aktif(nama, self.aktif_indeks[nama])
         self.render(); self.on_change()
 
     def bersihkan(self, nama):
@@ -822,7 +863,7 @@ class Studio(tk.Tk):
     def ui_label(self):
         f = tk.Frame(self.tab_label, bg=BG); f.pack(fill="both", expand=True, padx=14, pady=14)
         left = tk.Frame(f, bg=BG); left.pack(side="left", fill="both", expand=True, padx=(0, 12))
-        self.kanvas = KanvasLabel(left, self.hitung_ukuran); self.kanvas.pack(fill="both", expand=True)
+        self.kanvas = KanvasLabel(left, self.hitung_ukuran, self._aktif_mask_berubah); self.kanvas.pack(fill="both", expand=True)
         # Panel tetap tanpa scrollbar: kontrol dipadatkan dan disusun vertikal
         # agar alur kerja terlihat sekaligus seperti panel aplikasi desktop.
         right = tk.Frame(f, bg=BG, width=390); right.pack(side="left", fill="y"); right.pack_propagate(False)
@@ -849,16 +890,20 @@ class Studio(tk.Tk):
                  command=lambda _: self.ganti_depth(), label="Overlay depth (samar)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=260).pack(fill="x", pady=(4, 0))
         self.tombol(i, "✨ Rekomendasi mask YOLO + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(10, 2))
-        tk.Label(i, text="Tangga memakai YOLO + depth. Batu/ramp memakai depth. Semua perubahan disimpan otomatis.",
+        tk.Label(i, text="Tangga memakai bentuk YOLO; depth ternormalisasi hanya merapikan noise. Batu/ramp memakai depth. Semua perubahan disimpan otomatis.",
                  bg=PANEL, fg=MUTED, wraplength=280, justify="left").pack(anchor="w", pady=(0, 6))
         edit = tk.Frame(i, bg=PANEL); edit.pack(fill="x", pady=(2, 0))
         self.tombol_ringkas(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK, width=72).pack(side="left", fill="x", expand=True, padx=(0, 2))
         self.tombol_ringkas(edit, "+ Titik", self.mulai_tambah_titik, "#E8DDD5", INK, width=72).pack(side="left", fill="x", expand=True, padx=2)
         self.tombol_ringkas(edit, "− Titik", self.kanvas.undo, "#E8DDD5", INK, width=72).pack(side="left", fill="x", expand=True, padx=(2, 0))
         nomor = tk.Frame(i, bg=PANEL); nomor.pack(fill="x", pady=(4, 0))
-        tk.Label(nomor, text="Nomor mask aktif", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
-        tk.Spinbox(nomor, from_=1, to=999, textvariable=self.nomor_mask, width=5).grid(row=0, column=1, sticky="w", padx=6)
-        self.tombol_ringkas(nomor, "Atur nomor", self.atur_nomor_mask, "#E8DDD5", INK, width=130).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 0))
+        tk.Label(nomor, text="Mask yang diedit", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
+        self.spin_nomor_mask = tk.Spinbox(nomor, from_=1, to=999, textvariable=self.nomor_mask, width=5,
+                                           command=lambda: self.atur_nomor_mask(senyap=True))
+        self.spin_nomor_mask.grid(row=0, column=1, sticky="w", padx=6)
+        self.spin_nomor_mask.bind("<Return>", lambda _e: self.atur_nomor_mask(senyap=True))
+        self.spin_nomor_mask.bind("<FocusOut>", lambda _e: self.atur_nomor_mask(senyap=True))
+        self.tombol_ringkas(nomor, "Pilih mask", self.atur_nomor_mask, "#E8DDD5", INK, width=130).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 0))
         nomor.columnconfigure(0, weight=1)
         hapus = tk.Frame(i, bg=PANEL); hapus.pack(fill="x", pady=(5, 0))
         self.btn_hapus_objek = self.tombol_ringkas(hapus, "Hapus mask", self.kanvas.hapus_mask_aktif, "#F3D8D4", INK)
@@ -2082,6 +2127,8 @@ class Studio(tk.Tk):
         if draft.get("poligon"):
             self.kanvas.poligon = {nama: [list(map(tuple, poly)) for poly in draft["poligon"].get(nama, [])]
                                    for nama in ("objek", "acuan")}
+            self.kanvas.aktif_indeks = {nama: (len(daftar) - 1 if daftar else None)
+                                        for nama, daftar in self.kanvas.poligon.items()}
             self.kanvas.after(25, self.kanvas.fit)
             self.status.set(f"Draft mask {p.name} dipulihkan otomatis.")
         self.perbarui_konteks_label(self.label_info.get("kategori"))
@@ -2100,25 +2147,37 @@ class Studio(tk.Tk):
         self.list_frame.selection_clear(0, "end"); self.list_frame.selection_set(tujuan); self.list_frame.activate(tujuan)
         self._buka_frame_ekspor(self.frame_paths[tujuan])
 
-    def atur_nomor_mask(self):
-        """Pindahkan instance terakhir mode aktif ke nomor yang pengguna pilih."""
-        daftar = self.kanvas.poligon[self.mode_label.get()]
-        if not daftar:
-            messagebox.showinfo("Belum ada mask", "Buat atau pilih mask terlebih dahulu.", parent=self); return
-        tujuan = max(0, min(self.nomor_mask.get() - 1, len(daftar) - 1))
-        aktif = daftar.pop()
-        daftar.insert(tujuan, aktif)
-        self.kanvas.render(); self.hitung_ukuran()
-        self.status.set(f"Mask aktif dipindahkan ke nomor {tujuan + 1}.")
+    def _aktif_mask_berubah(self, nama: str, indeks: int | None):
+        """Sinkronkan nomor di panel ketika titik/mask dipilih langsung."""
+        if indeks is None:
+            return
+        self.mode_label.set(nama)
+        self.nomor_mask.set(indeks + 1)
+
+    def atur_nomor_mask(self, senyap=False):
+        """Pilih mask bernomor tertentu; urutan/nomor mask tidak diubah."""
+        nama, nomor = self.mode_label.get(), self.nomor_mask.get()
+        if self.kanvas.pilih_mask(nama, nomor):
+            if not senyap:
+                self.status.set(f"Mask {nomor} dipilih. + Titik dan klik gambar akan mengubah mask ini.")
+            return True
+        if not senyap:
+            messagebox.showinfo("Nomor mask belum ada",
+                                f"Mask {nomor} belum ada. Tekan + Mask untuk membuat mask baru.", parent=self)
+        return False
 
     def mulai_mask_baru(self):
         self.kanvas.poligon_baru(self.mode_label.get())
+        self.nomor_mask.set(len(self.kanvas.poligon[self.mode_label.get()]))
         self.kanvas.focus_set()
-        self.status.set("Mask baru siap. Klik pada gambar untuk menambah titik pertama.")
+        self.status.set(f"Mask {self.nomor_mask.get()} baru siap. Klik gambar untuk menambah titik pertama.")
 
     def mulai_tambah_titik(self):
+        if not self.atur_nomor_mask(senyap=True):
+            messagebox.showinfo("Pilih mask", "Pilih nomor mask yang ada, atau tekan + Mask untuk membuat mask baru.", parent=self)
+            return
         self.kanvas.focus_set()
-        self.status.set("Klik lokasi pada gambar untuk menambah titik ke mask aktif.")
+        self.status.set(f"Klik lokasi pada gambar untuk menambah titik ke mask {self.nomor_mask.get()}.")
 
     def buang_rekomendasi(self):
         if not any(self.kanvas.poligon.values()):
@@ -2207,11 +2266,16 @@ class Studio(tk.Tk):
                 hasil = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
                 hasil["sumber"] = "depth (bobot YOLO tangga tidak dipakai untuk kategori ini)"
         except Exception as e:                                  # noqa: BLE001
-            # Aplikasi tetap berguna di mesin tanpa ultralytics/CUDA atau bila
-            # bobot dipindah: beri rekomendasi depth, jangan gagal total.
+            # Untuk tangga jangan diam-diam mengganti hasil YOLO dengan depth:
+            # pengguna harus tahu bila bobot/runtime YOLO bermasalah.
+            if kategori == "tangga_naik":
+                messagebox.showerror("YOLO tidak tersedia", f"Rekomendasi tangga memakai YOLO.\n\n{e}", parent=self)
+                return
+            # Batu/ramp belum mempunyai bobot YOLO khusus, sehingga depth tetap
+            # menjadi proposal kategori tersebut.
             try:
                 hasil = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
-                hasil["sumber"] = f"depth cadangan (YOLO tidak tersedia: {e})"
+                hasil["sumber"] = "depth (belum ada bobot YOLO kategori ini)"
             except Exception as cadangan:
                 messagebox.showerror("Rekomendasi mask", str(cadangan), parent=self); return
         # Hasil mentah komponen terhubung tidak berurutan. Untuk tangga,
@@ -2221,6 +2285,9 @@ class Studio(tk.Tk):
         urut_bawah = lambda daftar: sorted(daftar, key=lambda poly: -sum(p[1] for p in poly) / max(1, len(poly)))
         self.kanvas.poligon["acuan"] = [list(map(tuple, p)) for p in urut_bawah(tapakan)]
         self.kanvas.poligon["objek"] = [list(map(tuple, p)) for p in urut_bawah(hasil["bidang_tegak"])]
+        self.kanvas.aktif_indeks = {nama: (len(daftar) - 1 if daftar else None)
+                                    for nama, daftar in self.kanvas.poligon.items()}
+        self._aktif_mask_berubah(self.mode_label.get(), self.kanvas.aktif_indeks[self.mode_label.get()])
         self.kanvas.render(); self.kanvas.on_change()
         urut = hasil.get("tapakan_terurut", [])
         tinggi = [t["tinggi_dari_terbawah_cm"] for t in urut if t["tinggi_dari_terbawah_cm"] is not None]
