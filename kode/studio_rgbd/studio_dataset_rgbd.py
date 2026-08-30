@@ -731,6 +731,8 @@ class Studio(tk.Tk):
         self.list_sesi.pack(fill="both", expand=True); self.list_sesi.bind("<<ListboxSelect>>", lambda e: self.pilih_sesi())
         self.tombol(i, "Muat ulang daftar", self.muat_daftar, "#E8DDD5", INK).pack(fill="x", pady=(10, 3))
         self.tombol(i, "Pindah ke tempat sampah / pulihkan", self.toggle_sampah, "#E8DDD5", INK).pack(fill="x")
+        self.tombol(i, "Hapus preview video", self.hapus_preview_permanen, "#F3D8D4", INK).pack(fill="x", pady=(4, 0))
+        self.tombol(i, "Hapus rekaman permanen", self.hapus_sesi_permanen, RED).pack(fill="x", pady=(4, 0))
         tk.Checkbutton(i, text="\U0001f5d1 Tampilkan isi tempat sampah", variable=self.tampil_sampah,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.muat_daftar).pack(anchor="w", pady=(6, 0))
@@ -826,7 +828,7 @@ class Studio(tk.Tk):
         self.tombol(nav, "Berikutnya →", lambda: self.pindah_frame_label(1), "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
         kelola = tk.Frame(i, bg=PANEL); kelola.pack(fill="x", pady=(4, 0))
         self.tombol(kelola, "Sampah frame", self.toggle_sampah_frame, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        self.tombol(kelola, "Hapus permanen", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        self.tombol(kelola, "Hapus gambar", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
         tk.Checkbutton(i, text="\U0001f5d1 Tampilkan sampah frame", variable=self.tampil_sampah_frame,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.muat_frame).pack(anchor="w", pady=(6, 0))
@@ -1420,6 +1422,48 @@ class Studio(tk.Tk):
                         if state["di_sampah"] else
                         "Rekaman dipulihkan dari tempat sampah.")
         self.muat_daftar()
+
+    def hapus_preview_permanen(self):
+        """Hapus hanya MP4/thumbnail turunan; RAW dan ekspor frame aman."""
+        if not self.sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman terlebih dahulu.", parent=self); return
+        preview = self.sesi / "derived" / "preview.mp4"
+        thumbnail = self.sesi / "derived" / "thumbnail.jpg"
+        if not preview.exists() and not thumbnail.exists():
+            messagebox.showinfo("Tidak ada preview", "Preview video untuk rekaman ini belum ada.", parent=self); return
+        if not messagebox.askyesno("Hapus preview video", "Hapus preview.mp4 dan thumbnail?\n\nRekaman RAW, depth, ekspor frame, dan label tidak dihapus.", parent=self):
+            return
+        self._tutup_video()
+        for p in (preview, thumbnail):
+            try:
+                if p.exists(): p.unlink()
+            except OSError as e:
+                messagebox.showerror("Hapus preview", str(e), parent=self); return
+        self.kanvas_tinjau.delete("all")
+        self.kanvas_tinjau.create_text(12, 12, anchor="nw", fill="white", font=("Segoe UI", 10),
+                                       text="Preview dihapus. Tekan Putar untuk membaca RAW langsung.")
+        self.status.set("Preview video dihapus permanen. RAW dan frame ekspor tetap ada.")
+
+    def hapus_sesi_permanen(self):
+        """Hapus satu folder sesi terpilih, termasuk RAW, hanya setelah konfirmasi."""
+        if not self.sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman yang akan dihapus terlebih dahulu.", parent=self); return
+        target = self.sesi.resolve()
+        rekaman = (self.root_data / "rekaman").resolve()
+        if rekaman not in target.parents:
+            messagebox.showerror("Target tidak aman", "Folder terpilih bukan sesi rekaman yang valid.", parent=self); return
+        if not messagebox.askyesno("Hapus rekaman permanen", f"Hapus PERMANEN seluruh sesi ini?\n\n{target.name}\n\nRAW, preview, ekspor frame, gambar, mask, dan label akan hilang dan tidak dapat dipulihkan.", icon="warning", parent=self):
+            return
+        self._tutup_video()
+        try:
+            shutil.rmtree(target)
+            self.sesi = None; self.indeks = []; self.frame_paths = []; self.label_path = None; self.label_info = None
+            self.list_frame.delete(0, "end"); self.kanvas.delete("all")
+            self.kategori_sesi.set("(rekaman dihapus)")
+            self.muat_daftar()
+            self.status.set("Rekaman dan seluruh turunannya dihapus permanen.")
+        except OSError as e:
+            messagebox.showerror("Hapus rekaman", str(e), parent=self)
 
     def buka_sesi(self):
         if self.sesi: self._buka_folder(self.sesi)
