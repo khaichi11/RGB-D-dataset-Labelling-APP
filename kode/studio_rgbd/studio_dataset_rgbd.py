@@ -2189,7 +2189,9 @@ class Studio(tk.Tk):
     def _rekomendasi_tangga_data(self, rgb, depth, info):
         """Versi tanpa Tk untuk worker batch; sama dengan saran tangga UI."""
         k = self._intrinsics(info)
-        hasil = usulkan_yolo_depth(rgb, depth, k)
+        # Kanvas/SAM memakai RGB, sedangkan Ultralytics menerima ndarray
+        # OpenCV BGR. Training juga membaca color_raw.png lewat OpenCV (BGR).
+        hasil = usulkan_yolo_depth(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), depth, k)
         depth_info = usulkan_segmentasi(depth, k)
         rapih = rapikan_sam2(rgb, {"tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"]},
                               {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
@@ -2385,7 +2387,9 @@ class Studio(tk.Tk):
             # Bobot aktif hanya dilatih untuk kelas tangga. Batu/ramp tetap
             # mendapat proposal depth, bukan dipaksa ke model yang salah kelas.
             if kategori == "tangga_naik":
-                hasil = usulkan_yolo_depth(self.kanvas.rgb, self.kanvas.depth, self._intrinsics(info))
+                # Tampilan kanvas RGB; YOLO harus menerima BGR agar sama dengan
+                # loader training yang membaca color_raw.png melalui OpenCV.
+                hasil = usulkan_yolo_depth(cv2.cvtColor(self.kanvas.rgb, cv2.COLOR_RGB2BGR), self.kanvas.depth, self._intrinsics(info))
                 # Normal depth dipakai sebagai petunjuk LUNAK ketika memilih
                 # alternatif SAM, bukan dipakai memotong hasil secara keras.
                 depth_info = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
