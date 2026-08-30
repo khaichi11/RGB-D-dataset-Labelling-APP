@@ -2566,9 +2566,9 @@ class Studio(tk.Tk):
     def _buka_frame_ekspor(self, p: Path):
         bgr=cv2.imread(str(p/"color_raw.png")); dep=np.load(p/"depth_aligned_to_color.npy")
         if bgr is None: return
-        # Setiap frame baru membutuhkan pilihan PgUp/PgDn lagi sebelum ←/→
-        # berfungsi, supaya navigasi tidak terjadi karena salah pencet.
-        self._mode_label_dipilih = False
+        # Pilihan PgUp/PgDn dipertahankan antar-frame. Penguncian hanya
+        # diperlukan sebelum navigasi pertama, bukan setiap kali frame baru
+        # dibuka; jika tidak tombol panah berhenti setelah satu perpindahan.
         self.label_path=p; self.label_info=baca_json(p/"frame.json"); self.kanvas.set_frame(cv2.cvtColor(bgr,cv2.COLOR_BGR2RGB),dep)
         draft = baca_json(p / "label_draft.json", {})
         if draft.get("poligon"):
