@@ -8,6 +8,10 @@ import numpy as np
 
 _MODEL = None
 _MODEL_PATH = None
+# Bobot tangga aktif maupun kandidat manual dilatih dengan letterbox 512.
+# Jangan biarkan inferensi jatuh ke default Ultralytics (sering 640), karena
+# bidang riser yang tipis berubah skala dan batas mask menjadi tidak konsisten.
+IMGSZ_TANGGA = 512
 
 
 def bobot_tangga() -> Path:
@@ -63,7 +67,10 @@ def usulkan(rgb: np.ndarray, depth: np.ndarray, k: dict, confidence: float = .28
     path = bobot_tangga()
     if not path.exists():
         raise FileNotFoundError(f"Bobot tangga tidak ditemukan: {path}")
-    hasil = _model(path).predict(rgb, conf=confidence, verbose=False, retina_masks=True)[0]
+    # masks.xy dikembalikan lagi dalam koordinat RGB asli oleh Ultralytics,
+    # sehingga tetap sejajar dengan depth setelah inferensi letterbox 512.
+    hasil = _model(path).predict(rgb, imgsz=IMGSZ_TANGGA, conf=confidence,
+                                 verbose=False, retina_masks=True)[0]
     out = {"tapakan": [], "bidang_tegak": [], "sumber": "YOLO", "jumlah_yolo": 0}
     if hasil.masks is None or hasil.boxes is None:
         return out
