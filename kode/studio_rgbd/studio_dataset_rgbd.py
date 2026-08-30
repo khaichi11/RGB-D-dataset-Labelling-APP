@@ -2738,9 +2738,6 @@ class Studio(tk.Tk):
         return "break"
 
     def pindah_frame_keyboard(self, arah: int):
-        if not self._mode_label_dipilih:
-            self.status.set("Pilih mode mask dahulu: " + ("A atau S." if self.kontrol_label.get() == "mudah" else "PgUp atau PgDn."))
-            return "break"
         self.pindah_frame_label(arah)
         return "break"
 
