@@ -166,5 +166,8 @@ def usulkan(depth: np.ndarray, k: dict, luas_min: int = LUAS_MIN) -> dict:
                        "tinggi_dari_terbawah_cm": (t - dasar) * 100})
     return {"tapakan": poli_datar, "bidang_tegak": poli_tegak,
             "tapakan_terurut": tangga, "arah_atas": atas.tolist(),
+            # Mask orientasi dipakai tahap fusi YOLO+depth. Tidak dipakai
+            # langsung sebagai label karena normal depth bisa berderau.
+            "mask_datar": datar.astype(np.uint8), "mask_tegak": tegak.astype(np.uint8),
             "piksel_datar": int(datar.sum()), "piksel_tegak": int(tegak.sum()),
             "piksel_sah": int(sah.sum())}

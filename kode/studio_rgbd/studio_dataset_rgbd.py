@@ -53,6 +53,7 @@ if __package__:
     from .geometri import Z_MAX, Z_MIN
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
+    from .segmentasi_yolo_depth import usulkan as usulkan_yolo_depth
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from studio_rgbd.kamera_rgbd import (KameraRGBD, cari_rekaman, nama_aman, nama_rekaman,
@@ -61,6 +62,7 @@ else:
     from studio_rgbd.geometri import Z_MAX, Z_MIN
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
+    from studio_rgbd.segmentasi_yolo_depth import usulkan as usulkan_yolo_depth
 
 
 BG = "#F3EEE7"
@@ -1944,18 +1946,36 @@ class Studio(tk.Tk):
         if "intrinsics_rgb_native" not in info:
             messagebox.showinfo("Intrinsics tidak ada",
                                 "frame.json frame ini tidak memuat intrinsics.", parent=self); return
+        kategori = info.get("kategori", self.sesi.parent.name if self.sesi else "tangga_naik")
         try:
-            hasil = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
+            # Bobot aktif hanya dilatih untuk kelas tangga. Batu/ramp tetap
+            # mendapat proposal depth, bukan dipaksa ke model yang salah kelas.
+            if kategori == "tangga_naik":
+                hasil = usulkan_yolo_depth(self.kanvas.rgb, self.kanvas.depth, self._intrinsics(info))
+            else:
+                hasil = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
+                hasil["sumber"] = "depth (bobot YOLO tangga tidak dipakai untuk kategori ini)"
         except Exception as e:                                  # noqa: BLE001
-            messagebox.showerror("Usulan segmentasi", str(e), parent=self); return
-        self.kanvas.poligon["acuan"] = [list(map(tuple, p)) for p in hasil["tapakan"]]
-        self.kanvas.poligon["objek"] = [list(map(tuple, p)) for p in hasil["bidang_tegak"]]
+            # Aplikasi tetap berguna di mesin tanpa ultralytics/CUDA atau bila
+            # bobot dipindah: beri rekomendasi depth, jangan gagal total.
+            try:
+                hasil = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
+                hasil["sumber"] = f"depth cadangan (YOLO tidak tersedia: {e})"
+            except Exception as cadangan:
+                messagebox.showerror("Rekomendasi mask", str(cadangan), parent=self); return
+        # Hasil mentah komponen terhubung tidak berurutan. Untuk tangga,
+        # nomor 1 harus berada di tapakan TERBAWAH, bukan di bagian atas layar.
+        # Urutan visual bawah->atas juga dipakai untuk riser agar konsisten.
+        tapakan = [t["poligon"] for t in hasil.get("tapakan_terurut", [])] or hasil["tapakan"]
+        urut_bawah = lambda daftar: sorted(daftar, key=lambda poly: -sum(p[1] for p in poly) / max(1, len(poly)))
+        self.kanvas.poligon["acuan"] = [list(map(tuple, p)) for p in urut_bawah(tapakan)]
+        self.kanvas.poligon["objek"] = [list(map(tuple, p)) for p in urut_bawah(hasil["bidang_tegak"])]
         self.kanvas.render(); self.kanvas.on_change()
-        urut = hasil["tapakan_terurut"]
+        urut = hasil.get("tapakan_terurut", [])
         tinggi = [t["tinggi_dari_terbawah_cm"] for t in urut if t["tinggi_dari_terbawah_cm"] is not None]
         beda = [round(b - a, 1) for a, b in zip(tinggi, tinggi[1:])] if len(tinggi) > 1 else []
         self.ukur_status.set(
-            f"Usulan: {len(hasil['tapakan'])} tapakan (biru), {len(hasil['bidang_tegak'])} riser (merah). "
+            f"Rekomendasi {hasil.get('sumber', 'depth')}: {len(hasil['tapakan'])} tapakan (biru), {len(hasil['bidang_tegak'])} riser (merah). "
             + (f"Beda tinggi antar tapakan: {beda} cm." if beda else "")
             + " Periksa lalu koreksi sebelum menyimpan.")
 
