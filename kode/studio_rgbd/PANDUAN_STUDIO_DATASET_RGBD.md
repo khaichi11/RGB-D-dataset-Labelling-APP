@@ -23,3 +23,26 @@ python -m studio_rgbd.studio_dataset_rgbd --keluar ../dataset/studio_rgbd --pres
 - Frame/video yang tidak layak dapat dipindahkan ke tempat sampah untuk dipulihkan kemudian. Bila memang tidak diperlukan lagi, tombol **Hapus frame ini permanen** hanya menghapus paket ekspor terpilih (RGB/depth/IR/mask/label); `source/raw.*` tidak pernah disentuh.
 - Preview dan ekspor memakai FPS yang diukur dari timestamp rekaman, bukan asumsi 30 fps. Menekan **Ekspor** lagi MELANJUTKAN ekspor lama: frame yang sudah ada (termasuk yang di tempat sampah) dilewati, bukan diekspor ulang.
 - Jika kalibrasi depth perlu diperbaiki, ekspor ulang frame dari `raw.bag`; tidak perlu mengambil data baru.
+
+## Catatan integrasi dan jejak masalah
+
+Bagian ini menjelaskan keputusan teknis yang penting agar hasil inferensi dan
+label dapat dilacak bila tampak tidak sesuai.
+
+| Gejala / risiko | Aturan yang diterapkan | Lokasi pemeriksaan |
+| --- | --- | --- |
+| Mask tangga tampak jauh lebih buruk dibanding data training | `color_raw.png` dibaca OpenCV dalam urutan **BGR**. Kanvas dan SAM 2 memakai RGB, sehingga aplikasi secara eksplisit mengubah RGB kembali ke BGR sebelum memanggil YOLO. Jangan menghapus konversi ini. | `studio_dataset_rgbd.py` pada `usulkan_segmentasi()` dan `_rekomendasi_tangga_data()` |
+| Batas mask berubah atau jumlah riser tidak konsisten | Bobot tangga dilatih memakai letterbox **512 px**. Inferensi YOLO selalu memakai `imgsz=512`; koordinat mask kemudian dikembalikan ke resolusi RGB asli sehingga tetap sejajar dengan depth. | `segmentasi_yolo_depth.py`: `IMGSZ_TANGGA = 512` |
+| RGB dan depth tidak tepat pasangan atau ekspor dianggap selalu 30 FPS | Paket ekspor selalu berisi `color_raw.png`, `depth_raw_z16.npy`, `depth_aligned_to_color.npy`, IR, timestamp, dan metadata dari frame RAW yang sama. Pemilihan waktu memakai timestamp kamera, bukan asumsi FPS tetap. | `<frame>/frame.json` dan `<frame>/depth_aligned_to_color.npy` |
+| Rekomendasi tangga kasar | Alurnya: **YOLO → SAM 2 → verifikasi depth**. YOLO memberi instance/tapak-riser, SAM 2 merapikan batas, dan depth hanya menolak serpihan/outlier—depth tidak boleh mengganti bentuk YOLO secara diam-diam. | `segmentasi_yolo_depth.py`, `segmentasi_sam2.py` |
+| Batu atau ramp belum mendapat mask setara tangga | Saat ini batu/ramp memakai usulan depth karena belum ada bobot YOLO khusus. Gunakan label manual sebagai dataset untuk melatih bobot kelas batu/ramp sebelum menjadikannya rekomendasi otomatis. | `studio_dataset_rgbd.py`: `usulkan_segmentasi()` |
+| Label hilang setelah berpindah frame | Editor menyimpan `label_draft.json` otomatis setelah perubahan berhenti. Label siap latih juga ditulis ke `label_yolo_seg.txt`; RAW tidak ikut diubah. | Folder paket frame ekspor |
+| Editor berat saat banyak titik atau ketika zoom | Gambar RGB dasar dicache; hanya overlay mask yang digambar ulang. Drag/zoom dibatasi sekitar 30 FPS, dan zoom memakai render cepat dulu lalu kualitas tajam setelah roda mouse berhenti. | `KanvasLabel` di `studio_dataset_rgbd.py` |
+
+### Checklist saat hasil rekomendasi tidak masuk akal
+
+1. Pastikan `frame.json` menunjukkan kategori yang benar dan file RGB, depth, serta intrinsics tersedia dalam paket frame yang sama.
+2. Pastikan bobot aktif ada di `bobot/kandidat/manual_tangga/weights/best.pt` atau fallback `bobot/aktif/tangga_yolo26s_seg_512_best.pt`.
+3. Jangan mengubah BGR/RGB atau `imgsz=512` tanpa melatih dan mengevaluasi ulang model pada konfigurasi baru.
+4. Buka overlay depth untuk memeriksa penyelarasan, lalu koreksi kandidat menggunakan opacity mask, magnet titik, dan lup. Simpan terjadi otomatis.
+5. Untuk reproduksi, catat nama sesi, nama folder frame, commit aplikasi, bobot yang dipakai, dan apakah hasil berasal dari rekomendasi otomatis atau koreksi manual.
