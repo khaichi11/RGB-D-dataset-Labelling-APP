@@ -1036,7 +1036,6 @@ class Studio(tk.Tk):
         self.magnet_titik = BooleanVar(value=True)
         self.mode_label = StringVar(value="objek")
         self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
-        self._space_terakhir = 0.0
         # Navigasi frame dikunci sampai operator sengaja memilih warna mask.
         # Ini menghindari frame berganti saat sedang menyunting titik.
         self._mode_label_dipilih = False
@@ -2699,7 +2698,9 @@ class Studio(tk.Tk):
             if event.keysym.lower() == "s":
                 return self.pilih_mode_keyboard("acuan")
             if event.keysym == "space":
-                return self.space_pindah_frame(event)
+                return self.pindah_frame_keyboard(1)
+            if event.keysym.lower() == "d":
+                return self.pindah_frame_keyboard(-1)
         else:
             if event.keysym in {"Prior", "Page_Up", "KP_Prior"}:
                 return self.pilih_mode_keyboard("objek")
@@ -2712,12 +2713,11 @@ class Studio(tk.Tk):
         return None
 
     def teks_kontrol_label(self):
-        return ("A = merah • S = biru • Space = berikutnya • Space 2× cepat = kembali • Ctrl+Z = Undo"
+        return ("A = merah • S = biru • Space = berikutnya • D = sebelumnya • Ctrl+Z = Undo"
                 if self.kontrol_label.get() == "mudah" else
                 "PgUp = merah • PgDn = biru • ←/→ = frame • Ctrl+Z = Undo")
 
     def ganti_kontrol_label(self):
-        self._space_terakhir = 0.0
         if hasattr(self, "label_bantuan_kontrol"):
             self.label_bantuan_kontrol.configure(text=self.teks_kontrol_label())
         self.simpan_preferensi()
@@ -2740,15 +2740,6 @@ class Studio(tk.Tk):
     def pindah_frame_keyboard(self, arah: int):
         self.pindah_frame_label(arah)
         return "break"
-
-    def space_pindah_frame(self, _event=None):
-        """Satu Space maju; dua Space cepat kembali satu frame."""
-        kini = time.monotonic()
-        if kini - self._space_terakhir <= .35:
-            self._space_terakhir = 0.0
-            return self.pindah_frame_keyboard(-1)
-        self._space_terakhir = kini
-        return self.pindah_frame_keyboard(1)
 
     def _aktif_mask_berubah(self, nama: str, indeks: int | None):
         """Sinkronkan nomor di panel ketika titik/mask dipilih langsung."""
