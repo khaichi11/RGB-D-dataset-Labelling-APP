@@ -761,6 +761,7 @@ class KanvasLabel(tk.Canvas):
             return
         p = self.canvas_ke_gambar(e.x, e.y)
         if p:
+            sebelumnya_tidak_dipilih = self.aktif_indeks.get(self.mode) is None
             aktif = self._aktif(self.mode)
             # Prioritasnya sisi mask yang sedang dipilih, bukan garis lain
             # yang kebetulan lebih dekat pada gambar.
@@ -777,9 +778,15 @@ class KanvasLabel(tk.Canvas):
                 self._beritahu_aktif(self.mode, ip)
             else:
                 # Setelah tiga vertex, mask dianggap lengkap. Klik bebas
-                # berikutnya harus menjadi instance baru supaya polygon lama
-                # tidak tersambung/bengkok tanpa sengaja.
+                # pertama hanya melepaskan pilihan mask; klik bebas berikutnya
+                # baru menjadi instance baru. Ini melindungi dari klik ngasal.
                 if len(aktif) >= 3 and not self._mask_dipilih_eksplisit:
+                    if not sebelumnya_tidak_dipilih:
+                        self.aktif_indeks[self.mode] = None
+                        self.titik_dipilih.clear()
+                        self._beritahu_aktif(self.mode, None)
+                        self.render()
+                        return
                     self.poligon[self.mode].append([])
                     self.aktif_indeks[self.mode] = len(self.poligon[self.mode]) - 1
                     aktif = self.poligon[self.mode][-1]
