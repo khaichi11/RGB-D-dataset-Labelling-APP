@@ -228,15 +228,15 @@ class TombolRounded(tk.Canvas):
 
     def __init__(self, master, text, command, color=ACCENT, fg="white"):
         self._siap = False
-        # Canvas default meminta lebar ~394 px. Pada dua tombol sejajar hal
-        # itu mendorong tombol kedua keluar panel, jadi mulai dari width=1.
-        super().__init__(master, width=1, height=32, bg=master.cget("bg"),
+        # Lebar dasar cukup untuk kontrol yang di-pack berdampingan.
+        # width=1 membuat tombol Tinjau tampak hilang seperti garis.
+        super().__init__(master, width=104, height=32, bg=master.cget("bg"),
                          highlightthickness=0, bd=0, cursor="hand2")
         self.command, self.color, self.fg, self.text = command, color, fg, text
         self.enabled = True
         self._hover = False
         self._siap = True
-        self._ukuran = (1, 32)
+        self._ukuran = (104, 32)
         self.bind("<Configure>", self._ubah_ukuran)
         self.bind("<Button-1>", self._klik)
         self.bind("<Enter>", self._masuk)
@@ -657,6 +657,12 @@ class Studio(tk.Tk):
     def tombol(self, parent, text, cmd, color=ACCENT, fg="white"):
         return TombolRounded(parent, text, cmd, color, fg)
 
+    def tombol_ringkas(self, parent, text, cmd, color=ACCENT, fg="white", width=88):
+        """Versi pendek untuk toolbar/panel samping yang ruangnya terbatas."""
+        btn = self.tombol(parent, text, cmd, color, fg)
+        btn.configure(width=width, height=28)
+        return btn
+
     def _buat_ui(self):
         top = tk.Frame(self, bg=BG); top.pack(fill="x", padx=24, pady=(16, 8))
         brand = tk.Frame(top, bg=BG); brand.pack(side="left")
@@ -759,15 +765,16 @@ class Studio(tk.Tk):
             text="Pilih rekaman lalu tekan Buat preview.")
 
         row = tk.Frame(bawah, bg=PANEL); row.pack(fill="x")
-        self.tombol(row, "Siapkan indeks & preview lengkap", self.buat_preview, BLUE).pack(side="left", padx=(0, 4))
+        self.tombol_ringkas(row, "Buat preview", self.buat_preview, BLUE, width=112).pack(side="left", padx=(0, 4))
         self.btn_putar = self.tombol(row, "\u25b6 Putar", self.putar_preview, "#E8DDD5", INK)
+        self.btn_putar.configure(width=78)
         self.btn_putar.pack(side="left", padx=4)
-        self.tombol(row, "\u23ea", lambda: self._langkah(-1), "#E8DDD5", INK).pack(side="left", padx=2)
-        self.tombol(row, "\u23e9", lambda: self._langkah(1), "#E8DDD5", INK).pack(side="left", padx=2)
+        self.tombol_ringkas(row, "\u23ea", lambda: self._langkah(-1), "#E8DDD5", INK, width=36).pack(side="left", padx=2)
+        self.tombol_ringkas(row, "\u23e9", lambda: self._langkah(1), "#E8DDD5", INK, width=36).pack(side="left", padx=2)
         tk.Label(row, text="Kecepatan", bg=PANEL, fg=MUTED).pack(side="left", padx=(10, 4))
         ttk.Combobox(row, textvariable=self.kecepatan, width=5, state="readonly",
                      values=("0.25x","0.5x","1x","2x","4x","8x")).pack(side="left")
-        self.tombol(row, "Buka folder", self.buka_sesi, "#E8DDD5", INK).pack(side="right", padx=(4, 0))
+        self.tombol_ringkas(row, "Folder", self.buka_sesi, "#E8DDD5", INK, width=68).pack(side="right", padx=(4, 0))
 
         self.scale_pos = tk.Scale(bawah, from_=0, to=0, orient="horizontal", variable=self.posisi,
                                   label="Posisi frame", bg=PANEL, fg=INK, highlightthickness=0,
@@ -796,8 +803,8 @@ class Studio(tk.Tk):
         ent_akhir = tk.Spinbox(manual, from_=0, to=999999, textvariable=self.akhir, width=8,
                                 command=lambda: self.rentang_manual.set(True))
         ent_akhir.pack(side="left", padx=2); ent_akhir.bind("<FocusOut>", lambda _e: self.rentang_manual.set(True))
-        self.tombol(manual, "Awal = frame kini", self.tetapkan_awal_kini, "#E8DDD5", INK).pack(side="left", padx=(8, 2))
-        self.tombol(manual, "Akhir = frame kini", self.tetapkan_akhir_kini, "#E8DDD5", INK).pack(side="left", padx=2)
+        self.tombol_ringkas(manual, "Awal = kini", self.tetapkan_awal_kini, "#E8DDD5", INK, width=92).pack(side="left", padx=(8, 2))
+        self.tombol_ringkas(manual, "Akhir = kini", self.tetapkan_akhir_kini, "#E8DDD5", INK, width=92).pack(side="left", padx=2)
         self.tombol(bawah, "Simpan rentang potong (non-destruktif)", self.simpan_potong, GREEN).pack(fill="x", pady=(8, 0))
         tk.Label(bawah, text="Putar dan ekspor frame yang sedang dijeda dapat langsung dari RAW. Preview lengkap hanya diperlukan untuk slider/lompat frame dan pengukuran 3-D dari dua klik.", bg=PANEL, fg=MUTED, wraplength=720, justify="left").pack(anchor="w", pady=(6, 0))
 
@@ -807,9 +814,9 @@ class Studio(tk.Tk):
         tk.Label(i, text="FPS ekspor (maksimum = FPS rekaman)", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
         tk.Spinbox(i, from_=1, to=self.args.fps, textvariable=self.fps_ekspor, width=8).grid(row=0, column=1, sticky="w", padx=10)
         self.tombol(i, "Ekspor frame dari rentang pilihan", self.ekspor, GREEN).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(14, 4))
-        self.tombol(i, "Ekspor video preview dari rentang", self.ekspor_video_rentang, BLUE).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 4))
+        self.tombol(i, "Buat video MP4 rentang (opsional)", self.ekspor_video_rentang, BLUE).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 4))
         self.tombol(i, "Hapus semua hasil ekspor sesi ini", self.hapus_semua_ekspor, "#F3D8D4", INK).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 4))
-        tk.Label(i, text="Ekspor bersifat inkremental: bila 1–50 sudah ada lalu Anda ekspor 40–60 pada FPS yang sama, frame 40–50 dilewati dan hanya 51–60 dibuat. Tiap frame dibaca langsung dari RAW: RGB, depth Z16 native, depth selaras RGB, NPY depth, IR, timestamp, intrinsics, extrinsics, dan frame.json. Pemilihan memakai timestamp kamera, jadi FPS asli 29,92 atau frame yang hilang tidak membuat RGB/depth salah pasangan.", bg=PANEL, fg=MUTED, wraplength=750, justify="left").grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        tk.Label(i, text="Ekspor frame berjalan di worker latar belakang dan bersifat inkremental: jika 1–50 sudah ada lalu ekspor 40–60, hanya frame baru yang dibuat. Setiap paket langsung dari RAW berisi RGB, depth Z16 native/selaras, NPY, IR, timestamp, intrinsics, extrinsics, dan frame.json. Pemilihan memakai timestamp kamera, sehingga FPS asli yang tidak tepat 30 tidak membuat RGB/depth salah pasangan. Video MP4 di atas hanya salinan pendek untuk ditonton atau dibagikan; tidak diperlukan untuk labeling maupun ekspor frame.", bg=PANEL, fg=MUTED, wraplength=750, justify="left").grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.label_ekspor = tk.Label(f, text="Belum ada ekspor dipilih.", bg=BG, fg=ACCENT, justify="left"); self.label_ekspor.pack(anchor="w", pady=(18, 0))
 
     def ui_label(self):
@@ -822,13 +829,13 @@ class Studio(tk.Tk):
         b, i = self.card(right, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 7))
         self.list_frame = tk.Listbox(i, height=5, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT)
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
-        self.tombol(i, "Ekspor frame video saat ini ke Label", self.ekspor_frame_kini_ke_label, GREEN).pack(fill="x", pady=(4, 0))
+        self.tombol_ringkas(i, "Ekspor frame saat ini ke Label", self.ekspor_frame_kini_ke_label, GREEN, width=220).pack(fill="x", pady=(4, 0))
         nav = tk.Frame(i, bg=PANEL); nav.pack(fill="x", pady=(4, 0))
-        self.tombol(nav, "← Sebelumnya", lambda: self.pindah_frame_label(-1), "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        self.tombol(nav, "Berikutnya →", lambda: self.pindah_frame_label(1), "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        self.tombol_ringkas(nav, "← Sebelum", lambda: self.pindah_frame_label(-1), "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.tombol_ringkas(nav, "Berikut →", lambda: self.pindah_frame_label(1), "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
         kelola = tk.Frame(i, bg=PANEL); kelola.pack(fill="x", pady=(4, 0))
-        self.tombol(kelola, "Sampah frame", self.toggle_sampah_frame, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        self.tombol(kelola, "Hapus gambar", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        self.tombol_ringkas(kelola, "Sampahkan", self.toggle_sampah_frame, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.tombol_ringkas(kelola, "Hapus permanen", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
         tk.Checkbutton(i, text="\U0001f5d1 Tampilkan sampah frame", variable=self.tampil_sampah_frame,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.muat_frame).pack(anchor="w", pady=(6, 0))
@@ -845,17 +852,17 @@ class Studio(tk.Tk):
         tk.Label(i, text="Tangga memakai YOLO + depth. Batu/ramp memakai depth. Semua perubahan disimpan otomatis.",
                  bg=PANEL, fg=MUTED, wraplength=280, justify="left").pack(anchor="w", pady=(0, 6))
         edit = tk.Frame(i, bg=PANEL); edit.pack(fill="x", pady=(2, 0))
-        self.tombol(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        self.tombol(edit, "+ Titik", self.mulai_tambah_titik, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=2)
-        self.tombol(edit, "− Titik", self.kanvas.undo, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        self.tombol_ringkas(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK, width=72).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.tombol_ringkas(edit, "+ Titik", self.mulai_tambah_titik, "#E8DDD5", INK, width=72).pack(side="left", fill="x", expand=True, padx=2)
+        self.tombol_ringkas(edit, "− Titik", self.kanvas.undo, "#E8DDD5", INK, width=72).pack(side="left", fill="x", expand=True, padx=(2, 0))
         nomor = tk.Frame(i, bg=PANEL); nomor.pack(fill="x", pady=(4, 0))
         tk.Label(nomor, text="Nomor mask aktif", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
         tk.Spinbox(nomor, from_=1, to=999, textvariable=self.nomor_mask, width=5).grid(row=0, column=1, sticky="w", padx=6)
-        self.tombol(nomor, "Atur nomor", self.atur_nomor_mask, "#E8DDD5", INK).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 0))
+        self.tombol_ringkas(nomor, "Atur nomor", self.atur_nomor_mask, "#E8DDD5", INK, width=130).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 0))
         nomor.columnconfigure(0, weight=1)
         hapus = tk.Frame(i, bg=PANEL); hapus.pack(fill="x", pady=(5, 0))
-        self.btn_hapus_objek = self.tombol(hapus, "Hapus mask aktif", self.kanvas.hapus_mask_aktif, "#F3D8D4", INK)
-        self.btn_hapus_acuan = self.tombol(hapus, "Buang rekomendasi", self.buang_rekomendasi, "#F3D8D4", INK)
+        self.btn_hapus_objek = self.tombol_ringkas(hapus, "Hapus mask", self.kanvas.hapus_mask_aktif, "#F3D8D4", INK)
+        self.btn_hapus_acuan = self.tombol_ringkas(hapus, "Buang saran", self.buang_rekomendasi, "#F3D8D4", INK)
         self.btn_hapus_objek.pack(side="left", fill="x", expand=True, padx=(0, 2))
         self.btn_hapus_acuan.pack(side="left", fill="x", expand=True, padx=(2, 0))
         tk.Label(i, text="● AUTO-SAVE AKTIF — draft dan label YOLO tersimpan setelah Anda berhenti mengubah mask.",
