@@ -2554,6 +2554,20 @@ class Studio(tk.Tk):
         self.list_frame.selection_clear(0, "end"); self.list_frame.selection_set(tujuan); self.list_frame.activate(tujuan)
         self._buka_frame_ekspor(self.frame_paths[tujuan])
 
+    def _shortcut_label(self, event):
+        """Shortcut label tetap berfungsi saat fokus berada di panel mana pun."""
+        if self.tabs.select() != str(self.tab_label):
+            return None
+        if event.keysym in {"Prior", "Page_Up", "KP_Prior"}:
+            return self.pilih_mode_keyboard("objek")
+        if event.keysym in {"Next", "Page_Down", "KP_Next"}:
+            return self.pilih_mode_keyboard("acuan")
+        if event.keysym == "Left":
+            return self.pindah_frame_keyboard(-1)
+        if event.keysym == "Right":
+            return self.pindah_frame_keyboard(1)
+        return None
+
     def pilih_mode_keyboard(self, nama: str):
         """Pilih warna mask secara sadar sebelum mengedit/navigasi."""
         self.mode_label.set(nama)
