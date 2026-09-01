@@ -91,6 +91,8 @@ def tambah_argumen(ap) -> None:
                          "bawaan: paksa preset Default. jangan: jangan sentuh preset.")
     ap.add_argument("--batas-frame", type=int, default=8000,
                     help="berapa milidetik menunggu satu frame sebelum menyerah")
+    ap.add_argument("--exposure", type=int, default=0,
+                    help="exposure RGB dalam µs (0=auto). Rekomendasi 4000-8000 untuk anti-blur saat berjalan.")
 
 
 # --------------------------------------------------------------------------

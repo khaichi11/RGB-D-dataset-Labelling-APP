@@ -70,9 +70,12 @@ def tulis_json(path: Path, isi: dict) -> None:
 class KameraRGBD:
     """Pemilik tunggal pipeline D435 agar Studio tidak membuka kamera ganda."""
 
-    def __init__(self, lebar: int, tinggi: int, fps: int, preset: str, batas_frame: int) -> None:
+    def __init__(self, lebar: int, tinggi: int, fps: int, preset: str, batas_frame: int,
+                 exposure_us: int = 0) -> None:
         self.lebar, self.tinggi, self.fps = lebar, tinggi, fps
         self.preset, self.batas_frame = preset, batas_frame
+        # 0 = biarkan auto-exposure; nilai positif = µs, disarankan 4000-8000 untuk anti-blur
+        self.exposure_us = int(exposure_us)
         self.pipe = self.profile = self.preset_terpakai = None
         self.catatan_pembukaan: dict = {}
         # --- pompa frame ---
@@ -147,6 +150,40 @@ class KameraRGBD:
             raise
         self.catatan_pembukaan = catatan
         self.record_path = record_path
+        if self.exposure_us > 0:
+            self._terapkan_exposure(self.exposure_us)
+
+    def _terapkan_exposure(self, us: int) -> None:
+        """Setel exposure RGB manual. Dipanggil setelah pipe.start()."""
+        if self.profile is None:
+            return
+        for sen in self.profile.get_device().query_sensors():
+            try:
+                if sen.supports(rs.option.enable_auto_exposure):
+                    sen.set_option(rs.option.enable_auto_exposure, 0)
+                if sen.supports(rs.option.exposure):
+                    r = sen.get_option_range(rs.option.exposure)
+                    nilai = float(max(r.min, min(r.max, us)))
+                    sen.set_option(rs.option.exposure, nilai)
+                    self.catatan_pembukaan["exposure_us"] = int(nilai)
+            except Exception:
+                pass
+
+    def set_exposure(self, us: int) -> None:
+        """Ganti exposure saat kamera hidup. us=0 untuk kembali ke auto."""
+        self.exposure_us = int(us)
+        if self.profile is None:
+            return
+        if us <= 0:
+            for sen in self.profile.get_device().query_sensors():
+                try:
+                    if sen.supports(rs.option.enable_auto_exposure):
+                        sen.set_option(rs.option.enable_auto_exposure, 1)
+                except Exception:
+                    pass
+            self.catatan_pembukaan["exposure_us"] = "auto"
+        else:
+            self._terapkan_exposure(us)
 
     def hentikan(self) -> None:
         # Pompa harus mati SEBELUM pipe.stop(), kalau tidak thread pompa masih

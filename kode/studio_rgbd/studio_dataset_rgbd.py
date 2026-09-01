@@ -2,7 +2,8 @@
 
 Prinsip keselamatan data
 ------------------------
-`source/raw.bag` adalah rekaman primer dan TIDAK pernah diubah/dihapus oleh
+`source/raw.*` (umumnya ``raw.db3`` pada SDK modern) adalah rekaman primer dan
+TIDAK pernah diubah/dihapus oleh
 aplikasi. Potongan video adalah ``edit/rentang.json`` (rentang indeks frame),
 sedangkan frame RGB-D dan label adalah data turunan. Dengan demikian depth
 scale, intrinsics, stream IR, timestamp, dan rekaman asli tetap ada untuk
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import queue
 import re
 import shutil
@@ -53,7 +55,7 @@ if __package__:
     from .geometri import Z_MAX, Z_MIN
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
-    from .segmentasi_yolo_depth import usulkan as usulkan_yolo_depth, verifikasi_depth
+    from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth, verifikasi_depth
     from .segmentasi_sam2 import hangatkan as hangatkan_sam2, rapikan_kelompok as rapikan_sam2
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -63,7 +65,7 @@ else:
     from studio_rgbd.geometri import Z_MAX, Z_MIN
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
-    from studio_rgbd.segmentasi_yolo_depth import usulkan as usulkan_yolo_depth, verifikasi_depth
+    from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth, verifikasi_depth
     from studio_rgbd.segmentasi_sam2 import hangatkan as hangatkan_sam2, rapikan_kelompok as rapikan_sam2
 
 
@@ -988,7 +990,8 @@ class Studio(tk.Tk):
         super().__init__()
         self.args = args
         self.root_data = Path(args.keluar).expanduser().resolve()
-        self.cam = KameraRGBD(args.lebar, args.tinggi, args.fps, args.preset, args.batas_frame)
+        self.cam = KameraRGBD(args.lebar, args.tinggi, args.fps, args.preset, args.batas_frame,
+                               exposure_us=getattr(args, 'exposure', 0))
         self.q: queue.Queue[tuple[str, object]] = queue.Queue()
         self.sedang_rekam = False
         self.preview_diminta = False
@@ -1340,7 +1343,7 @@ class Studio(tk.Tk):
                        activebackground=PANEL).pack(side="left")
         self.tombol_ringkas(magnet, "🧲 Rapikan semua", self.rapikan_magnet_semua,
                              "#E8DDD5", INK, width=138).pack(side="right")
-        self.tombol(otomatis_i, "✨ Rekomendasi tangga: YOLO + SAM 2 + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(8, 2))
+        self.tombol(otomatis_i, "✨ Rekomendasi tangga: RF-DETR + SAM 2 + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(8, 2))
         self.tombol(otomatis_i, "⚡ Batch auto-label frame baru", self.batch_auto_label, BLUE).pack(fill="x", pady=(4, 2))
         self.tombol(otomatis_i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
         tk.Label(otomatis_i, text="Tangga: YOLO memberi kandidat, SAM 2 GPU merapikan batas, depth memeriksa outlier. Batu/ramp memakai depth. Perubahan mask tersimpan otomatis.",
@@ -1850,6 +1853,15 @@ class Studio(tk.Tk):
         return warna
 
     def _preview_worker(self, sesi: Path):
+        """Bangun turunan preview secara atomik.
+
+        MP4 baru tidak pernah menggantikan preview lama sebelum VideoWriter
+        ditutup dan file tersebut terbukti dapat dibaca ulang. Ini mencegah
+        `moov atom not found` bila worker gagal/Studio ditutup di tengah proses.
+        """
+        writer = None
+        out_tmp = None
+        depth_tmp = None
         try:
             derived = sesi / "derived"; derived.mkdir(exist_ok=True)
             # Depth ikut disimpan per frame. Tanpa ini, mengukur pada frame yang
@@ -1858,9 +1870,13 @@ class Studio(tk.Tk):
             # ulang dari awal butuh puluhan detik. Preview toh sudah mendekode
             # seluruh rekaman sekali, jadi menyimpannya di sini nyaris gratis.
             dir_depth = derived / "depth"
-            if dir_depth.exists(): shutil.rmtree(dir_depth)
-            dir_depth.mkdir()
-            out = derived / "preview.mp4"; index = [] ; writer = None; skala_depth = None
+            depth_tmp = derived / "depth.sedang"
+            if depth_tmp.exists(): shutil.rmtree(depth_tmp)
+            depth_tmp.mkdir()
+            out = derived / "preview.mp4"
+            out_tmp = derived / "preview.sedang.mp4"
+            if out_tmp.exists(): out_tmp.unlink()
+            index = []; skala_depth = None
             kamera = None
             # Laju video = fps SEBENARNYA dari timestamp rekaman. Dulu preview
             # selalu ditulis pada args.fps (30), padahal rekaman terukur
@@ -1886,26 +1902,45 @@ class Studio(tk.Tk):
                 self._pita(dep_bgr, f"DEPTH {Z_MIN:.2f}-{Z_MAX:.1f} m   sah {persen:.0f}%")
                 bgr = np.hstack([bgr, dep_bgr])
                 if writer is None:
-                    h,w = bgr.shape[:2]; writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"mp4v"), fps_video, (w,h))
+                    h,w = bgr.shape[:2]; writer = cv2.VideoWriter(str(out_tmp), cv2.VideoWriter_fourcc(*"mp4v"), fps_video, (w,h))
+                    if not writer.isOpened():
+                        raise RuntimeError("VideoWriter preview tidak dapat dibuka.")
                     kamera = self._info_profile(profile, color, depth)
                 writer.write(bgr)
                 # PNG 16-bit = lossless. Depth TIDAK boleh lewat kompresi lossy;
                 # satu nilai Z16 yang bergeser berarti jarak yang salah.
-                cv2.imwrite(str(dir_depth / f"{i:06d}.png"),
+                cv2.imwrite(str(depth_tmp / f"{i:06d}.png"),
                             np.asanyarray(aligned.get_data()),
                             [cv2.IMWRITE_PNG_COMPRESSION, 3])
                 index.append({"i": i, "frame": int(depth.get_frame_number()), "timestamp_ms": f"{depth.get_timestamp():.3f}"})
-            if writer: writer.release()
+            if writer is None:
+                raise RuntimeError("Tidak menemukan pasangan RGB dan depth dalam rekaman.")
+            writer.release(); writer = None
+            # Jangan menerbitkan MP4 yang belum lengkap: buka ulang terlebih dahulu.
+            cap = cv2.VideoCapture(str(out_tmp)); ok,img = cap.read(); cap.release()
+            if not ok:
+                raise RuntimeError("Preview sementara tidak dapat dibaca ulang; preview lama dipertahankan.")
+            # Hanya setelah valid, ganti turunan lama. RAW tidak tersentuh.
+            os.replace(out_tmp, out)
+            if dir_depth.exists(): shutil.rmtree(dir_depth)
+            os.replace(depth_tmp, dir_depth); depth_tmp = None
             if kamera:
                 kamera["fps_video_terukur"] = round(fps_video, 3)
                 tulis_json(derived / "kamera.json", kamera)
             with (derived / "frame_index.csv").open("w", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(f, fieldnames=["i","frame","timestamp_ms"]); w.writeheader(); w.writerows(index)
-            if not index: raise RuntimeError("Tidak menemukan pasangan RGB dan depth dalam rekaman.")
-            cap = cv2.VideoCapture(str(out)); ok,img=cap.read(); cap.release()
             if ok: cv2.imwrite(str(derived / "thumbnail.jpg"), img)
             self.q.put(("preview_selesai", (sesi, len(index))))
-        except Exception as e: self.q.put(("error", f"Gagal membuat preview: {e}"))
+        except Exception as e:
+            # release di sini menulis indeks MP4 sementara bila error terjadi
+            # setelah beberapa frame, tetapi file itu tidak pernah dipublikasikan.
+            if writer is not None:
+                writer.release()
+            if out_tmp is not None and out_tmp.exists():
+                out_tmp.unlink()
+            if depth_tmp is not None and depth_tmp.exists():
+                shutil.rmtree(depth_tmp)
+            self.q.put(("error", f"Gagal membuat preview: {e}"))
 
     def simpan_potong(self):
         if not self.sesi:
@@ -2610,7 +2645,7 @@ class Studio(tk.Tk):
     def _auto_segmentasi(self, target: Path):
         if target != self.label_path or self._punya_label(target):
             return
-        self.status.set(f"Auto-segmentasi YOLO + SAM 2 untuk {target.name}…")
+        self.status.set(f"Auto-segmentasi RF-DETR + SAM 2 untuk {target.name}…")
         self.usulkan_segmentasi()
 
     def _hangatkan_sam2_async(self):
@@ -2627,7 +2662,7 @@ class Studio(tk.Tk):
         k = self._intrinsics(info)
         # Kanvas/SAM memakai RGB, sedangkan Ultralytics menerima ndarray
         # OpenCV BGR. Training juga membaca color_raw.png lewat OpenCV (BGR).
-        hasil = usulkan_yolo_depth(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), depth, k)
+        hasil = usulkan_rfdetr_depth(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), depth, k)
         depth_info = usulkan_segmentasi(depth, k)
         rapih = rapikan_sam2(rgb, {"tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"]},
                               {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
@@ -2882,18 +2917,14 @@ class Studio(tk.Tk):
             if kategori == "tangga_naik":
                 # Tampilan kanvas RGB; YOLO harus menerima BGR agar sama dengan
                 # loader training yang membaca color_raw.png melalui OpenCV.
-                hasil = usulkan_yolo_depth(cv2.cvtColor(self.kanvas.rgb, cv2.COLOR_RGB2BGR), self.kanvas.depth, self._intrinsics(info))
-                # Normal depth dipakai sebagai petunjuk LUNAK ketika memilih
-                # alternatif SAM, bukan dipakai memotong hasil secara keras.
+                hasil = usulkan_rfdetr_depth(cv2.cvtColor(self.kanvas.rgb, cv2.COLOR_RGB2BGR), self.kanvas.depth, self._intrinsics(info))
                 depth_info = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
-                # SAM 2 memakai mask YOLO sebagai titik positif/negatif serta
-                # box prompt; setiap kandidat tetap dipertahankan bila gagal.
                 rapih = rapikan_sam2(self.kanvas.rgb, {
                     "tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"],
                 }, {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
                 rapih = verifikasi_depth(rapih, self.kanvas.depth)
                 hasil["tapakan"], hasil["bidang_tegak"] = rapih["tapakan"], rapih["bidang_tegak"]
-                hasil["sumber"] = "YOLO + SAM 2.1 Tiny + depth (GPU)"
+                hasil["sumber"] = "RF-DETR + SAM 2.1 Tiny + depth (GPU)"
             else:
                 hasil = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
                 hasil["sumber"] = "depth (bobot YOLO tangga tidak dipakai untuk kategori ini)"
@@ -2901,7 +2932,7 @@ class Studio(tk.Tk):
             # Untuk tangga jangan diam-diam mengganti hasil YOLO dengan depth:
             # pengguna harus tahu bila bobot/runtime YOLO bermasalah.
             if kategori == "tangga_naik":
-                messagebox.showerror("YOLO tidak tersedia", f"Rekomendasi tangga memakai YOLO.\n\n{e}", parent=self)
+                messagebox.showerror("RF-DETR tidak tersedia", f"Rekomendasi tangga memakai RF-DETR.\n\n{e}", parent=self)
                 return
             # Batu/ramp belum mempunyai bobot YOLO khusus, sehingga depth tetap
             # menjadi proposal kategori tersebut.
@@ -2990,7 +3021,13 @@ class Studio(tk.Tk):
             self.status.set(f"Label disimpan untuk {self.label_path.name}: {len(baris)} instance ({rinci}).")
 
     def bangun_yolo(self):
-        """Buat turunan siap Ultralytics tanpa memindahkan/menghapus raw frame."""
+        """Buat turunan siap Ultralytics tanpa memindahkan/menghapus raw frame.
+
+        Satu contoh tangga wajib memuat tapakan DAN bidang tegak. Contoh yang
+        hanya punya satu sisi tidak dibuang dari Studio/RAW, hanya tidak ikut
+        menjadi data latih karena terbukti membuat model menganggap lantai atau
+        dinding sebagai tapakan.
+        """
         if not self.sesi:
             messagebox.showinfo("Pilih sesi", "Pilih sesi pada tab Tinjau dahulu.", parent=self)
             return
@@ -2999,7 +3036,9 @@ class Studio(tk.Tk):
         root = self.root_data / "dataset_yolo_seg"
         (root / "images" / split).mkdir(parents=True, exist_ok=True)
         (root / "labels" / split).mkdir(parents=True, exist_ok=True)
-        count = 0
+        peta = KELAS_MODE.get(meta_sesi.get("kategori", "tangga_naik"), KELAS_MODE["tangga_naik"])
+        wajib = {KELAS_YOLO[peta["acuan"]], KELAS_YOLO[peta["objek"]]}
+        count = 0; dikeluarkan_tidak_lengkap = 0
         sudah_indeks: set[int] = set()
         for frame in self.daftar_frame_ekspor():
             info_frame = baca_json(frame / "frame.json", {})
@@ -3012,12 +3051,22 @@ class Studio(tk.Tk):
             label = frame / "label_yolo_seg.txt"
             if not label.exists():
                 continue
+            try:
+                kelas = {int(baris.split(maxsplit=1)[0]) for baris in label.read_text(encoding="utf-8").splitlines()
+                         if baris.strip()}
+            except (OSError, ValueError):
+                dikeluarkan_tidak_lengkap += 1
+                continue
+            if not wajib.issubset(kelas):
+                dikeluarkan_tidak_lengkap += 1
+                continue
             stem = f"{self.sesi.name}_{frame.parent.parent.name}_{frame.name}"
             shutil.copy2(frame / "color_raw.png", root / "images" / split / f"{stem}.png")
             shutil.copy2(label, root / "labels" / split / f"{stem}.txt")
             count += 1
         tulis_json(root / "dataset_yolo_seg.yaml", {"path": str(root), "train": "images/train", "val": "images/val", "test": "images/test", "names": {str(v): k for k, v in sorted(KELAS_YOLO.items(), key=lambda x: x[1])}})
-        self.status.set(f"Dataset YOLO diperbarui: {count} frame berlabel dari sesi ini masuk split {split}. Raw tetap ada di sesi.")
+        self.status.set(f"Dataset YOLO diperbarui: {count} frame lengkap masuk split {split}; "
+                        f"{dikeluarkan_tidak_lengkap} label tidak lengkap tidak dipakai. Raw tetap ada di sesi.")
 
     def hitung_ukuran(self):
         self.jadwalkan_autosave()
@@ -3125,6 +3174,7 @@ def main():
     # nama sendiri ("high_accuracy"/"high_density") yang tidak dikenal
     # terapkan_preset(), sehingga keduanya diam-diam memasang preset Default.
     ap.add_argument("--preset",default="jangan",choices=PRESET_PILIHAN);ap.add_argument("--batas-frame",type=int,default=8000)
+    ap.add_argument("--exposure",type=int,default=0,help="exposure RGB dalam µs (0=auto). Rekomendasi 4000-8000 untuk anti-blur saat berjalan.")
     # 20 Hz terukur nol lonjakan event-loop >33 ms pada mesin ini. Naikkan bila
     # mesin Anda lebih kuat, turunkan di Jetson kalau preview mulai tersendat.
     ap.add_argument("--fps-preview",type=int,default=20,help="laju render preview (Hz)")
