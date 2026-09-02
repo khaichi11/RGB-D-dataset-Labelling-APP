@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Studio Dataset RGB-D
+GenericName=RGB-D Stair Dataset Labelling
+Comment=Rekam, tinjau, ekspor, label dataset RGB-D dan uji model realtime (Intel RealSense D435)
+Exec=/home/khai/paket_ubuntu_zenexo/desktop/jalankan-studio.sh
+Icon=/home/khai/paket_ubuntu_zenexo/desktop/studio-rgbd.png
+Terminal=false
+Categories=Science;Education;Graphics;
+Keywords=realsense;rgbd;dataset;label;stair;tangga;
+StartupNotify=true

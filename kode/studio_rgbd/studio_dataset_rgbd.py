@@ -1147,9 +1147,28 @@ class Studio(tk.Tk):
         self.tabs = ttk.Notebook(self); self.tabs.pack(fill="both", expand=True, padx=18, pady=(0, 14))
         self.tab_rekam = tk.Frame(self.tabs, bg=BG); self.tab_tinjau = tk.Frame(self.tabs, bg=BG)
         self.tab_ekspor = tk.Frame(self.tabs, bg=BG); self.tab_label = tk.Frame(self.tabs, bg=BG)
+        self.tab_uji = tk.Frame(self.tabs, bg=BG)
         self.tabs.add(self.tab_rekam, text="  1. Rekam  "); self.tabs.add(self.tab_tinjau, text="  2. Tinjau & Potong  ")
         self.tabs.add(self.tab_ekspor, text="  3. Ekspor Frame  "); self.tabs.add(self.tab_label, text="  4. Label & Ukur  ")
-        self.ui_rekam(); self.ui_tinjau(); self.ui_ekspor(); self.ui_label()
+        # Tab 5 berbeda tujuan dari tab 1-4: bukan membuat dataset, melainkan
+        # MENGUJI model terlatih pada aliran kamera langsung. Dipisah supaya
+        # alur dataset tidak tercampur dengan alur pengujian.
+        self.tabs.add(self.tab_uji, text="  5. Uji Realtime  ")
+        self.ui_rekam(); self.ui_tinjau(); self.ui_ekspor(); self.ui_label(); self.ui_uji()
+
+    def ui_uji(self):
+        """Pasang panel uji realtime. Impor ditunda supaya Studio tetap bisa
+        dibuka di mesin tanpa torch -- pengguna yang hanya melabeli tidak perlu
+        memasang seluruh tumpukan deep learning."""
+        try:
+            from .uji_realtime import UjiRealtime
+        except ImportError:
+            from uji_realtime import UjiRealtime
+        try:
+            self.panel_uji = UjiRealtime(self.tab_uji, self)
+        except Exception as e:
+            tk.Label(self.tab_uji, text=f"Panel uji realtime tidak dapat dimuat:\n{e}",
+                     bg=BG, fg=MUTED, justify="left").pack(padx=30, pady=30)
 
     def ui_rekam(self):
         f = tk.Frame(self.tab_rekam, bg=BG); f.pack(fill="both", expand=True, padx=24, pady=24)
@@ -1384,6 +1403,11 @@ class Studio(tk.Tk):
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
+        # Uji realtime memakai kamera secara eksklusif; hentikan begitu pengguna
+        # pindah ke tab lain agar device tidak diperebutkan dengan preview/rekam.
+        if self.tabs.select() != str(self.tab_uji) and getattr(self, 'panel_uji', None) is not None:
+            if getattr(self.panel_uji, 'jalan', False):
+                self.panel_uji.berhenti()
         pada_rekam = self.tabs.select() == str(self.tab_rekam)
         if not pada_rekam and not self.sedang_rekam and self.cam.hidup:
             self.preview_diminta = False
@@ -1613,6 +1637,11 @@ class Studio(tk.Tk):
     def live(self):
         """Hanya menempel gambar yang sudah jadi. Harus tetap ringan."""
         if not self.winfo_exists(): return
+        # Uji realtime memakai kamera secara eksklusif; hentikan begitu pengguna
+        # pindah ke tab lain agar device tidak diperebutkan dengan preview/rekam.
+        if self.tabs.select() != str(self.tab_uji) and getattr(self, 'panel_uji', None) is not None:
+            if getattr(self.panel_uji, 'jalan', False):
+                self.panel_uji.berhenti()
         pada_rekam = self.tabs.select() == str(self.tab_rekam)
         if not pada_rekam or not self.preview_diminta or not self.cam.hidup:
             self.after(250, self.live)

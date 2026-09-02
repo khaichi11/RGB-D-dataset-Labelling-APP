@@ -8,6 +8,9 @@
 !/kode/README.md
 !/kode/studio_rgbd/
 !/kode/studio_rgbd/**
+!/desktop/
+!/desktop/**
+/desktop/studio.log
 /kode/.venv/
 /kode/__pycache__/
 
