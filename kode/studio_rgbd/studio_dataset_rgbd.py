@@ -329,6 +329,9 @@ class KanvasLabel(tk.Canvas):
         self._drag = None
         self._drag_titik = None
         self._seleksi_awal = None
+        self._blok_awal = None
+        self._blok_kotak = None
+        self.lapor_blok = None
         self._seleksi_kotak = None
         self.titik_dipilih: set[tuple[str, int, int]] = set()
         self.magnet_aktif = True
@@ -353,6 +356,12 @@ class KanvasLabel(tk.Canvas):
         self.bind("<Shift-B1-Motion>", self.ubah_seleksi_titik)
         self.bind("<Shift-ButtonRelease-1>", self.selesai_seleksi_titik)
         self.bind("<Button-3>", self.hapus_titik_dipilih)
+        # Ctrl+tarik = blok hapus. Dibedakan dari Shift+tarik yang hanya
+        # MEMILIH titik: blok langsung menghapus begitu tombol dilepas,
+        # sehingga membersihkan bercak tidak perlu dua langkah.
+        self.bind("<Control-Button-1>", self.mulai_blok_hapus)
+        self.bind("<Control-B1-Motion>", self.ubah_blok_hapus)
+        self.bind("<Control-ButtonRelease-1>", self.selesai_blok_hapus)
         self.bind("<MouseWheel>", self.zoom)
         self.bind("<Button-4>", lambda e: self.zoom_langkah(e, 1.15))
         self.bind("<Button-5>", lambda e: self.zoom_langkah(e, 1 / 1.15))
@@ -868,6 +877,64 @@ class KanvasLabel(tk.Canvas):
         self.render()
         return "break"
 
+    # ------------------------------------------------------------ blok hapus
+    def mulai_blok_hapus(self, e):
+        """Ctrl+tarik membuat kotak yang isinya langsung dihapus saat dilepas."""
+        self.focus_set()
+        self._blok_awal = (e.x, e.y)
+        self._blok_kotak = self.create_rectangle(e.x, e.y, e.x, e.y,
+                                                 outline="#E4573C", dash=(3, 2), width=2)
+        return "break"
+
+    def ubah_blok_hapus(self, e):
+        if getattr(self, "_blok_awal", None) is not None and self._blok_kotak is not None:
+            self.coords(self._blok_kotak, *self._blok_awal, e.x, e.y)
+        return "break"
+
+    def selesai_blok_hapus(self, e):
+        """Hapus poligon yang berada di dalam kotak, lalu titik yang tersisa.
+
+        Poligon yang MAYORITAS titiknya di dalam kotak dibuang seluruhnya,
+        bukan disisakan sebagai pecahan. Menyisakan pecahan membuat pemakainya
+        harus menghapus dua kali untuk satu bercak, dan itu kebalikan dari
+        tujuan fitur ini. Poligon yang hanya tersenggol sebagian kehilangan
+        titik yang tersentuh saja, sehingga koreksi halus tetap mungkin.
+        """
+        if getattr(self, "_blok_awal", None) is None:
+            return "break"
+        x0, y0 = self._blok_awal
+        if self._blok_kotak is not None:
+            self.delete(self._blok_kotak)
+        self._blok_awal = self._blok_kotak = None
+        kiri, kanan = sorted((x0, e.x)); atas, bawah = sorted((y0, e.y))
+        if kanan - kiri < 4 or bawah - atas < 4:      # klik tidak sengaja
+            return "break"
+        di_dalam = lambda px, py: (kiri <= px * self.scale + self.ox <= kanan
+                                   and atas <= py * self.scale + self.oy <= bawah)
+        n_poly = n_titik = 0
+        for nama, daftar in self.poligon.items():
+            baru = []
+            for poly in daftar:
+                kena = [i for i, (px, py) in enumerate(poly) if di_dalam(px, py)]
+                if not kena:
+                    baru.append(poly); continue
+                if len(kena) > len(poly) / 2:
+                    n_poly += 1                        # buang seluruh poligon
+                    continue
+                sisa = [t for i, t in enumerate(poly) if i not in set(kena)]
+                n_titik += len(kena)
+                if len(sisa) >= 3:
+                    baru.append(sisa)
+                else:
+                    n_poly += 1                        # sisa tidak lagi poligon
+            self.poligon[nama] = baru
+            self.aktif_indeks[nama] = (len(baru) - 1) if baru else None
+        self.titik_dipilih = set()
+        self.catat_riwayat(); self.render(); self.on_change()
+        if getattr(self, "lapor_blok", None):
+            self.lapor_blok(n_poly, n_titik)
+        return "break"
+
     def undo(self, _e=None):
         daftar = self.poligon[self.mode]
         if not daftar:
@@ -1330,6 +1397,11 @@ class Studio(tk.Tk):
         f = tk.Frame(self.tab_label, bg=BG); f.pack(fill="both", expand=True, padx=14, pady=14)
         left = tk.Frame(f, bg=BG); left.pack(side="left", fill="both", expand=True, padx=(0, 12))
         self.kanvas = KanvasLabel(left, self.hitung_ukuran, self._aktif_mask_berubah); self.kanvas.pack(fill="both", expand=True)
+        self.kanvas.lapor_blok = self._lapor_blok
+        # Ctrl+C menyalin nama frame yang sedang dibuka. Berguna saat melaporkan
+        # frame bermasalah: namanya cukup panjang untuk salah ketik.
+        self.kanvas.bind("<Control-c>", lambda _e: self.salin_nama_frame())
+        self.kanvas.bind("<Control-C>", lambda _e: self.salin_nama_frame(penuh=True))
         self.kanvas.bind("<KeyPress>", self._shortcut_label, add="+")
         # Fokus dapat berpindah ke spinbox/panel; shortcut tetap harus hidup
         # selama pengguna berada di tab Label.
@@ -1340,6 +1412,9 @@ class Studio(tk.Tk):
         b, i = self.card(right, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 7))
         self.list_frame = tk.Listbox(i, height=5, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT)
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
+        # Klik kanan pada daftar menyalin nama frame yang ditunjuk KURSOR,
+        # bukan yang sedang terpilih; keduanya sering berbeda saat menelusuri.
+        self.list_frame.bind("<Button-3>", self._salin_dari_kursor)
         self.tombol_ringkas(i, "Ekspor frame saat ini ke Label", self.ekspor_frame_kini_ke_label, GREEN, width=220).pack(fill="x", pady=(4, 0))
         nav = tk.Frame(i, bg=PANEL); nav.pack(fill="x", pady=(4, 0))
         self.tombol_ringkas(nav, "↻ Muat ulang gambar", self.kanvas.muat_ulang_gambar, "#E8DDD5", INK,
@@ -1393,6 +1468,11 @@ class Studio(tk.Tk):
         self.tombol(otomatis_i, "✔ Tandai sudah diperiksa manual", self.toggle_periksa, "#7FA96B").pack(fill="x", pady=(0, 2))
         tk.Label(otomatis_i, text="Penanda otomatis dan diperiksa manual saling meniadakan. Menyunting poligon mencabut penanda otomatis dengan sendirinya.",
                  bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(2, 4))
+        tk.Label(otomatis_i, text="Ctrl+tarik = blok hapus (langsung membuang mask/titik di dalam kotak).  "
+                                  "Shift+tarik = pilih titik saja.  Ctrl+C menyalin nama frame, "
+                                  "Ctrl+Shift+C menyalin jalur lengkap.  Klik kanan pada daftar frame "
+                                  "menyalin nama yang ditunjuk kursor.",
+                 bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(4, 2))
         self.tombol(otomatis_i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
         tk.Label(otomatis_i, text="Tangga: ConvNeXt RGB-D memberi kandidat dengan kedalaman sebagai masukan model, SAM 2 GPU merapikan batas, depth memeriksa outlier. Batu/ramp memakai depth saja. Perubahan mask tersimpan otomatis.",
                  bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(3, 0))
@@ -2968,6 +3048,38 @@ class Studio(tk.Tk):
         if any(len(poly) >= 3 for daftar in self.kanvas.poligon.values() for poly in daftar):
             self.simpan_label(senyap=True)
         self.status.set(f"Draft mask otomatis disimpan: {self.label_path.name}")
+
+    def _lapor_blok(self, n_poly: int, n_titik: int) -> None:
+        bagian = []
+        if n_poly:
+            bagian.append(f"{n_poly} mask")
+        if n_titik:
+            bagian.append(f"{n_titik} titik")
+        self.status.set("Blok hapus: " + (" dan ".join(bagian) + " dibuang. Ctrl+Z membatalkan."
+                                          if bagian else "tidak ada yang terkena."))
+
+    def salin_nama_frame(self, penuh: bool = False) -> None:
+        """Salin nama frame yang sedang dibuka ke papan klip.
+
+        Ctrl+C menyalin namanya saja, Ctrl+Shift+C menyalin jalur lengkap.
+        Nama frame cukup panjang untuk salah ketik ketika dilaporkan, dan
+        jalur lengkap diperlukan saat frame itu hendak dibuka dari terminal.
+        """
+        if not self.label_path:
+            self.status.set("Belum ada frame yang dibuka."); return
+        teks = str(self.label_path) if penuh else self.label_path.name
+        self.clipboard_clear(); self.clipboard_append(teks); self.update_idletasks()
+        self.status.set(f"Disalin ke papan klip: {teks}")
+
+    def _salin_dari_kursor(self, e) -> str:
+        """Salin nama frame yang berada tepat di bawah kursor pada daftar."""
+        i = self.list_frame.nearest(e.y)
+        if i < 0 or i >= self.list_frame.size():
+            return "break"
+        nama = self.list_frame.get(i)
+        self.clipboard_clear(); self.clipboard_append(nama); self.update_idletasks()
+        self.status.set(f"Disalin ke papan klip: {nama}")
+        return "break"
 
     def toggle_sampah_frame(self):
         if not self.label_path:
