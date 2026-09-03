@@ -11,11 +11,11 @@ Antarmukanya dibuat sama persis dengan `segmentasi_rfdetr_depth.usulkan`
 sehingga alur penghalusan SAM 2 dan verifikasi kedalaman yang sudah ada tetap
 dipakai tanpa perubahan.
 
-Bobot yang dipakai adalah varian yang pelatihannya sudah selesai dan angkanya
-tervalidasi pada rekaman uji, bukan checkpoint yang masih berubah. Memakai
-checkpoint yang belum selesai membuat usulan label tidak dapat diulang, karena
-frame yang dilabeli pada waktu berbeda akan memakai bobot berbeda tanpa
-terlihat oleh pemakainya.
+Bobot yang dipakai adalah hasil pra-latih dataset publik saja, tanpa fine-tune
+pada rekaman D435. Alasannya bukan teknis melainkan metodologis: memakai model
+yang dilatih pada label yang sedang diperiksa untuk mengusulkan label baru
+membuat model mengukuhkan kesalahannya sendiri, dan kesalahan itu menjadi makin
+sulit terlihat karena usulan dan acuan berasal dari sumber yang sama.
 """
 from __future__ import annotations
 
@@ -27,19 +27,29 @@ import numpy as np
 _MODEL = None
 _DEV = None
 
-# Urutan pencarian bobot. Varian dari bobot acak didahulukan karena
-# pelatihannya SUDAH SELESAI dan angkanya tervalidasi pada rekaman uji:
-# Dice 0,9086 dan F1 garis 0,8254 pada rekaman 105348 yang tidak pernah
-# dilatih. Varian ImageNet masih dalam tahap fine-tune, dan memakai checkpoint
-# yang masih berubah membuat usulan label tidak dapat diulang: frame yang
-# dilabeli hari ini dan besok akan memakai bobot berbeda tanpa terlihat.
+# Urutan pencarian bobot. Yang dipakai adalah bobot PRA-LATIH DATASET PUBLIK
+# saja, bukan yang sudah di-fine-tune pada rekaman D435. Ini pilihan sadar
+# pemilik proyek: label D435 masih dalam proses pemeriksaan, dan memakai model
+# yang dilatih pada label itu untuk mengusulkan label baru berarti model
+# mengukuhkan kesalahannya sendiri.
 #
-# Setelah fine-tune varian ImageNet selesai dan angkanya terukur, tukar urutan
-# dua baris pertama di bawah ini.
+# Harga pilihan ini terukur pada rekaman 105348 yang tidak pernah dilatih:
+#
+#   pra-latih publik saja        Dice 0,7234
+#   setelah fine-tune D435       Dice 0,8402  (0,9358 pada frame tervalidasi)
+#
+# Jadi usulan akan lebih kasar dan perlu lebih banyak koreksi tangan. Setelah
+# pemeriksaan label selesai, tukar ke jalur ft/best.pt untuk mengembalikan
+# selisih itu.
+#
+# Femto didahulukan karena Dice-nya tertinggi di antara bobot pra-latih
+# (0,7234 melawan 0,7126 dan 0,7118). Dice yang dipakai sebagai penentu, bukan
+# F1 garis, sebab pelabel membentuk poligon dari peta kelas dan tidak memakai
+# keluaran kepala garis sama sekali.
 KANDIDAT_BOBOT = [
-    ('ConvNeXt Atto', 'bobot/kandidat/banding4/convnext_atto/ft/best.pt'),
-    ('ConvNeXt Femto', 'bobot/kandidat/banding4/convnext_femto/ft/best.pt'),
-    ('ConvNeXt Atto ImageNet', 'bobot/kandidat/banding5kecil/cnx_atto_in1k/ft/best.pt'),
+    ('ConvNeXt Femto (pra-latih publik)', 'bobot/kandidat/banding4/convnext_femto/pra/best.pt'),
+    ('ConvNeXt Atto ImageNet (pra-latih publik)', 'bobot/kandidat/banding5kecil/cnx_atto_in1k/pra/best.pt'),
+    ('ConvNeXt Atto (pra-latih publik)', 'bobot/kandidat/banding4/convnext_atto/pra/best.pt'),
 ]
 MIN_M, MAKS_M = 0.2, 4.0
 UKURAN = 512
@@ -106,18 +116,47 @@ def _letterbox(a: np.ndarray, interp: int) -> tuple[np.ndarray, float, int, int]
     return out, s, dx, dy
 
 
-def _poligon(biner: np.ndarray, luas_min: int = 400, epsilon: float = 2.0):
+def _bersihkan(biner: np.ndarray, kernel: int = 7) -> np.ndarray:
+    """Buang bercak tipis lalu tutup lubang kecil di dalam permukaan.
+
+    Pembukaan morfologis lebih dahulu, penutupan sesudahnya. Urutan itu penting:
+    penutupan lebih dulu akan menyambungkan bercak ke permukaan besar di
+    dekatnya dan justru mengabadikannya, bukan membuangnya.
+    """
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel, kernel))
+    b = cv2.morphologyEx(biner.astype(np.uint8), cv2.MORPH_OPEN, k)
+    return cv2.morphologyEx(b, cv2.MORPH_CLOSE, k)
+
+
+def _poligon(biner: np.ndarray, luas_min: int = 2500, rasio_min: float = 0.08,
+             epsilon: float = 1.5):
     """Kontur luar tiap komponen, disederhanakan agar mudah disunting tangan.
 
-    epsilon 2 piksel dipilih supaya jumlah titik masuk akal untuk disunting;
-    di bawah itu poligon berisi ratusan titik dan tidak praktis digeser satu
-    per satu di kanvas.
+    epsilon 1,5 piksel dipilih dari pengukuran pertukaran, bukan dari kebiasaan.
+    Poligonisasi tidak pernah mewakili peta kelas dengan sempurna: lubang di
+    dalam permukaan ikut tertutup dan batas bergerigi diluruskan. Terukur pada
+    delapan frame, IoU poligon terhadap peta kelas asli adalah 0,9718 pada
+    epsilon 0,5 dengan 95 titik per poligon, dan 0,9485 pada epsilon 3,0 dengan
+    14 titik. Nilai 1,5 memberi 0,9640 dengan 40 titik -- memulihkan sebagian
+    ketepatan yang hilang pada 2,0 tanpa membuat penyuntingan tangan berat.
+
+    Dua penyaring dipakai bersama, karena masing-masing sendirian tidak cukup.
+    Ambang mutlak 2500 piksel membuang bercak yang jelas terlalu kecil untuk
+    menjadi permukaan anak tangga; terukur pada 84 frame, ambang lama 400
+    piksel meloloskan 56 komponen di bawah 5000 piksel yang tampak sebagai
+    bercak di dalam permukaan besar. Ambang nisbi 8% dari komponen terbesar
+    sekelas menangani frame jarak jauh, tempat seluruh permukaan mengecil
+    sehingga ambang mutlak saja akan membuang anak tangga yang sah.
     """
-    kontur, _ = cv2.findContours(biner.astype(np.uint8), cv2.RETR_EXTERNAL,
-                                 cv2.CHAIN_APPROX_SIMPLE)
+    biner = _bersihkan(biner)
+    kontur, _ = cv2.findContours(biner, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    luas = [cv2.contourArea(k) for k in kontur]
+    if not luas:
+        return []
+    ambang = max(luas_min, max(luas) * rasio_min)
     keluar = []
-    for k in kontur:
-        if cv2.contourArea(k) < luas_min:
+    for k, a in zip(kontur, luas):
+        if a < ambang:
             continue
         k = cv2.approxPolyDP(k, epsilon, True).reshape(-1, 2)
         if len(k) >= 3:
