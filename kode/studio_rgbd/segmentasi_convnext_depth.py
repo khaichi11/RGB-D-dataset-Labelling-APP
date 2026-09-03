@@ -11,10 +11,11 @@ Antarmukanya dibuat sama persis dengan `segmentasi_rfdetr_depth.usulkan`
 sehingga alur penghalusan SAM 2 dan verifikasi kedalaman yang sudah ada tetap
 dipakai tanpa perubahan.
 
-Bobot yang dipakai adalah varian ImageNet, bukan varian yang dilatih dari bobot
-acak. Terukur pada pra-latih dataset publik: varian ImageNet mencapai F1 garis
-0,9393 pada epoch 50, sedangkan varian acak tidak pernah melampaui 0,9020
-sepanjang 80 epoch.
+Bobot yang dipakai adalah varian yang pelatihannya sudah selesai dan angkanya
+tervalidasi pada rekaman uji, bukan checkpoint yang masih berubah. Memakai
+checkpoint yang belum selesai membuat usulan label tidak dapat diulang, karena
+frame yang dilabeli pada waktu berbeda akan memakai bobot berbeda tanpa
+terlihat oleh pemakainya.
 """
 from __future__ import annotations
 
@@ -26,12 +27,19 @@ import numpy as np
 _MODEL = None
 _DEV = None
 
-# Urutan pencarian bobot. Varian ImageNet didahulukan; varian acak hanya
-# dipakai bila yang pertama belum tersedia, dan pemakaiannya dilaporkan.
+# Urutan pencarian bobot. Varian dari bobot acak didahulukan karena
+# pelatihannya SUDAH SELESAI dan angkanya tervalidasi pada rekaman uji:
+# Dice 0,9086 dan F1 garis 0,8254 pada rekaman 105348 yang tidak pernah
+# dilatih. Varian ImageNet masih dalam tahap fine-tune, dan memakai checkpoint
+# yang masih berubah membuat usulan label tidak dapat diulang: frame yang
+# dilabeli hari ini dan besok akan memakai bobot berbeda tanpa terlihat.
+#
+# Setelah fine-tune varian ImageNet selesai dan angkanya terukur, tukar urutan
+# dua baris pertama di bawah ini.
 KANDIDAT_BOBOT = [
-    ('ConvNeXt Atto ImageNet', 'bobot/kandidat/banding5kecil/cnx_atto_in1k/ft/best.pt'),
+    ('ConvNeXt Atto', 'bobot/kandidat/banding4/convnext_atto/ft/best.pt'),
     ('ConvNeXt Femto', 'bobot/kandidat/banding4/convnext_femto/ft/best.pt'),
-    ('ConvNeXt Atto acak', 'bobot/kandidat/banding4/convnext_atto/ft/best.pt'),
+    ('ConvNeXt Atto ImageNet', 'bobot/kandidat/banding5kecil/cnx_atto_in1k/ft/best.pt'),
 ]
 MIN_M, MAKS_M = 0.2, 4.0
 UKURAN = 512
