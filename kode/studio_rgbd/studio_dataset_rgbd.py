@@ -56,6 +56,7 @@ if __package__:
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth, verifikasi_depth
+    from .segmentasi_convnext_depth import usulkan as usulkan_convnext_depth
     from .segmentasi_sam2 import hangatkan as hangatkan_sam2, rapikan_kelompok as rapikan_sam2
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -66,6 +67,7 @@ else:
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth, verifikasi_depth
+    from studio_rgbd.segmentasi_convnext_depth import usulkan as usulkan_convnext_depth
     from studio_rgbd.segmentasi_sam2 import hangatkan as hangatkan_sam2, rapikan_kelompok as rapikan_sam2
 
 
@@ -1147,14 +1149,33 @@ class Studio(tk.Tk):
         self.tabs = ttk.Notebook(self); self.tabs.pack(fill="both", expand=True, padx=18, pady=(0, 14))
         self.tab_rekam = tk.Frame(self.tabs, bg=BG); self.tab_tinjau = tk.Frame(self.tabs, bg=BG)
         self.tab_ekspor = tk.Frame(self.tabs, bg=BG); self.tab_label = tk.Frame(self.tabs, bg=BG)
-        self.tab_uji = tk.Frame(self.tabs, bg=BG)
+        self.tab_uji = tk.Frame(self.tabs, bg=BG); self.tab_uji_berkas = tk.Frame(self.tabs, bg=BG)
         self.tabs.add(self.tab_rekam, text="  1. Rekam  "); self.tabs.add(self.tab_tinjau, text="  2. Tinjau & Potong  ")
         self.tabs.add(self.tab_ekspor, text="  3. Ekspor Frame  "); self.tabs.add(self.tab_label, text="  4. Label & Ukur  ")
         # Tab 5 berbeda tujuan dari tab 1-4: bukan membuat dataset, melainkan
         # MENGUJI model terlatih pada aliran kamera langsung. Dipisah supaya
         # alur dataset tidak tercampur dengan alur pengujian.
         self.tabs.add(self.tab_uji, text="  5. Uji Realtime  ")
+        # Tab 6 menguji model pada BERKAS, bukan aliran kamera. Dipisah dari
+        # tab 5 karena hasilnya dapat diulang persis dan karena itu dipakai
+        # membandingkan antar-model, sedangkan aliran kamera tidak pernah sama
+        # dua kali.
+        self.tabs.add(self.tab_uji_berkas, text="  6. Uji Model pada Berkas  ")
         self.ui_rekam(); self.ui_tinjau(); self.ui_ekspor(); self.ui_label(); self.ui_uji()
+        self.ui_uji_berkas()
+
+    def ui_uji_berkas(self):
+        """Panel pengujian model pada gambar, video, atau folder frame RGB-D."""
+        try:
+            from .uji_berkas import UjiBerkas
+        except ImportError:
+            from uji_berkas import UjiBerkas
+        try:
+            self.panel_uji_berkas = UjiBerkas(self.tab_uji_berkas, self)
+        except Exception as e:                                    # noqa: BLE001
+            self.panel_uji_berkas = None
+            tk.Label(self.tab_uji_berkas, text=f"Panel uji berkas gagal dimuat:\n{e}",
+                     bg=BG, fg=MUTED, justify="left").pack(padx=24, pady=24)
 
     def ui_uji(self):
         """Pasang panel uji realtime. Impor ditunda supaya Studio tetap bisa
@@ -1362,10 +1383,18 @@ class Studio(tk.Tk):
                        activebackground=PANEL).pack(side="left")
         self.tombol_ringkas(magnet, "🧲 Rapikan semua", self.rapikan_magnet_semua,
                              "#E8DDD5", INK, width=138).pack(side="right")
-        self.tombol(otomatis_i, "✨ Rekomendasi tangga: RF-DETR + SAM 2 + depth", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(8, 2))
+        self.tombol(otomatis_i, "✨ Rekomendasi tangga: ConvNeXt RGB-D + SAM 2", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(8, 2))
         self.tombol(otomatis_i, "⚡ Batch auto-label frame baru", self.batch_auto_label, BLUE).pack(fill="x", pady=(4, 2))
+        # Penanda status berada tepat di atas tombolnya supaya keadaan frame
+        # terbaca sebelum tombol ditekan, bukan sesudahnya.
+        self.lencana_periksa = tk.Label(otomatis_i, text="—  belum ada frame dipilih", bg=PANEL,
+                                        fg=MUTED, font=("Segoe UI", 9, "bold"), pady=5)
+        self.lencana_periksa.pack(fill="x", pady=(8, 2))
+        self.tombol(otomatis_i, "✔ Tandai sudah diperiksa manual", self.toggle_periksa, "#7FA96B").pack(fill="x", pady=(0, 2))
+        tk.Label(otomatis_i, text="Penanda otomatis dan diperiksa manual saling meniadakan. Menyunting poligon mencabut penanda otomatis dengan sendirinya.",
+                 bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(2, 4))
         self.tombol(otomatis_i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
-        tk.Label(otomatis_i, text="Tangga: YOLO memberi kandidat, SAM 2 GPU merapikan batas, depth memeriksa outlier. Batu/ramp memakai depth. Perubahan mask tersimpan otomatis.",
+        tk.Label(otomatis_i, text="Tangga: ConvNeXt RGB-D memberi kandidat dengan kedalaman sebagai masukan model, SAM 2 GPU merapikan batas, depth memeriksa outlier. Batu/ramp memakai depth saja. Perubahan mask tersimpan otomatis.",
                  bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(3, 0))
         edit = tk.Frame(edit_i, bg=PANEL); edit.pack(fill="x", pady=(4, 0))
         self.tombol_ringkas(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=(0, 2))
@@ -2665,6 +2694,7 @@ class Studio(tk.Tk):
             # Frame baru selalu mendapat usulan terlebih dahulu. Pengguna lalu
             # tinggal mengoreksi; draft/label yang sudah ada tidak ditimpa.
             self.after(180, lambda target=p: self._auto_segmentasi(target))
+        self.perbarui_lencana_periksa()
         self.perbarui_konteks_label(self.label_info.get("kategori"))
         self.ukur_status.set(("Tekan A (merah) atau S (biru), lalu klik/tarik titik. Space berpindah frame."
                               if self.kontrol_label.get() == "mudah" else
@@ -2674,7 +2704,7 @@ class Studio(tk.Tk):
     def _auto_segmentasi(self, target: Path):
         if target != self.label_path or self._punya_label(target):
             return
-        self.status.set(f"Auto-segmentasi RF-DETR + SAM 2 untuk {target.name}…")
+        self.status.set(f"Auto-segmentasi ConvNeXt RGB-D + SAM 2 untuk {target.name}…")
         self.usulkan_segmentasi()
 
     def _hangatkan_sam2_async(self):
@@ -2691,7 +2721,9 @@ class Studio(tk.Tk):
         k = self._intrinsics(info)
         # Kanvas/SAM memakai RGB, sedangkan Ultralytics menerima ndarray
         # OpenCV BGR. Training juga membaca color_raw.png lewat OpenCV (BGR).
-        hasil = usulkan_rfdetr_depth(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), depth, k)
+        # Jalur batch memakai pengusul yang sama dengan jalur UI; kalau
+        # berbeda, label hasil batch dan label hasil klik tidak sebanding.
+        hasil = usulkan_convnext_depth(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), depth)
         depth_info = usulkan_segmentasi(depth, k)
         rapih = rapikan_sam2(rgb, {"tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"]},
                               {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
@@ -2734,7 +2766,9 @@ class Studio(tk.Tk):
                     for poly in poligon[mode]:
                         if len(poly) >= 3:
                             baris.append(str(cls) + " " + " ".join(f"{v:.6f}" for x, y in poly for v in (x / w, y / h)))
-                tulis_json(p / "label_draft.json", {"versi": 1, "otomatis": True, "sumber": "batch YOLO+SAM2+depth",
+                tulis_json(p / "label_draft.json", {"versi": 2, "otomatis": True,
+                                                    "diperiksa_manual": False,
+                                                    "sumber": "batch ConvNeXt RGB-D + SAM2 + depth",
                                                        "disimpan_iso": datetime.now().isoformat(timespec="seconds"), "poligon": poligon})
                 if baris:
                     (p / "label_yolo_seg.txt").write_text("\n".join(baris) + "\n", encoding="utf-8")
@@ -2862,15 +2896,75 @@ class Studio(tk.Tk):
             self.after_cancel(self._autosave_setelah)
         self._autosave_setelah = self.after(450, self.simpan_draft_label)
 
+    # ------------------------------------------------------- periksa manual
+    def status_periksa(self, frame=None) -> bool:
+        """Apakah frame ini sudah ditandai diperiksa manusia."""
+        f = frame or self.label_path
+        if not f:
+            return False
+        return bool(baca_json(f / "label_draft.json", {}).get("diperiksa_manual", False))
+
+    def tandai_diperiksa(self, nilai: bool = True, senyap: bool = False) -> None:
+        """Tandai frame sudah diperiksa manusia dan cabut penanda otomatis.
+
+        Penanda `otomatis` dan `diperiksa_manual` sengaja saling meniadakan.
+        Selama keduanya bisa bernilai benar bersamaan, tidak ada cara membedakan
+        label yang sudah diverifikasi manusia dari label yang masih usulan
+        mesin -- dan pembedaan itu menentukan frame mana yang sah dipakai
+        sebagai acuan pengujian.
+        """
+        if not self.label_path:
+            if not senyap:
+                messagebox.showinfo("Pilih frame", "Pilih frame lebih dahulu.", parent=self)
+            return
+        j = self.label_path / "label_draft.json"
+        d = baca_json(j, {})
+        if not d:
+            return
+        d["diperiksa_manual"] = bool(nilai)
+        d["otomatis"] = not bool(nilai)
+        d["diperiksa_iso"] = datetime.now().isoformat(timespec="seconds") if nilai else None
+        tulis_json(j, d)
+        self.perbarui_lencana_periksa()
+        if not senyap:
+            self.status.set("Frame ditandai SUDAH DIPERIKSA manual." if nilai
+                            else "Penanda periksa manual dicabut; frame kembali berstatus usulan otomatis.")
+
+    def toggle_periksa(self) -> None:
+        self.tandai_diperiksa(not self.status_periksa())
+
+    def perbarui_lencana_periksa(self) -> None:
+        lbl = getattr(self, "lencana_periksa", None)
+        if lbl is None:
+            return
+        if not self.label_path:
+            lbl.config(text="—  belum ada frame dipilih", bg=PANEL, fg=MUTED); return
+        if self.status_periksa():
+            lbl.config(text="✔  SUDAH DIPERIKSA MANUAL", bg="#DCEFD8", fg="#1E5B2A")
+        else:
+            lbl.config(text="⚠  masih usulan otomatis", bg="#FBEEDA", fg="#8A5A12")
+
     def simpan_draft_label(self):
         self._autosave_setelah = None
         if not self.label_path or self.kanvas.rgb is None:
             return
+        # Menyunting poligon berarti manusia sudah memeriksanya. Penanda
+        # otomatis karena itu dicabut sendiri, bukan menunggu tombol ditekan:
+        # kalau menunggu, sebagian besar frame akan tetap bertanda otomatis
+        # padahal sudah dikoreksi, dan penandanya kehilangan makna.
+        lama = baca_json(self.label_path / "label_draft.json", {})
+        disunting = bool(lama.get("poligon")) and lama.get("poligon") != self.kanvas.poligon
+        diperiksa = bool(lama.get("diperiksa_manual", False)) or disunting
         tulis_json(self.label_path / "label_draft.json", {
-            "versi": 1, "otomatis": True,
+            "versi": 2,
+            "otomatis": not diperiksa,
+            "diperiksa_manual": diperiksa,
+            "diperiksa_iso": (lama.get("diperiksa_iso")
+                              or (datetime.now().isoformat(timespec="seconds") if disunting else None)),
             "disimpan_iso": datetime.now().isoformat(timespec="seconds"),
             "poligon": self.kanvas.poligon,
         })
+        self.perbarui_lencana_periksa()
         if any(len(poly) >= 3 for daftar in self.kanvas.poligon.values() for poly in daftar):
             self.simpan_label(senyap=True)
         self.status.set(f"Draft mask otomatis disimpan: {self.label_path.name}")
@@ -2946,14 +3040,20 @@ class Studio(tk.Tk):
             if kategori == "tangga_naik":
                 # Tampilan kanvas RGB; YOLO harus menerima BGR agar sama dengan
                 # loader training yang membaca color_raw.png melalui OpenCV.
-                hasil = usulkan_rfdetr_depth(cv2.cvtColor(self.kanvas.rgb, cv2.COLOR_RGB2BGR), self.kanvas.depth, self._intrinsics(info))
+                # ConvNeXt RGB-D menerima kedalaman sebagai KANAL MASUKAN,
+                # berbeda dari pengusul lama yang bekerja dari warna lalu
+                # memverifikasi dengan kedalaman sesudahnya. Lantai dan tapakan
+                # sama-sama bidang mendatar bertekstur mirip; yang membedakannya
+                # letak dalam ruang, dan itu hanya ada pada kedalaman.
+                hasil = usulkan_convnext_depth(cv2.cvtColor(self.kanvas.rgb, cv2.COLOR_RGB2BGR),
+                                               self.kanvas.depth)
                 depth_info = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
                 rapih = rapikan_sam2(self.kanvas.rgb, {
                     "tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"],
                 }, {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
                 rapih = verifikasi_depth(rapih, self.kanvas.depth)
                 hasil["tapakan"], hasil["bidang_tegak"] = rapih["tapakan"], rapih["bidang_tegak"]
-                hasil["sumber"] = "RF-DETR + SAM 2.1 Tiny + depth (GPU)"
+                hasil["sumber"] = hasil.get("sumber", "ConvNeXt RGB-D") + " + SAM 2.1 Tiny"
             else:
                 hasil = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
                 hasil["sumber"] = "depth (bobot YOLO tangga tidak dipakai untuk kategori ini)"
@@ -2961,7 +3061,8 @@ class Studio(tk.Tk):
             # Untuk tangga jangan diam-diam mengganti hasil YOLO dengan depth:
             # pengguna harus tahu bila bobot/runtime YOLO bermasalah.
             if kategori == "tangga_naik":
-                messagebox.showerror("RF-DETR tidak tersedia", f"Rekomendasi tangga memakai RF-DETR.\n\n{e}", parent=self)
+                messagebox.showerror("Model ConvNeXt tidak tersedia",
+                                     f"Rekomendasi tangga memakai model RGB-D ConvNeXt.\n\n{e}", parent=self)
                 return
             # Batu/ramp belum mempunyai bobot YOLO khusus, sehingga depth tetap
             # menjadi proposal kategori tersebut.
