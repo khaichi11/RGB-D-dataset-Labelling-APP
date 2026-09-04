@@ -2736,7 +2736,29 @@ class Studio(tk.Tk):
                     continue
         return [unik[i] for i in sorted(unik)]
 
-    def muat_frame(self):
+    def _pilih_indeks_frame(self, i: int) -> None:
+        """Sorot dan buka frame ke-i pada daftar, dijepit ke rentang yang sah."""
+        if not self.frame_paths:
+            self.label_path = None
+            self.kanvas.delete("all")
+            return
+        i = max(0, min(i, len(self.frame_paths) - 1))
+        self.list_frame.selection_clear(0, "end")
+        self.list_frame.selection_set(i)
+        self.list_frame.activate(i)
+        self.list_frame.see(i)
+        self._buka_frame_ekspor(self.frame_paths[i])
+
+    def muat_frame(self, lanjut_ke: int | None = None):
+        """Muat ulang daftar frame.
+
+        `lanjut_ke` menahan posisi setelah sebuah frame hilang dari daftar,
+        misalnya karena dibuang ke sampah. Tanpa itu daftar dimuat ulang dan
+        pilihan jatuh kembali ke awal, sehingga membuang beberapa frame
+        berturut-turut memaksa menggulir dari atas setiap kali. Karena frame
+        yang dibuang lenyap dari daftar, indeks yang sama kini menunjuk frame
+        BERIKUTNYA -- persis perilaku yang diharapkan.
+        """
         if not self.sesi: messagebox.showinfo("Pilih sesi", "Pilih rekaman pada tab Tinjau dahulu.", parent=self); return
         semua = self.daftar_frame_ekspor()
         self.frame_paths=[]
@@ -2748,6 +2770,8 @@ class Studio(tk.Tk):
             self.frame_paths.append(p)
             self.list_frame.insert("end",f"{ikon}{p.parent.parent.name} / {p.name}")
         self.status.set(f"{len(self.frame_paths)} frame ekspor dimuat.")
+        if lanjut_ke is not None:
+            self._pilih_indeks_frame(lanjut_ke)
 
     def pilih_frame(self):
         s=self.list_frame.curselection()
@@ -3092,11 +3116,18 @@ class Studio(tk.Tk):
         # Hanya frame INI yang ditandai - folder dan isinya tidak dipindah,
         # jadi frame lain, label, dan ekspor yang bisa dilanjutkan tidak
         # terganggu. Pemulihan tinggal membalik tanda lewat tampilan sampah.
-        self.status.set("Frame dibuang ke sampah (tidak ikut dataset YOLO). Centang 'Tampilkan sampah frame' untuk memulihkannya."
+        self.status.set("Frame dibuang ke sampah, lanjut ke frame berikutnya. Centang 'Tampilkan sampah frame' untuk memulihkannya."
                         if state["di_sampah"] else
-                        "Frame dipulihkan dari sampah.")
+                        "Frame dipulihkan dari sampah, lanjut ke frame berikutnya.")
+        # Indeks frame yang baru saja ditandai dicatat SEBELUM daftar dimuat
+        # ulang. Setelah pemuatan ulang frame itu tidak lagi ada, sehingga
+        # indeks yang sama menunjuk frame berikutnya.
+        try:
+            i = self.frame_paths.index(self.label_path)
+        except ValueError:
+            i = 0
         self.label_path = None
-        self.muat_frame()
+        self.muat_frame(lanjut_ke=i)
 
     def hapus_frame_permanen(self):
         """Hapus hanya satu paket turunan ekspor; RAW sesi tetap tidak tersentuh."""
@@ -3123,9 +3154,10 @@ class Studio(tk.Tk):
             self.muat_frame()
             tujuan = berikut if berikut in self.frame_paths else sebelum if sebelum in self.frame_paths else None
             if tujuan is not None:
-                indeks = self.frame_paths.index(tujuan)
-                self.list_frame.selection_set(indeks); self.list_frame.activate(indeks)
-                self._buka_frame_ekspor(tujuan)
+                # Memakai pembantu yang sama dengan jalur sampah agar daftar
+                # ikut tergulir ke frame terpilih, bukan hanya menyorotinya di
+                # luar layar.
+                self._pilih_indeks_frame(self.frame_paths.index(tujuan))
                 self.status.set(f"Frame dihapus. Lanjut ke {tujuan.name}.")
             else:
                 self.status.set("Frame ekspor dihapus permanen. Rekaman RAW tetap aman.")
