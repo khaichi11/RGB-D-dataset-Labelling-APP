@@ -18,7 +18,7 @@ import numpy as np
 
 PLY_HEADER = """ply
 format binary_little_endian 1.0
-comment RGB-D Studio ZenExo; coordinates in metres
+comment RGB-D Labelling Studio; coordinates in metres
 element vertex {count}
 property float x
 property float y

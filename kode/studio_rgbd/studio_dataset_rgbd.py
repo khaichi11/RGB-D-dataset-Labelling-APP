@@ -1,4 +1,4 @@
-"""ZenExo Studio: rekam RGB-D D435 -> tinjau -> potong virtual -> ekspor -> label.
+"""RGB-D Labelling Studio: rekam RGB-D D435 -> tinjau -> potong virtual -> ekspor -> label.
 
 Prinsip keselamatan data
 ------------------------
@@ -1092,7 +1092,7 @@ class Studio(tk.Tk):
         self.label_info: dict | None = None
         self.preview_photo = None
         self._preview_w = 480               # lebar render preview; mengikuti widget
-        self.title("ZenExo Studio — Rekam, Tinjau, Ekspor, Label")
+        self.title("RGB-D Labelling Studio — Rekam, Tinjau, Ekspor, Label")
         self.geometry("1500x940"); self.minsize(1180, 760); self.configure(bg=BG)
         self.protocol("WM_DELETE_WINDOW", self.tutup)
         self._gaya()
@@ -1201,8 +1201,9 @@ class Studio(tk.Tk):
     def _buat_ui(self):
         top = tk.Frame(self, bg=BG); top.pack(fill="x", padx=24, pady=(16, 8))
         brand = tk.Frame(top, bg=BG); brand.pack(side="left")
-        tk.Label(brand, text="ZenExo Studio", bg=BG, fg=INK, font=("Segoe UI", 22, "bold")).pack(anchor="w")
+        tk.Label(brand, text="RGB-D Labelling Studio", bg=BG, fg=INK, font=("Segoe UI", 22, "bold")).pack(anchor="w")
         tk.Label(brand, text="Rekam RGB-D mentah • sortir • ekspor • label • ukur", bg=BG, fg=MUTED, font=("Segoe UI", 10)).pack(anchor="w", pady=(1, 0))
+        tk.Label(brand, text="by Khairuramdhani", bg=BG, fg=MUTED, font=("Segoe UI", 10, "italic")).pack(anchor="w", pady=(1, 0))
         badge = tk.Label(top, text="D435  •  RGB + DEPTH", bg=ACCENT_SOFT, fg=ACCENT,
                          font=("Segoe UI", 9, "bold"), padx=12, pady=7)
         badge.pack(side="right", padx=(12, 0))
@@ -1278,8 +1279,6 @@ class Studio(tk.Tk):
         self.btn_rekam.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(16, 4))
         self.btn_preview_kamera = self.tombol(i, "Aktifkan preview kamera", self.toggle_preview_kamera, "#E8DDD5", INK)
         self.btn_preview_kamera.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        tk.Label(i, text="Kode adegan kosong = nama otomatis. Jika Anda mengisi misalnya Taman, nilai terakhir akan diingat sampai diganti.", bg=PANEL, fg=MUTED, justify="left", wraplength=490).grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        tk.Label(i, text="Cukup tekan Mulai rekam, ambil berbagai sudut, lalu tekan Selesai rekaman. Semua stream mentah RGB, Z16 depth, IR, timestamp, intrinsics, dan extrinsics tersimpan dalam raw.bag.", bg=PANEL, fg=MUTED, justify="left", wraplength=490).grid(row=7, column=0, columnspan=2, sticky="w", pady=(5, 0))
         b, i = self.card(kanan, "Preview kamera dan data") ; b.pack(fill="both", expand=True)
         # Preview diutamakan: ia yang paling sering dilihat, jadi ditaruh
         # paling atas dan diberi seluruh sisa ruang kartu.
@@ -1294,7 +1293,6 @@ class Studio(tk.Tk):
         # Ukuran render mengikuti lebar widget: diatur di thread Tk (aman),
         # dibaca thread render sebagai int biasa.
         self.label_live.bind("<Configure>", self._atur_ukuran_preview)
-        tk.Label(i, text="• Rekaman asli tidak pernah dipotong atau dihapus.  • Potong hanya membuat rentang virtual.\n• Frame hasil ekspor membawa RGB, depth native Z16, depth selaras RGB, IR, timestamp, dan metadata kamera.\n• Jika kalibrasi berubah, ekspor dapat dibuat ulang dari raw.bag yang sama.", bg=PANEL, fg=MUTED, justify="left", wraplength=560, font=("Segoe UI", 9)).pack(anchor="nw", pady=(10, 0))
 
     def ui_tinjau(self):
         f = tk.Frame(self.tab_tinjau, bg=BG); f.pack(fill="both", expand=True, padx=18, pady=18)
@@ -1323,7 +1321,7 @@ class Studio(tk.Tk):
         ttk.Combobox(i, textvariable=self.kategori_baru, values=KATEGORI,
                      state="readonly").pack(fill="x")
         self.tombol(i, "Pindahkan ke kategori ini", self.pindah_kategori, "#E8DDD5", INK).pack(fill="x", pady=(5, 0))
-        tk.Label(i, text="Memindahkan hanya mengubah folder dan session.json. Isi raw.db3 tidak pernah disentuh.",
+        tk.Label(i, text="Memindahkan hanya mengubah folder dan session.json.",
                  bg=PANEL, fg=MUTED, wraplength=250, justify="left").pack(anchor="w", pady=(5, 0))
         b, i = self.card(right, "Tinjau rekaman") ; b.pack(fill="both", expand=True)
         # Kontrol di-pack ke bawah DULU (side="bottom") supaya tidak pernah
@@ -1379,7 +1377,6 @@ class Studio(tk.Tk):
         self.tombol_ringkas(manual, "Awal = kini", self.tetapkan_awal_kini, "#E8DDD5", INK, width=92).pack(side="left", padx=(8, 2))
         self.tombol_ringkas(manual, "Akhir = kini", self.tetapkan_akhir_kini, "#E8DDD5", INK, width=92).pack(side="left", padx=2)
         self.tombol(bawah, "Simpan rentang potong (non-destruktif)", self.simpan_potong, GREEN).pack(fill="x", pady=(8, 0))
-        tk.Label(bawah, text="Putar dan ekspor frame yang sedang dijeda dapat langsung dari RAW. Preview lengkap hanya diperlukan untuk slider/lompat frame dan pengukuran 3-D dari dua klik.", bg=PANEL, fg=MUTED, wraplength=720, justify="left").pack(anchor="w", pady=(6, 0))
 
     def ui_ekspor(self):
         f = tk.Frame(self.tab_ekspor, bg=BG); f.pack(fill="both", expand=True, padx=30, pady=28)
@@ -1390,7 +1387,6 @@ class Studio(tk.Tk):
         self.tombol(i, "Buat video MP4 rentang (opsional)", self.ekspor_video_rentang, BLUE).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 4))
         self.tombol(i, "Terapkan interval: bersihkan & ekspor ulang", self.buang_frame_belum_dilabeli, "#F3D8D4", INK).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 4))
         self.tombol(i, "Hapus semua hasil ekspor sesi ini", self.hapus_semua_ekspor, "#F3D8D4", INK).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 4))
-        tk.Label(i, text="Default 10 berarti mengambil frame 0, 10, 20, dan seterusnya dari rentang pilihan sehingga sampel lebih berbeda. Tombol ‘Terapkan interval’ membuang hanya paket tanpa draft/label, lalu langsung ekspor ulang. Video MP4 hanya untuk ditonton/dibagikan; tidak diperlukan untuk labeling.", bg=PANEL, fg=MUTED, wraplength=750, justify="left").grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.label_ekspor = tk.Label(f, text="Belum ada ekspor dipilih.", bg=BG, fg=ACCENT, justify="left"); self.label_ekspor.pack(anchor="w", pady=(18, 0))
 
     def ui_label(self):
@@ -1466,16 +1462,10 @@ class Studio(tk.Tk):
                                         fg=MUTED, font=("Segoe UI", 9, "bold"), pady=5)
         self.lencana_periksa.pack(fill="x", pady=(8, 2))
         self.tombol(otomatis_i, "✔ Tandai sudah diperiksa manual", self.toggle_periksa, "#7FA96B").pack(fill="x", pady=(0, 2))
-        tk.Label(otomatis_i, text="Penanda otomatis dan diperiksa manual saling meniadakan. Menyunting poligon mencabut penanda otomatis dengan sendirinya.",
-                 bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(2, 4))
-        tk.Label(otomatis_i, text="Ctrl+tarik = blok hapus (langsung membuang mask/titik di dalam kotak).  "
-                                  "Shift+tarik = pilih titik saja.  Ctrl+C menyalin nama frame, "
-                                  "Ctrl+Shift+C menyalin jalur lengkap.  Klik kanan pada daftar frame "
-                                  "menyalin nama yang ditunjuk kursor.",
+        tk.Label(otomatis_i, text="Ctrl+tarik blok hapus • Shift+tarik pilih titik • "
+                                  "Ctrl+C nama frame • Ctrl+Shift+C jalur lengkap",
                  bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(4, 2))
         self.tombol(otomatis_i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
-        tk.Label(otomatis_i, text="Tangga: ConvNeXt RGB-D memberi kandidat dengan kedalaman sebagai masukan model, SAM 2 GPU merapikan batas, depth memeriksa outlier. Batu/ramp memakai depth saja. Perubahan mask tersimpan otomatis.",
-                 bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(3, 0))
         edit = tk.Frame(edit_i, bg=PANEL); edit.pack(fill="x", pady=(4, 0))
         self.tombol_ringkas(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=(0, 2))
         self.tombol_ringkas(edit, "+ Titik", self.mulai_tambah_titik, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=2)
@@ -1497,7 +1487,7 @@ class Studio(tk.Tk):
         self.btn_hapus_acuan.pack(side="left", fill="x", expand=True, padx=(2, 0))
         tk.Label(edit_i, text="● AUTO-SAVE AKTIF", bg=PANEL, fg=GREEN,
                  font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(6, 1))
-        tk.Label(edit_i, text="Klik kanan kosong = unselect; klik kanan titik = hapus. Setelah unselect, klik kiri membuat mask baru. Ctrl+Z = Undo; Ctrl+Shift+Z = Redo.", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(2, 0))
+        tk.Label(edit_i, text="Klik kanan lepas/hapus titik • Ctrl+Z undo • Ctrl+Shift+Z redo", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(2, 0))
         tk.Label(edit_i, textvariable=self.ukur_status, bg=PANEL, fg=INK, wraplength=300, justify="left", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(3, 0))
         self.perbarui_konteks_label()
 
@@ -2395,7 +2385,7 @@ class Studio(tk.Tk):
                 self._ukur_dua_titik()
         else:
             self.hasil_ukur.set(
-                "Klik 1 = pada BIDANG ACUAN (mis. tapakan bawah). Klik 2 = titik yang diukur tingginya."
+                "Klik 1 pada bidang acuan, klik 2 pada titik yang diukur."
                 if self.cara_ukur.get() == CARA_BIDANG else "Titik 1 ditandai. Klik titik kedua.")
         self._gambar_ulang_kanvas()
 
@@ -2551,7 +2541,7 @@ class Studio(tk.Tk):
             messagebox.showinfo("Tidak ada yang dibuang", "Semua frame ekspor sudah memiliki draft/label, atau belum ada frame.", parent=self); return
         if not messagebox.askyesno("Buang frame belum dilabeli",
                                    f"Buang {len(kandidat)} paket frame yang BELUM memiliki draft/label?\n\n"
-                                   "Frame yang sudah Anda segmentasi tetap dipertahankan. RAW tidak disentuh.",
+                                   "Frame yang sudah dilabeli tetap dipertahankan.",
                                    icon="warning", parent=self):
             return
         gagal = []
@@ -2802,7 +2792,7 @@ class Studio(tk.Tk):
         self.perbarui_konteks_label(self.label_info.get("kategori"))
         self.ukur_status.set(("Tekan A (merah) atau S (biru), lalu klik/tarik titik. Space berpindah frame."
                               if self.kontrol_label.get() == "mudah" else
-                              "Tekan PgUp (merah) atau PgDn (biru), lalu klik/tarik titik. Panah berpindah frame."))
+                              "PgUp merah, PgDn biru, panah pindah frame."))
         self.after(40, self.kanvas.focus_set)
 
     def _auto_segmentasi(self, target: Path):
@@ -3287,9 +3277,19 @@ class Studio(tk.Tk):
                 messagebox.showwarning("Poligon belum cukup", "Belum ada poligon dengan minimal tiga titik.", parent=self)
             return
         (self.label_path/"label_yolo_seg.txt").write_text("\n".join(baris) + "\n", encoding="utf-8")
+        # PNG SELALU ditulis, termasuk ketika kelasnya kosong. Versi sebelumnya
+        # melewatkan penulisan bila mask kosong, sehingga menghapus seluruh
+        # poligon satu kelas meninggalkan PNG LAMA yang masih berisi. Layar
+        # menunjukkan kosong, berkas menunjukkan isi, dan pelatihan memakai
+        # berkas -- sehingga koreksi pemakainya hilang tanpa jejak. Terukur
+        # sebelum perbaikan: 4 frame dengan IoU draft-lawan-PNG serendah 0,46.
         obj = self._mask("objek"); ref = self._mask("acuan")
-        if obj is not None and obj.any(): cv2.imwrite(str(self.label_path/"mask_objek.png"), obj*255)
-        if ref is not None and ref.any(): cv2.imwrite(str(self.label_path/"mask_acuan.png"), ref*255)
+        h, w = self.kanvas.rgb.shape[:2]
+        kosong = np.zeros((h, w), np.uint8)
+        cv2.imwrite(str(self.label_path/"mask_objek.png"),
+                    (obj if obj is not None else kosong) * 255)
+        cv2.imwrite(str(self.label_path/"mask_acuan.png"),
+                    (ref if ref is not None else kosong) * 255)
         rinci = ", ".join(f"{k}={v}" for k, v in jumlah.items())
         if not senyap:
             self.status.set(f"Label disimpan untuk {self.label_path.name}: {len(baris)} instance ({rinci}).")
@@ -3385,7 +3385,7 @@ class Studio(tk.Tk):
                 elif k=="error":
                     self.preview_diminta = False
                     self.btn_preview_kamera.configure(text="Aktifkan preview kamera", state="normal")
-                    self.status.set(str(v)); messagebox.showerror("ZenExo Studio",str(v),parent=self)
+                    self.status.set(str(v)); messagebox.showerror("RGB-D Labelling Studio",str(v),parent=self)
                 elif k=="live":self.after(50,self.live)
                 elif k=="preset_muat":self._isi_preset(*v)
                 elif k=="preset_selesai":

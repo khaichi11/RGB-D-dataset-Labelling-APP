@@ -32,6 +32,11 @@ rekam, tinjau, potong, ekspor, label, dan ukur.
 
 ## Data dan privasi
 
-Repository ini hanya berisi kode aplikasi. Dataset, rekaman `.bag`, model,
-point cloud, dan hasil ekspor sengaja diabaikan oleh Git karena besar dan dapat
-memuat data lokasi/objek nyata.
+Dataset, rekaman mentah `.bag`/`.db3`, point cloud, dan hasil ekspor rutin tetap
+diabaikan oleh Git karena besar dan dapat memuat data lokasi atau objek nyata.
+
+Pengecualian terbatas ada pada [artefak U-Net](artefak_unet/): satu checkpoint
+terbaik hasil *fine-tuning*, contoh gambar, serta catatan eksperimen. Video RAW
+tetap lokal karena dapat memperlihatkan lingkungan pengambilan data. Artefak
+yang dibagikan membantu pemeriksaan decoder U-Net, bukan sebagai pengganti
+dataset dan bukan bukti evaluasi akhir.

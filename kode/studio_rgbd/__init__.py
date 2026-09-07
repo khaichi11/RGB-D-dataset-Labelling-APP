@@ -1,1 +1,1 @@
-"""Aplikasi Studio RGB-D ZenExo."""
+"""Aplikasi RGB-D Labelling Studio."""

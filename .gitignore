@@ -2,6 +2,7 @@
 /*
 !/.gitignore
 !/README.md
+!/BRIEF_UNTUK_GPT.md
 !/kode/
 /kode/*
 !/kode/requirements.txt
@@ -10,6 +11,12 @@
 !/kode/studio_rgbd/**
 !/desktop/
 !/desktop/**
+!/unet-new/
+!/unet-new/**
+!/artefak_unet/
+!/artefak_unet/**
+/artefak_unet/*.mp4
+/artefak_unet/*.mp4.json
 /desktop/studio.log
 /kode/.venv/
 /kode/__pycache__/
@@ -25,3 +32,7 @@
 *.pt
 __pycache__/
 *.pyc
+
+# Artefak eksperimen U-Net yang dipilih secara eksplisit untuk reproduksi.
+# Dataset, checkpoint sementara, dan artefak model lain tetap diabaikan.
+!/artefak_unet/*.pt

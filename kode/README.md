@@ -1,8 +1,10 @@
-# ZenExo — kode aplikasi
+# RGB-D Labelling Studio
 
-Repository GitHub ini hanya memuat aplikasi Studio untuk pengambilan data dan labeling RGB-D. Kode inferensi, eksperimen, dan alat lama tetap tersedia secara lokal tetapi tidak dipublikasikan di repository ini.
+Aplikasi pengambilan dan pelabelan data RGB-D untuk penelitian persepsi tangga
+pada kaki prostetis. Repositori ini memuat aplikasi Studio; kode inferensi dan
+eksperimen tetap lokal.
 
-Jalankan aplikasi:
+## Menjalankan
 
 ```bash
 cd ~/paket_ubuntu_zenexo/kode
@@ -10,15 +12,16 @@ source .venv/bin/activate
 python -m studio_rgbd.studio_dataset_rgbd --preset jangan
 ```
 
-Untuk rekaman dengan exposure manual (mengurangi blur saat kamera bergerak):
+Exposure manual untuk mengurangi blur saat kamera dibawa berjalan:
 
 ```bash
 python -m studio_rgbd.studio_dataset_rgbd --preset akurasi --exposure 6000
 ```
 
-`--exposure 6000` = 6 ms; lebih rendah dari auto-exposure default (~33 ms) sehingga blur gerak berkurang tanpa mengubah FPS atau mengorbankan keselarasan depth.
+Satuan `--exposure` adalah mikrodetik; 0 berarti auto. Depth tidak terpengaruh
+karena D435 memakai jalur IR terpisah.
 
-Ekspor point cloud berwarna dari satu paket frame ekspor:
+## Point cloud
 
 ```bash
 python -m studio_rgbd.ekspor_pointcloud \
@@ -26,69 +29,44 @@ python -m studio_rgbd.ekspor_pointcloud \
   --out ../hasil/aktif/pointcloud/frame_000450.ply
 ```
 
-Hasil PLY berformat binary, koordinat dalam meter, bisa dibuka di CloudCompare atau MeshLab.
+PLY biner, koordinat meter, terbaca di CloudCompare dan MeshLab.
 
-Folder `.venv/` adalah lingkungan Python proyek dan sengaja tidak dipindahkan.
+## Pelatihan model kandidat
 
-## Fine-tune dengan cross-validation
-
-Gunakan dataset tangga lama ditambah satu video baru yang sudah dilabeli.
-Pembagian grouped 5-fold menjaga varian satu gambar dan frame satu video
-tetap berada pada fold yang sama:
+Pra-latih pada dataset publik lalu fine-tune pada rekaman D435:
 
 ```bash
-python train_tangga_cv.py --folds 5 --epochs 30 --device cpu
+bash finetune_semua.sh
 ```
 
-Pada komputer dengan GPU NVIDIA, gunakan `--device 0` atau alias `--device gpu`.
+Skrip ini melatih tujuh kandidat (ConvNeXt V2 Atto/Femto, MobileNetV4 Small,
+YOLO11n-seg, YOLO26n-seg) pada pembagian rekaman yang sama, lalu menjalankan
+perbandingan dan uji kestabilan. Hasil tersimpan di
+`../bobot/kandidat/final_d435/`.
 
-Pantau progres di terminal lain:
+Fine-tune satu kandidat saja:
 
 ```bash
-python pantau_cv.py
+python -m stair_fusion_atto.finetune_d435.train \
+  --init ../bobot/kandidat/banding5kecil/cnx_atto_in1k/pra/best.pt \
+  --output ../bobot/kandidat/final_d435/cnx_atto_in1k \
+  --latih 013859 105633 105802 105840 110530 --validasi 110152 --bagi \
+  --epochs 60 --patience 15 --bg-weight 2.0 --tread-weight 1.6 --depth-dropout 0.2
 ```
 
-Untuk hanya membuat dan memeriksa pembagian fold:
+## Pengukuran
 
-```bash
-python train_tangga_cv.py --folds 5 --prepare-only
-```
+| Skrip | Fungsi |
+| --- | --- |
+| `banding_arsitektur.py` | Dice, IoU, F1 garis, latensi per kandidat |
+| `banding_stabilitas.py` | frame yang kehilangan kelas dan getar antar-frame |
+| `ukur_lantai.py` | positif-palsu lantai pada fase mendekat |
+| `banding_geometri.py` | tinggi riser dan panjang tapakan dari bidang RANSAC |
+| `banding_geometri_garis.py` | geometri dari garis 3-D dengan pelacak |
+| `ukur_latensi.py` | porsi latensi tiap bagian model |
+| `video_berdampingan.py` | video perbandingan semua kandidat dalam satu frame |
+| `lembar_label.py` | lembar kontak untuk memeriksa label |
+| `gambar_dataset.py` | gambar contoh dataset primer dan sekunder |
+| `susun_proposal.py` | menyusun dokumen proposal dari CSV hasil |
 
-Bobot tiap fold tersimpan di `../bobot/kandidat/tangga_grouped_cv/`.
-Kelas tetap `0: tapakan` dan `1: bidang_tegak`.
-
-Untuk uji video RGB-D dengan mask temporal, validasi bidang 3-D, dan ID
-permukaan persisten:
-
-```bash
-python inference/uji_tangga_bytetrack_depth.py \
-  --bag ../dataset/studio_rgbd/rekaman/tangga_naik/TANGGA_NAIK_20260830_110530/source/raw.db3 \
-  --model ../bobot/kandidat/tangga_grouped_cv/fold_0/weights/best.pt \
-  --out ../hasil/aktif/stair_perception_fold0 \
-  --device 0
-```
-
-ByteTrack dipakai sebagai cue gerak 2-D, tetapi bukan satu-satunya pemilik ID.
-Sistem menggabungkannya dengan IoU mask, posisi gambar, depth, normal bidang,
-dan deduplikasi proposal. `track_id` tetap milik track permukaan, sedangkan
-`step_index` hanya urutan bawah-ke-atas yang dapat berubah ketika kamera bergerak.
-
-Untuk pengujian jujur pada video `TANGGA_NAIK_20260830_110530`, pakai bobot
-`fold_0`: video ini berada di validasi fold 0 dan tidak ikut melatih fold 0.
-Jangan memakai fold 1–4 untuk mengklaim generalisasi pada video yang sama,
-karena video tersebut masuk ke data train pada fold-fold itu.
-
-Hasil utama:
-
-- `annotated_clean.mp4`: kartu Poppins semi-transparan di pusat bidang;
-- `annotated_minimal.mp4`: titik dan tulisan saja, tanpa fill mask tangga;
-- `annotated_stable.mp4`: panel proposal mentah dan hasil stabil untuk audit;
-- `tracks.csv`, `measurements.csv`, `observations.csv`, dan `frames.csv`;
-- `summary.json` dan `run.json` untuk konfigurasi serta metrik.
-
-Ambang dapat diubah di `inference/stair_perception.yaml`. Status `EST` adalah
-estimasi awal pada sekitar 0,60–2,50 m, `LIVE` adalah hasil pada zona terbaik
-0,75–1,20 m, dan `LOCK` mempertahankan hasil LIVE saat track/depth hilang
-singkat. Bidang tegak muncul lebih awal sebagai `RISER AHEAD` tanpa mengarang
-H/R. Model saat ini hanya mempunyai kelas tangga; model masa depan dengan kelas
-seperti batu akan dirender dengan full segmentation untuk kelas non-tangga.
+Kelas: `0 latar`, `1 bidang tegak`, `2 tapakan`.
