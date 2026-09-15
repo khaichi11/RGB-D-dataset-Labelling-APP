@@ -2817,7 +2817,8 @@ class Studio(tk.Tk):
         # OpenCV BGR. Training juga membaca color_raw.png lewat OpenCV (BGR).
         # Jalur batch memakai pengusul yang sama dengan jalur UI; kalau
         # berbeda, label hasil batch dan label hasil klik tidak sebanding.
-        hasil = usulkan_convnext_depth(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), depth)
+        # depth Z16 mentah; k membawa depth_scale agar model menerima meter.
+        hasil = usulkan_convnext_depth(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), depth, k)
         depth_info = usulkan_segmentasi(depth, k)
         rapih = rapikan_sam2(rgb, {"tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"]},
                               {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
@@ -3179,8 +3180,10 @@ class Studio(tk.Tk):
                 # memverifikasi dengan kedalaman sesudahnya. Lantai dan tapakan
                 # sama-sama bidang mendatar bertekstur mirip; yang membedakannya
                 # letak dalam ruang, dan itu hanya ada pada kedalaman.
+                # Kanvas menyimpan depth Z16 mentah; intrinsics membawa
+                # depth_scale agar model menerima kedalaman dalam meter.
                 hasil = usulkan_convnext_depth(cv2.cvtColor(self.kanvas.rgb, cv2.COLOR_RGB2BGR),
-                                               self.kanvas.depth)
+                                               self.kanvas.depth, self._intrinsics(info))
                 depth_info = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
                 rapih = rapikan_sam2(self.kanvas.rgb, {
                     "tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"],

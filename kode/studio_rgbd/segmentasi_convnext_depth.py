@@ -1,59 +1,56 @@
-"""Usulan label dari model RGB-D ConvNeXt yang dilatih pada proyek ini.
+"""Usulan label otomatis dari model RGB-D ConvNeXt yang dilatih pada proyek ini.
 
-Menggantikan pengusul berbasis RF-DETR. Perbedaannya bukan sekadar berganti
-model: pengusul lama bekerja dari citra warna lalu memakai kedalaman untuk
-memverifikasi sesudahnya, sedangkan model ini menerima kedalaman sebagai KANAL
-MASUKAN. Perbedaan letak itu penting karena lantai dan tapakan sama-sama bidang
-mendatar bertekstur mirip; yang membedakannya adalah letak dalam ruang, dan
-informasi itu hanya ada pada kedalaman.
+Model menerima kedalaman sebagai KANAL MASUKAN, bukan hanya untuk memverifikasi
+sesudahnya. Itu penting karena lantai dan tapakan sama-sama bidang mendatar
+bertekstur mirip; yang membedakannya adalah letak dalam ruang, dan informasi itu
+hanya ada pada kedalaman.
 
-Antarmukanya dibuat sama persis dengan `segmentasi_rfdetr_depth.usulkan`
-sehingga alur penghalusan SAM 2 dan verifikasi kedalaman yang sudah ada tetap
-dipakai tanpa perubahan.
+Antarmuka `usulkan` sama dengan pengusul lain di Studio, sehingga penghalusan
+SAM 2 dan verifikasi kedalaman yang sudah ada tetap dipakai tanpa perubahan.
 
-Bobot yang dipakai adalah hasil pra-latih dataset publik saja, tanpa fine-tune
-pada rekaman D435. Alasannya bukan teknis melainkan metodologis: memakai model
-yang dilatih pada label yang sedang diperiksa untuk mengusulkan label baru
-membuat model mengukuhkan kesalahannya sendiri, dan kesalahan itu menjadi makin
-sulit terlihat karena usulan dan acuan berasal dari sumber yang sama.
+Perubahan 15 September 2026:
+
+- **Model.** Pengusul kini memakai checkpoint rujukan aplikasi aktif
+  (`Train-RGB-D-Model/aplikasi_tangga/bobot/final_d435/cnx_atto_in1k_384.pt`,
+  ConvNeXt V2 Atto RGB-D, fine-tune D435, masukan letterbox 384) lewat
+  `rgbd_convnext.konfigurasi_utama`. Sebelumnya dipakai bobot pra-latih publik
+  saja (Femto 512). Peta kelas diperbesar dari logit secara bilinear, sama
+  dengan renderer dan evaluasi aplikasi.
+- **Satuan kedalaman.** Studio mengirim depth Z16 mentah. Versi lama
+  memperlakukannya sebagai meter, sehingga setelah dinormalisasi ke 0,2–4,0 m
+  semua piksel sah bernilai 1 dan kanal kedalaman praktis tidak terpakai. Kini
+  Z16 dikonversi ke meter dengan `depth_scale`.
+
+Diukur pada 15 frame rekaman 20260914_212135 dan _211803 yang sudah diperiksa
+manual (Dice rerata riser dan tread, peta kelas sebelum SAM 2): pengusul lama
+0,22; bobot lama dengan kedalaman benar 0,76; pengusul baru 0,80.
+
+Catatan metodologis: model rujukan dilatih pada label D435 yang ada. Usulannya
+dapat mewarisi kebiasaan label itu, jadi setiap usulan tetap wajib diperiksa
+dan ditandai `diperiksa_manual` sebelum dipakai melatih.
+
+`cari_bobot()` dan `KANDIDAT_BOBOT` dipertahankan untuk alat uji berkas
+(`uji_berkas.py`), yang memuat checkpoint dengan kode model lama.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 _MODEL = None
-_DEV = None
 
-# Urutan pencarian bobot. Yang dipakai adalah bobot PRA-LATIH DATASET PUBLIK
-# saja, bukan yang sudah di-fine-tune pada rekaman D435. Ini pilihan sadar
-# pemilik proyek: label D435 masih dalam proses pemeriksaan, dan memakai model
-# yang dilatih pada label itu untuk mengusulkan label baru berarti model
-# mengukuhkan kesalahannya sendiri.
-#
-# Harga pilihan ini terukur pada rekaman 105348 yang tidak pernah dilatih:
-#
-#   pra-latih publik saja        Dice 0,7234
-#   setelah fine-tune D435       Dice 0,8402  (0,9358 pada frame tervalidasi)
-#
-# Jadi usulan akan lebih kasar dan perlu lebih banyak koreksi tangan. Setelah
-# pemeriksaan label selesai, tukar ke jalur ft/best.pt untuk mengembalikan
-# selisih itu.
-#
-# Femto didahulukan karena Dice-nya tertinggi di antara bobot pra-latih
-# (0,7234 melawan 0,7126 dan 0,7118). Dice yang dipakai sebagai penentu, bukan
-# F1 garis, sebab pelabel membentuk poligon dari peta kelas dan tidak memakai
-# keluaran kepala garis sama sekali.
+# Bobot lama untuk uji_berkas.py (kode model stair_fusion_atto). Tidak dipakai pengusul label.
 KANDIDAT_BOBOT = [
     ('ConvNeXt Femto (pra-latih publik)', 'bobot/kandidat/banding4/convnext_femto/pra/best.pt'),
     ('ConvNeXt Atto ImageNet (pra-latih publik)', 'bobot/kandidat/banding5kecil/cnx_atto_in1k/pra/best.pt'),
     ('ConvNeXt Atto (pra-latih publik)', 'bobot/kandidat/banding4/convnext_atto/pra/best.pt'),
 ]
-MIN_M, MAKS_M = 0.2, 4.0
-UKURAN = 512
-BG, RISER, TREAD = 0, 1, 2
+NAMA_BOBOT_USULAN = 'ConvNeXt V2 Atto RGB-D 384 (fine-tune D435, aplikasi_tangga)'
+SKALA_DEPTH_D435 = 0.001            # meter per satuan Z16 bila frame.json tidak menyertakannya
+RISER, TREAD = 1, 2
 
 
 def akar_proyek() -> Path:
@@ -61,59 +58,61 @@ def akar_proyek() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def akar_aplikasi() -> Path:
+    """Folder aplikasi aktif yang memuat paket `rgbd_convnext` dan checkpoint rujukan."""
+    return akar_proyek() / 'Train-RGB-D-Model' / 'aplikasi_tangga'
+
+
 def cari_bobot() -> tuple[str, Path]:
+    """Bobot lama untuk uji_berkas.py; bukan bobot pengusul label."""
     akar = akar_proyek()
     for nama, rel in KANDIDAT_BOBOT:
         p = akar / rel
         if p.exists():
             return nama, p
-    raise FileNotFoundError(
-        'Bobot ConvNeXt belum tersedia. Yang dicari, berurutan:\n  '
-        + '\n  '.join(rel for _, rel in KANDIDAT_BOBOT)
-        + '\n\nVarian ImageNet sedang dilatih; sampai selesai, pengusul ini '
-          'belum dapat dipakai.')
+    raise FileNotFoundError('Bobot ConvNeXt lama tidak ditemukan. Yang dicari, berurutan:\n  '
+                            + '\n  '.join(rel for _, rel in KANDIDAT_BOBOT))
+
+
+def bobot_usulan() -> Path:
+    """Checkpoint rujukan aplikasi yang dipakai pengusul label."""
+    p = akar_aplikasi() / 'bobot' / 'final_d435' / 'cnx_atto_in1k_384.pt'
+    if not p.exists():
+        raise FileNotFoundError(f'Checkpoint pengusul label tidak ditemukan:\n  {p}')
+    return p
 
 
 def _muat():
     """Muat model sekali lalu simpan; memuat ulang tiap frame terlalu lambat."""
-    global _MODEL, _DEV
-    if _MODEL is not None:
-        return _MODEL, _DEV
-    import torch
-    import sys
-    akar = akar_proyek() / 'kode'
-    if str(akar) not in sys.path:
-        sys.path.insert(0, str(akar))
-    from stair_fusion_atto.model_kandidat import (StairFusionAttoKandidat,
-                                                  stride_dari_checkpoint,
-                                                  varian_dari_checkpoint)
-    nama, jalur = cari_bobot()
-    ckpt = torch.load(jalur, map_location='cpu', weights_only=False)
-    dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    m = StairFusionAttoKandidat(line_kernel=tuple(ckpt.get('kernel', (5, 5))),
-                                varian=varian_dari_checkpoint(ckpt),
-                                semantic_stride=stride_dari_checkpoint(ckpt),
-                                timm_pretrained=False).to(dev).eval()
-    m.load_state_dict(ckpt['model'])
-    _MODEL, _DEV = (m, nama), dev
-    return _MODEL, _DEV
+    global _MODEL
+    if _MODEL is None:
+        jalur = bobot_usulan()
+        akar = str(akar_aplikasi())
+        if akar not in sys.path:
+            sys.path.insert(0, akar)
+        from rgbd_convnext.konfigurasi_utama import muat_model_utama
+        _MODEL = muat_model_utama(jalur)
+    return _MODEL
 
 
 def hangatkan() -> str:
     """Muat model lebih awal agar klik pertama tidak terasa lambat."""
-    (m, nama), _ = _muat()
-    return nama
+    _muat()
+    return NAMA_BOBOT_USULAN
 
 
-def _letterbox(a: np.ndarray, interp: int) -> tuple[np.ndarray, float, int, int]:
-    h, w = a.shape[:2]
-    s = UKURAN / max(h, w)
-    nw, nh = int(round(w * s)), int(round(h * s))
-    kecil = cv2.resize(a, (nw, nh), interpolation=interp)
-    dx, dy = (UKURAN - nw) // 2, (UKURAN - nh) // 2
-    out = np.zeros((UKURAN, UKURAN) + a.shape[2:], a.dtype)
-    out[dy:dy + nh, dx:dx + nw] = kecil
-    return out, s, dx, dy
+def kedalaman_meter(depth: np.ndarray, k: dict | None = None, skala_depth: float | None = None) -> np.ndarray:
+    """Ubah kedalaman ke meter.
+
+    Urutan penentu skala: `skala_depth` bila diberikan, lalu `k['depth_scale']`,
+    lalu anggapan Z16 D435 (0,001 m) bila larik bertipe bilangan bulat. Larik
+    pecahan tanpa skala dianggap sudah dalam meter.
+    """
+    if skala_depth is None and k is not None and 'depth_scale' in k:
+        skala_depth = float(k['depth_scale'])
+    if skala_depth is None:
+        skala_depth = SKALA_DEPTH_D435 if np.issubdtype(depth.dtype, np.integer) else 1.0
+    return depth.astype(np.float32) * float(skala_depth)
 
 
 def _bersihkan(biner: np.ndarray, kernel: int = 7) -> np.ndarray:
@@ -132,21 +131,10 @@ def _poligon(biner: np.ndarray, luas_min: int = 2500, rasio_min: float = 0.08,
              epsilon: float = 1.5):
     """Kontur luar tiap komponen, disederhanakan agar mudah disunting tangan.
 
-    epsilon 1,5 piksel dipilih dari pengukuran pertukaran, bukan dari kebiasaan.
-    Poligonisasi tidak pernah mewakili peta kelas dengan sempurna: lubang di
-    dalam permukaan ikut tertutup dan batas bergerigi diluruskan. Terukur pada
-    delapan frame, IoU poligon terhadap peta kelas asli adalah 0,9718 pada
-    epsilon 0,5 dengan 95 titik per poligon, dan 0,9485 pada epsilon 3,0 dengan
-    14 titik. Nilai 1,5 memberi 0,9640 dengan 40 titik -- memulihkan sebagian
-    ketepatan yang hilang pada 2,0 tanpa membuat penyuntingan tangan berat.
-
-    Dua penyaring dipakai bersama, karena masing-masing sendirian tidak cukup.
-    Ambang mutlak 2500 piksel membuang bercak yang jelas terlalu kecil untuk
-    menjadi permukaan anak tangga; terukur pada 84 frame, ambang lama 400
-    piksel meloloskan 56 komponen di bawah 5000 piksel yang tampak sebagai
-    bercak di dalam permukaan besar. Ambang nisbi 8% dari komponen terbesar
-    sekelas menangani frame jarak jauh, tempat seluruh permukaan mengecil
-    sehingga ambang mutlak saja akan membuang anak tangga yang sah.
+    epsilon 1,5 piksel menyeimbangkan ketepatan poligon dan jumlah titik yang
+    harus disunting. Ambang mutlak 2500 piksel membuang bercak kecil; ambang
+    nisbi 8% dari komponen terbesar sekelas menangani frame jarak jauh, tempat
+    seluruh permukaan mengecil.
     """
     biner = _bersihkan(biner)
     kontur, _ = cv2.findContours(biner, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -165,40 +153,25 @@ def _poligon(biner: np.ndarray, luas_min: int = 2500, rasio_min: float = 0.08,
 
 
 def usulkan(rgb_bgr: np.ndarray, depth: np.ndarray, k: dict | None = None,
-            skala_depth: float = 1.0) -> dict:
+            skala_depth: float | None = None) -> dict:
     """Usulkan poligon tapakan dan bidang tegak dari citra dan kedalaman.
 
-    rgb_bgr : citra BGR resolusi kamera
-    depth   : kedalaman resolusi sama; satuan meter bila skala_depth = 1,
-              atau Z16 mentah bila skala_depth diisi depth_scale kamera
+    rgb_bgr : citra BGR resolusi kamera (848 × 480 pada D435)
+    depth   : kedalaman selaras warna, resolusi sama; Z16 mentah atau meter
+              (lihat :func:`kedalaman_meter`)
+    k       : intrinsik frame dari Studio; kunci `depth_scale` dipakai bila ada
     """
-    import torch
-    (model, nama_bobot), dev = _muat()
-    h, w = rgb_bgr.shape[:2]
-    dm = depth.astype(np.float32) * float(skala_depth)
+    mu = _muat()
+    akar = str(akar_aplikasi())
+    if akar not in sys.path:
+        sys.path.insert(0, akar)
+    from rgbd_convnext.konfigurasi_utama import prediksi_kelas
 
-    rgb_l, s, dx, dy = _letterbox(rgb_bgr, cv2.INTER_LINEAR)
-    norm = np.clip((dm - MIN_M) / (MAKS_M - MIN_M), 0, 1).astype(np.float32)
-    sah = (dm > 0).astype(np.float32)
-    norm_l, _, _, _ = _letterbox(norm, cv2.INTER_NEAREST)
-    sah_l, _, _, _ = _letterbox(sah, cv2.INTER_NEAREST)
-
-    x_rgb = cv2.cvtColor(rgb_l, cv2.COLOR_BGR2RGB).transpose(2, 0, 1).astype(np.float32) / 127.5 - 1
-    x_dep = np.stack([norm_l * 2 - 1, sah_l]).astype(np.float32)
-    with torch.no_grad():
-        out = model(torch.from_numpy(x_rgb)[None].to(dev),
-                    torch.from_numpy(x_dep)[None].to(dev))
-    sem = out['semantic'].argmax(1)[0].cpu().numpy().astype(np.uint8)
-
-    # Buka letterbox lalu kembalikan ke resolusi kamera, bukan sebaliknya:
-    # menskalakan poligon setelah dibentuk pada 512 menumpuk galat pembulatan.
-    nh, nw = int(round(h * s)), int(round(w * s))
-    inti = sem[dy:dy + nh, dx:dx + nw]
-    sem_penuh = cv2.resize(inti, (w, h), interpolation=cv2.INTER_NEAREST)
-
+    meter = kedalaman_meter(depth, k, skala_depth)
+    peta_kelas = prediksi_kelas(mu, rgb_bgr, meter)
     return {
-        'tapakan': _poligon(sem_penuh == TREAD),
-        'bidang_tegak': _poligon(sem_penuh == RISER),
-        'sumber': f'{nama_bobot} (RGB-D, kedalaman sebagai masukan model)',
-        'peta_kelas': sem_penuh,
+        'tapakan': _poligon(peta_kelas == TREAD),
+        'bidang_tegak': _poligon(peta_kelas == RISER),
+        'sumber': f'{NAMA_BOBOT_USULAN} (kedalaman sebagai masukan model)',
+        'peta_kelas': peta_kelas,
     }
