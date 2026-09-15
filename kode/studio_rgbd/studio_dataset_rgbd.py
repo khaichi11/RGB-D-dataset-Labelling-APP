@@ -2523,11 +2523,18 @@ class Studio(tk.Tk):
 
     @staticmethod
     def _punya_label(frame: Path) -> bool:
-        """Draft maupun label jadi bukti frame pernah disentuh pengguna."""
+        """Draft maupun label jadi bukti frame pernah disentuh pengguna.
+
+        Frame yang ditandai diperiksa tanpa poligon juga dihitung. Itu contoh
+        latar yang disengaja (lantai atau bordes tanpa tangga), bukan frame
+        yang belum dilabeli, sehingga tidak boleh ikut dibuang.
+        """
         label = frame / "label_yolo_seg.txt"
         if label.exists() and label.read_text(encoding="utf-8").strip():
             return True
         draft = baca_json(frame / "label_draft.json", {})
+        if draft.get("diperiksa_manual"):
+            return True
         return any(poly for daftar in draft.get("poligon", {}).values() for poly in daftar)
 
     def buang_frame_belum_dilabeli(self):
@@ -3014,12 +3021,22 @@ class Studio(tk.Tk):
             return
         j = self.label_path / "label_draft.json"
         d = baca_json(j, {})
-        if not d:
-            return
+        baru = not d
+        if baru:
+            if not nilai:
+                return
+            # Frame tanpa draft, misalnya lantai atau bordes tanpa tangga yang
+            # tidak mendapat usulan. Draft dibuat supaya penanda periksa punya
+            # tempat dan frame dapat disimpan sebagai contoh latar.
+            d = {"versi": 2, "disimpan_iso": datetime.now().isoformat(timespec="seconds"),
+                 "poligon": self.kanvas.poligon}
         d["diperiksa_manual"] = bool(nilai)
         d["otomatis"] = not bool(nilai)
         d["diperiksa_iso"] = datetime.now().isoformat(timespec="seconds") if nilai else None
         tulis_json(j, d)
+        # Frame tanpa poligon: mask kosong ditulis atau dicabut mengikuti penanda.
+        if baru or not self._ada_poligon():
+            self.simpan_label(senyap=True)
         self.perbarui_lencana_periksa()
         if not senyap:
             self.status.set("Frame ditandai SUDAH DIPERIKSA manual." if nilai
@@ -3035,7 +3052,9 @@ class Studio(tk.Tk):
         if not self.label_path:
             lbl.config(text="—  belum ada frame dipilih", bg=PANEL, fg=MUTED); return
         if self.status_periksa():
-            lbl.config(text="✔  SUDAH DIPERIKSA MANUAL", bg="#DCEFD8", fg="#1E5B2A")
+            teks = ("✔  SUDAH DIPERIKSA MANUAL" if self._ada_poligon()
+                    else "✔  DIPERIKSA • tanpa tangga (contoh latar)")
+            lbl.config(text=teks, bg="#DCEFD8", fg="#1E5B2A")
         else:
             lbl.config(text="⚠  masih usulan otomatis", bg="#FBEEDA", fg="#8A5A12")
 
@@ -3060,9 +3079,14 @@ class Studio(tk.Tk):
             "poligon": self.kanvas.poligon,
         })
         self.perbarui_lencana_periksa()
-        if any(len(poly) >= 3 for daftar in self.kanvas.poligon.values() for poly in daftar):
+        # Frame diperiksa yang poligonnya dihapus semua ikut disinkronkan.
+        # Tanpa ini mask lama yang berisi tertinggal dan tetap dipakai pelatihan.
+        if diperiksa or self._ada_poligon():
             self.simpan_label(senyap=True)
         self.status.set(f"Draft mask otomatis disimpan: {self.label_path.name}")
+
+    def _ada_poligon(self) -> bool:
+        return any(len(poly) >= 3 for daftar in self.kanvas.poligon.values() for poly in daftar)
 
     def _lapor_blok(self, n_poly: int, n_titik: int) -> None:
         bagian = []
@@ -3276,8 +3300,27 @@ class Studio(tk.Tk):
                 norm = " ".join(f"{v:.6f}" for pt in poly for v in (pt[0]/w, pt[1]/h))
                 baris.append(f"{cls} {norm}")
         if not baris:
-            if not senyap:
-                messagebox.showwarning("Poligon belum cukup", "Belum ada poligon dengan minimal tiga titik.", parent=self)
+            # Frame tanpa poligon. Mask kosong sah sebagai contoh latar (lantai
+            # atau bordes tanpa tangga) hanya bila manusia sudah menandainya
+            # diperiksa. Tanpa penanda itu tidak ada yang ditulis, supaya frame
+            # yang belum dilabeli tidak diam-diam menjadi data latih latar:
+            # pelatihan memakai setiap frame yang mask PNG-nya lengkap.
+            if self.status_periksa():
+                (self.label_path/"label_yolo_seg.txt").write_text("", encoding="utf-8")
+                kosong = np.zeros((h, w), np.uint8)
+                cv2.imwrite(str(self.label_path/"mask_objek.png"), kosong)
+                cv2.imwrite(str(self.label_path/"mask_acuan.png"), kosong)
+                if not senyap:
+                    self.status.set(f"{self.label_path.name}: tanpa tangga, disimpan sebagai contoh latar (mask kosong).")
+            else:
+                self._cabut_mask_kosong()
+                if not senyap:
+                    messagebox.showwarning(
+                        "Poligon belum cukup",
+                        "Belum ada poligon dengan minimal tiga titik.\n\n"
+                        "Bila frame ini memang tanpa tangga (misalnya hanya lantai atau bordes), "
+                        "tandai frame sudah diperiksa manual agar tersimpan sebagai contoh latar.",
+                        parent=self)
             return
         (self.label_path/"label_yolo_seg.txt").write_text("\n".join(baris) + "\n", encoding="utf-8")
         # PNG SELALU ditulis, termasuk ketika kelasnya kosong. Versi sebelumnya
@@ -3296,6 +3339,25 @@ class Studio(tk.Tk):
         rinci = ", ".join(f"{k}={v}" for k, v in jumlah.items())
         if not senyap:
             self.status.set(f"Label disimpan untuk {self.label_path.name}: {len(baris)} instance ({rinci}).")
+
+    def _cabut_mask_kosong(self) -> None:
+        """Hapus mask kosong setelah penanda periksa frame tanpa tangga dicabut.
+
+        Hanya dijalankan bila label YOLO kosong dan setiap mask PNG seluruhnya
+        nol, sehingga label berisi tidak pernah hilang lewat jalur ini.
+        """
+        p = self.label_path
+        label = p / "label_yolo_seg.txt"
+        masker = [p / "mask_objek.png", p / "mask_acuan.png"]
+        if label.exists() and label.read_text(encoding="utf-8").strip():
+            return
+        for f in masker:
+            if f.exists():
+                m = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+                if m is None or m.any():
+                    return
+        for f in masker + [label]:
+            f.unlink(missing_ok=True)
 
     def bangun_yolo(self):
         """Buat turunan siap Ultralytics tanpa memindahkan/menghapus raw frame.
