@@ -332,6 +332,10 @@ class KanvasLabel(tk.Canvas):
         self._blok_awal = None
         self._blok_kotak = None
         self.lapor_blok = None
+        # Alat tarik tanpa modifier, untuk papan sentuh yang sulit menahan
+        # Ctrl atau Shift sambil menarik satu jari.
+        self.alat = "normal"      # "normal" | "geser" | "blok"
+        self.touchpad = True      # gulir dua jari menggeser; Ctrl+gulir memperbesar
         self._seleksi_kotak = None
         self.titik_dipilih: set[tuple[str, int, int]] = set()
         self.magnet_aktif = True
@@ -362,9 +366,27 @@ class KanvasLabel(tk.Canvas):
         self.bind("<Control-Button-1>", self.mulai_blok_hapus)
         self.bind("<Control-B1-Motion>", self.ubah_blok_hapus)
         self.bind("<Control-ButtonRelease-1>", self.selesai_blok_hapus)
-        self.bind("<MouseWheel>", self.zoom)
-        self.bind("<Button-4>", lambda e: self.zoom_langkah(e, 1.15))
-        self.bind("<Button-5>", lambda e: self.zoom_langkah(e, 1 / 1.15))
+        # Gulir dua jari menggeser pada mode touchpad dan memperbesar pada mode
+        # tetikus. Ctrl+gulir selalu memperbesar, karena gerakan cubit papan
+        # sentuh dikirim sebagai Ctrl+gulir. Gulir mendatar memakai Button-6/7.
+        self.bind("<MouseWheel>", lambda e: self.roda(e, 1 if e.delta > 0 else -1))
+        self.bind("<Button-4>", lambda e: self.roda(e, 1))
+        self.bind("<Button-5>", lambda e: self.roda(e, -1))
+        self.bind("<Control-MouseWheel>", lambda e: self.zoom_langkah(e, 1.15 if e.delta > 0 else 1 / 1.15))
+        self.bind("<Control-Button-4>", lambda e: self.zoom_langkah(e, 1.15))
+        self.bind("<Control-Button-5>", lambda e: self.zoom_langkah(e, 1 / 1.15))
+        self.bind("<Shift-MouseWheel>", lambda e: self.geser_layar(110 if e.delta > 0 else -110, 0))
+        self.bind("<Shift-Button-4>", lambda e: self.geser_layar(110, 0))
+        self.bind("<Shift-Button-5>", lambda e: self.geser_layar(-110, 0))
+        try:    # Tk 8.6 belum mengenal tombol gulir mendatar; Shift+gulir tetap ada
+            self.bind("<Button-6>", lambda e: self.geser_layar(110, 0))
+            self.bind("<Button-7>", lambda e: self.geser_layar(-110, 0))
+        except tk.TclError:
+            pass
+        # Papan sentuh umumnya tidak punya tombol tengah, jadi Alt+tarik juga
+        # menggeser gambar.
+        self.bind("<Alt-Button-1>", self.pan_mulai)
+        self.bind("<Alt-B1-Motion>", self.pan)
         self.bind("<Control-z>", lambda _e: self.undo_riwayat())
         self.bind("<Control-Z>", lambda _e: self.redo_riwayat())
         self.bind("<Control-Shift-Z>", lambda _e: self.redo_riwayat())
@@ -757,6 +779,11 @@ class KanvasLabel(tk.Canvas):
         return (gx, gy) if 0 <= gx < w and 0 <= gy < h else None
 
     def tambah(self, e):
+        # Alat tarik yang sedang aktif menggantikan tugas modifier.
+        if self.alat == "geser":
+            return self.pan_mulai(e)
+        if self.alat == "blok":
+            return self.mulai_blok_hapus(e)
         dekat = self._titik_dekat(e.x, e.y, nama=self.mode)
         if dekat is not None:
             nama, ip, it = dekat
@@ -808,6 +835,15 @@ class KanvasLabel(tk.Canvas):
             self.catat_riwayat(); self.render(); self.on_change()
 
     def geser_titik(self, e):
+        if self.alat == "geser":
+            return self.pan(e)
+        # Shift atau Ctrl dapat dilepas sebelum tombol tetikus, sehingga sisa
+        # tarikan jatuh ke binding polos ini. Tarikan yang sedang berjalan
+        # diteruskan ke pemiliknya, bukan diperlakukan sebagai geser titik.
+        if self._blok_awal is not None:
+            return self.ubah_blok_hapus(e)
+        if self._seleksi_awal is not None:
+            return self.ubah_seleksi_titik(e)
         if self._drag_titik is None:
             return
         p = self.canvas_ke_gambar(e.x, e.y)
@@ -835,6 +871,16 @@ class KanvasLabel(tk.Canvas):
             self.render_nanti()
 
     def selesai_geser_titik(self, _e=None):
+        # Pelepasan tombol tetikus sesudah Shift atau Ctrl dilepas tidak pernah
+        # sampai ke handler bermodifier. Tanpa penerusan ini kotak tertinggal di
+        # kanvas, seleksi tidak jadi, dan blok hapus tampak tidak bekerja.
+        if _e is not None and self._blok_awal is not None:
+            return self.selesai_blok_hapus(_e)
+        if _e is not None and self._seleksi_awal is not None:
+            return self.selesai_seleksi_titik(_e)
+        if self.alat == "geser":
+            self._drag = None
+            return "break"
         if self._drag_titik is not None:
             drag = self._drag_titik
             # Saat titik digeser melewati mask lain, nomor tetap mengikuti
@@ -873,6 +919,8 @@ class KanvasLabel(tk.Canvas):
             for it, (px, py) in enumerate(poly)
             if kiri <= px * self.scale + self.ox <= kanan and atas <= py * self.scale + self.oy <= bawah
         }
+        if self._seleksi_kotak is not None:
+            self.delete(self._seleksi_kotak)   # tanpa ini kotak tertinggal menumpuk di kanvas
         self._seleksi_awal = self._seleksi_kotak = None
         self.render()
         return "break"
@@ -1053,6 +1101,27 @@ class KanvasLabel(tk.Canvas):
             # viewport. Selama drag, Canvas tetap memakai geser native cepat.
             self.render_nanti(80)
 
+    def roda(self, e, arah: int):
+        """Gulir: menggeser pada mode touchpad, memperbesar pada mode tetikus."""
+        if self.touchpad:
+            return self.geser_layar(0, arah * 110)
+        return self.zoom_langkah(e, 1.15 if arah > 0 else 1 / 1.15)
+
+    def geser_layar(self, dx: int, dy: int):
+        """Geser gambar sejauh dx, dy piksel layar lewat jalur cepat Canvas."""
+        if self.rgb is None:
+            return "break"
+        self.ox, self.oy = self.ox + dx, self.oy + dy
+        self.move("gambar", dx, dy); self.move("overlay", dx, dy)
+        self._canvas_background_key = None
+        self.render_nanti(80)
+        return "break"
+
+    def set_alat(self, nama: str) -> None:
+        """Pilih alat tarik; kursor ikut berubah supaya keadaannya terlihat."""
+        self.alat = nama if nama in ("normal", "geser", "blok") else "normal"
+        self.config(cursor={"geser": "fleur", "blok": "X_cursor"}.get(self.alat, ""))
+
 
 class Studio(tk.Tk):
     def __init__(self, args):
@@ -1122,6 +1191,8 @@ class Studio(tk.Tk):
         # Ini menghindari frame berganti saat sedang menyunting titik.
         self._mode_label_dipilih = False
         self.ukur_status = StringVar(value="Tandai sisi tinggi/riser (merah) dan permukaan datar/tapakan (biru).")
+        self.alat_label = StringVar(value="normal")
+        self.mode_touchpad = BooleanVar(value=bool(preferensi.get("mode_touchpad", True)))
         self.tampil_sampah = BooleanVar(value=False)
         self.tampil_sampah_frame = BooleanVar(value=False)
         self._siapkan_root(); self._buat_ui()
@@ -1394,6 +1465,7 @@ class Studio(tk.Tk):
         left = tk.Frame(f, bg=BG); left.pack(side="left", fill="both", expand=True, padx=(0, 12))
         self.kanvas = KanvasLabel(left, self.hitung_ukuran, self._aktif_mask_berubah); self.kanvas.pack(fill="both", expand=True)
         self.kanvas.lapor_blok = self._lapor_blok
+        self.kanvas.touchpad = bool(self.mode_touchpad.get())
         # Ctrl+C menyalin nama frame yang sedang dibuka. Berguna saat melaporkan
         # frame bermasalah: namanya cukup panjang untuk salah ketik.
         self.kanvas.bind("<Control-c>", lambda _e: self.salin_nama_frame())
@@ -1448,6 +1520,16 @@ class Studio(tk.Tk):
         tk.Scale(edit_i, from_=0, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
                  command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
+        alat_f = tk.Frame(edit_i, bg=PANEL); alat_f.pack(fill="x", pady=(4, 0))
+        baris_alat = tk.Frame(alat_f, bg=PANEL); baris_alat.pack(fill="x")
+        for nilai, teks in (("normal", "✏ Titik"), ("geser", "✋ Geser (G)"), ("blok", "▭ Blok (X)")):
+            tk.Radiobutton(baris_alat, text=teks, variable=self.alat_label, value=nilai, indicatoron=False,
+                           command=lambda: self.pilih_alat(self.alat_label.get(), dari_tombol=True),
+                           bg="#FFF9F4", selectcolor="#E8DDD5", activebackground="#E8DDD5", fg=INK,
+                           relief="flat", pady=5, font=("Segoe UI", 8)).pack(side="left", expand=True, fill="x", padx=1)
+        tk.Checkbutton(alat_f, text="Mode touchpad: gulir = geser, Ctrl+gulir = zoom",
+                       variable=self.mode_touchpad, command=self.ganti_mode_touchpad, bg=PANEL, fg=INK,
+                       selectcolor=PANEL, activebackground=PANEL, font=("Segoe UI", 8)).pack(anchor="w")
         magnet = tk.Frame(edit_i, bg=PANEL); magnet.pack(fill="x", pady=(1, 0))
         tk.Checkbutton(magnet, text="Magnet titik & garis", variable=self.magnet_titik,
                        command=self.ganti_magnet_titik, bg=PANEL, fg=INK, selectcolor=PANEL,
@@ -1462,8 +1544,9 @@ class Studio(tk.Tk):
                                         fg=MUTED, font=("Segoe UI", 9, "bold"), pady=5)
         self.lencana_periksa.pack(fill="x", pady=(8, 2))
         self.tombol(otomatis_i, "✔ Tandai sudah diperiksa manual", self.toggle_periksa, "#7FA96B").pack(fill="x", pady=(0, 2))
-        tk.Label(otomatis_i, text="Ctrl+tarik blok hapus • Shift+tarik pilih titik • "
-                                  "Ctrl+C nama frame • Ctrl+Shift+C jalur lengkap",
+        tk.Label(otomatis_i, text="X lalu tarik = blok hapus (atau Ctrl+tarik) • G lalu tarik = geser "
+                                  "(atau Alt+tarik / tombol tengah) • Esc kembali ke titik • "
+                                  "Shift+tarik pilih titik • Ctrl+C nama frame • Ctrl+Shift+C jalur lengkap",
                  bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(4, 2))
         self.tombol(otomatis_i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
         edit = tk.Frame(edit_i, bg=PANEL); edit.pack(fill="x", pady=(4, 0))
@@ -1495,10 +1578,36 @@ class Studio(tk.Tk):
     def _mulai_kamera_async(self):
         threading.Thread(target=self._mulai_kamera, daemon=True).start()
 
+    def pilih_alat(self, nama: str, dari_tombol: bool = False):
+        """Alat tarik tanpa modifier, supaya papan sentuh tidak perlu menahan Ctrl.
+
+        Menekan tombol yang sama dua kali kembali ke alat titik, sehingga satu
+        tombol cukup untuk masuk dan keluar.
+        """
+        if not dari_tombol and nama != "normal" and self.kanvas.alat == nama:
+            nama = "normal"
+        self.kanvas.set_alat(nama)
+        self.alat_label.set(self.kanvas.alat)
+        self.kanvas.focus_set()
+        self.status.set({
+            "geser": "Alat GESER aktif: tarik satu jari untuk menggeser gambar. G atau Esc kembali ke titik.",
+            "blok": "Alat BLOK HAPUS aktif: tarik kotak untuk membuang mask di dalamnya. X atau Esc kembali ke titik.",
+            "normal": "Alat titik aktif: klik menambah titik, tarik memindahkannya.",
+        }[self.kanvas.alat])
+        return "break"
+
+    def ganti_mode_touchpad(self):
+        self.kanvas.touchpad = bool(self.mode_touchpad.get())
+        self.simpan_preferensi()
+        self.status.set("Mode touchpad: gulir dua jari menggeser, Ctrl+gulir memperbesar."
+                        if self.kanvas.touchpad else
+                        "Mode tetikus: gulir memperbesar, Shift+gulir menggeser mendatar.")
+
     def simpan_preferensi(self):
         tulis_json(self.path_preferensi, {"kategori": self.kategori.get(), "split": self.split.get(),
                                           "kode_adegan": self.kode.get().strip(),
-                                          "kontrol_label": self.kontrol_label.get()})
+                                          "kontrol_label": self.kontrol_label.get(),
+                                          "mode_touchpad": bool(self.mode_touchpad.get())})
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
@@ -2902,6 +3011,12 @@ class Studio(tk.Tk):
         shift = bool(event.state & 0x1)
         if ctrl and event.keysym.lower() == "z":
             return self.kanvas.redo_riwayat() if shift or event.keysym == "Z" else self.kanvas.undo_riwayat()
+        if event.keysym == "Escape":
+            return self.pilih_alat("normal")
+        if not ctrl and event.keysym.lower() == "g":
+            return self.pilih_alat("geser")
+        if not ctrl and event.keysym.lower() == "x":
+            return self.pilih_alat("blok")
         if self.kontrol_label.get() == "mudah":
             if event.keysym.lower() == "a":
                 return self.pilih_mode_keyboard("objek")
@@ -2923,9 +3038,10 @@ class Studio(tk.Tk):
         return None
 
     def teks_kontrol_label(self):
-        return ("A = merah • S = biru • Space = berikutnya • D = sebelumnya • Ctrl+Z = Undo"
-                if self.kontrol_label.get() == "mudah" else
-                "PgUp = merah • PgDn = biru • ←/→ = frame • Ctrl+Z = Undo")
+        alat = " • G = geser • X = blok hapus • Esc = titik"
+        return (("A = merah • S = biru • Space = berikutnya • D = sebelumnya • Ctrl+Z = Undo"
+                 if self.kontrol_label.get() == "mudah" else
+                 "PgUp = merah • PgDn = biru • ←/→ = frame • Ctrl+Z = Undo") + alat)
 
     def ganti_kontrol_label(self):
         if hasattr(self, "label_bantuan_kontrol"):
