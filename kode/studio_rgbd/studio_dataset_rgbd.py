@@ -1045,10 +1045,23 @@ class KanvasLabel(tk.Canvas):
         self.zoom_langkah(e, 1.15 if e.delta > 0 else 1 / 1.15)
 
     def zoom_langkah(self, e, faktor):
+        return self.zoom_di(e.x, e.y, faktor)
+
+    def zoom_tengah(self, faktor: float):
+        """Perbesar dari tengah kanvas, untuk tombol dan papan ketik.
+
+        Papan sentuh tidak mengirim gerakan cubit ke Tk, dan menahan Ctrl sambil
+        menggulir dua jari tidak selalu nyaman, jadi zoom harus tetap ada tanpa
+        tetikus maupun modifier.
+        """
+        self.zoom_di(self.winfo_width() // 2, self.winfo_height() // 2, faktor)
+        return "break"
+
+    def zoom_di(self, ex: int, ey: int, faktor: float):
         if self.rgb is None:
             return
         h, w = self.rgb.shape[:2]
-        sebelumnya = self.canvas_ke_gambar(e.x, e.y)
+        sebelumnya = self.canvas_ke_gambar(ex, ey)
         if sebelumnya is None:
             # Jika panning sebelumnya membawa gambar keluar layar, wheel
             # tidak boleh memperbesar area kosong berwarna coklat.
@@ -1058,7 +1071,7 @@ class KanvasLabel(tk.Canvas):
         # sampai 8× (yang terlalu berat untuk Tk pada resolusi D435).
         self.scale = max(0.08, min(4.0, self.scale * faktor))
         if sebelumnya:
-            self.ox, self.oy = e.x - sebelumnya[0] * self.scale, e.y - sebelumnya[1] * self.scale
+            self.ox, self.oy = ex - sebelumnya[0] * self.scale, ey - sebelumnya[1] * self.scale
         if self.ox + w * self.scale < 0 or self.oy + h * self.scale < 0 or self.ox > self.winfo_width() or self.oy > self.winfo_height():
             self.fit()
             return
@@ -1527,6 +1540,12 @@ class Studio(tk.Tk):
                            command=lambda: self.pilih_alat(self.alat_label.get(), dari_tombol=True),
                            bg="#FFF9F4", selectcolor="#E8DDD5", activebackground="#E8DDD5", fg=INK,
                            relief="flat", pady=5, font=("Segoe UI", 8)).pack(side="left", expand=True, fill="x", padx=1)
+        zoom_f = tk.Frame(alat_f, bg=PANEL); zoom_f.pack(fill="x", pady=(2, 0))
+        for teks, perintah in (("🔍−  ( - )", lambda: self.zoom_tombol(1 / 1.25)),
+                               ("🔍+  ( + )", lambda: self.zoom_tombol(1.25)),
+                               ("⤢ Muat ( 0 )", self.muat_pas)):
+            tk.Button(zoom_f, text=teks, command=perintah, bg="#FFF9F4", fg=INK, relief="flat",
+                      font=("Segoe UI", 8), pady=4).pack(side="left", expand=True, fill="x", padx=1)
         tk.Checkbutton(alat_f, text="Mode touchpad: gulir = geser, Ctrl+gulir = zoom",
                        variable=self.mode_touchpad, command=self.ganti_mode_touchpad, bg=PANEL, fg=INK,
                        selectcolor=PANEL, activebackground=PANEL, font=("Segoe UI", 8)).pack(anchor="w")
@@ -1577,6 +1596,17 @@ class Studio(tk.Tk):
     # ----- rekam -----
     def _mulai_kamera_async(self):
         threading.Thread(target=self._mulai_kamera, daemon=True).start()
+
+    def zoom_tombol(self, faktor: float):
+        self.kanvas.zoom_tengah(faktor)
+        self.kanvas.focus_set()
+        return "break"
+
+    def muat_pas(self):
+        """Kembalikan gambar agar seluruhnya terlihat."""
+        self.kanvas.fit()
+        self.kanvas.focus_set()
+        return "break"
 
     def pilih_alat(self, nama: str, dari_tombol: bool = False):
         """Alat tarik tanpa modifier, supaya papan sentuh tidak perlu menahan Ctrl.
@@ -3007,10 +3037,20 @@ class Studio(tk.Tk):
         """Shortcut label tetap berfungsi saat fokus berada di panel mana pun."""
         if self.tabs.select() != str(self.tab_label):
             return None
+        # Saat mengetik di kotak isian, huruf dan angka adalah isi, bukan pintasan.
+        fokus = self.focus_get()
+        if isinstance(fokus, (tk.Entry, tk.Spinbox, ttk.Entry, ttk.Combobox, ttk.Spinbox)):
+            return None
         ctrl = bool(event.state & 0x4)
         shift = bool(event.state & 0x1)
         if ctrl and event.keysym.lower() == "z":
             return self.kanvas.redo_riwayat() if shift or event.keysym == "Z" else self.kanvas.undo_riwayat()
+        if event.keysym in {"plus", "equal", "KP_Add"}:
+            return self.zoom_tombol(1.25)
+        if event.keysym in {"minus", "KP_Subtract"}:
+            return self.zoom_tombol(1 / 1.25)
+        if event.keysym in {"0", "KP_0"}:
+            return self.muat_pas()
         if event.keysym == "Escape":
             return self.pilih_alat("normal")
         if not ctrl and event.keysym.lower() == "g":
@@ -3038,7 +3078,7 @@ class Studio(tk.Tk):
         return None
 
     def teks_kontrol_label(self):
-        alat = " • G = geser • X = blok hapus • Esc = titik"
+        alat = " • G = geser • X = blok hapus • Esc = titik • +/− = zoom • 0 = muat"
         return (("A = merah • S = biru • Space = berikutnya • D = sebelumnya • Ctrl+Z = Undo"
                  if self.kontrol_label.get() == "mudah" else
                  "PgUp = merah • PgDn = biru • ←/→ = frame • Ctrl+Z = Undo") + alat)
