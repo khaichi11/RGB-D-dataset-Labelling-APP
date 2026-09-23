@@ -93,19 +93,20 @@ CARA_JARAK = "Jarak lurus 2 titik"
 # sama persis dengan dataset/dataset_tangga_seg/tangga_seg.yaml yang sudah
 # berisi 2.832 gambar - kalau digeser, seluruh label lama itu jadi salah arti.
 # Kelas baru ditambahkan di belakang, tidak menimpa yang sudah ada.
-# Kelas lantai ditaruh di nomor terakhir supaya nomor kelas lama tidak bergeser
-# dan label yang sudah ada tetap sah.
-KELAS_YOLO = {"tapakan": 0, "bidang_tegak": 1, "batu": 2, "ramp": 3, "lantai": 4}
+# Nomor 4 dahulu dipakai kelas lantai. Kelas itu ditarik: letak lantai kini
+# diturunkan secara geometris dari riser paling ujung oleh pelacak, sehingga
+# tidak perlu dilabeli tangan. Nomornya tetap dicadangkan, tidak dipakai ulang,
+# supaya label lama yang sudah memuat angka 4 tidak berubah arti.
+KELAS_YOLO = {"tapakan": 0, "bidang_tegak": 1, "batu": 2, "ramp": 3}
 # Poligon biru selalu permukaan datar (tapakan). Poligon merah artinya
-# bergantung kategori adegan yang sedang direkam. Poligon hijau adalah lantai:
-# permukaan datar yang BUKAN pijakan anak tangga, termasuk bordes di puncak.
+# bergantung kategori adegan yang sedang direkam.
 KELAS_MODE = {
-    "tangga_naik": {"acuan": "tapakan", "objek": "bidang_tegak", "lantai": "lantai"},
-    "batu":        {"acuan": "tapakan", "objek": "batu", "lantai": "lantai"},
-    "ramp_naik":   {"acuan": "tapakan", "objek": "ramp", "lantai": "lantai"},
+    "tangga_naik": {"acuan": "tapakan", "objek": "bidang_tegak"},
+    "batu":        {"acuan": "tapakan", "objek": "batu"},
+    "ramp_naik":   {"acuan": "tapakan", "objek": "ramp"},
 }
 # Semua jenis poligon yang dapat disunting di kanvas, dalam urutan tampilan.
-MODE_MASK = ("objek", "acuan", "lantai")
+MODE_MASK = ("objek", "acuan")
 
 
 def baca_json(path: Path, default: dict | None = None) -> dict:
@@ -558,12 +559,10 @@ class KanvasLabel(tk.Canvas):
             self.create_image(gambar_x, gambar_y, anchor="nw", image=self._photo, tags=("gambar",))
             self._canvas_background_key = background_key
         self.delete("overlay")
-        # merah = sisi tinggi (riser), biru = permukaan datar (tapakan), hijau =
-        # lantai atau bordes. Warna ini bukan hiasan: yang biru dipakai RANSAC
-        # sebagai BIDANG ACUAN, yang merah sebagai objek yang diukur tingginya
-        # terhadap bidang itu, dan yang hijau justru BUKAN pijakan anak tangga.
-        specs = (("objek", "#FF5A5A", "#FFD9D9"), ("acuan", "#5AA9FF", "#D7E9FF"),
-                 ("lantai", "#4CC76A", "#D6F5DC"))
+        # merah = sisi tinggi (riser), biru = permukaan datar (tapakan). Warna
+        # ini bukan hiasan: yang biru dipakai RANSAC sebagai BIDANG ACUAN, dan
+        # yang merah sebagai objek yang diukur tingginya terhadap bidang itu.
+        specs = (("objek", "#FF5A5A", "#FFD9D9"), ("acuan", "#5AA9FF", "#D7E9FF"))
         cepat = self._drag_titik is not None or self._zoom_cepat
         for nama, garis, titik in specs:
             for idx, poly in enumerate(self.poligon[nama], start=1):
@@ -1045,7 +1044,7 @@ class KanvasLabel(tk.Canvas):
 
     def ubah_kelas_aktif(self, ke: str) -> str | None:
         """Pindahkan mask yang sedang aktif ke kelas lain, misalnya riser yang
-        ternyata lantai.
+        ternyata tapakan.
 
         Mask dipindah utuh beserta titiknya, bukan digambar ulang, karena
         kesalahan yang sering terjadi adalah kelasnya, bukan bentuknya.
@@ -1559,20 +1558,17 @@ class Studio(tk.Tk):
                                        bg="#FFF9F4", selectcolor=RED, activebackground=RED, fg=INK, relief="flat", pady=7)
         self.rb_acuan = tk.Radiobutton(edit_i, variable=self.mode_label, value="acuan", indicatoron=False, command=self.ganti_mode,
                                        bg="#FFF9F4", selectcolor=BLUE, activebackground=BLUE, fg=INK, relief="flat", pady=7)
-        self.rb_lantai = tk.Radiobutton(edit_i, variable=self.mode_label, value="lantai", indicatoron=False, command=self.ganti_mode,
-                                        bg="#FFF9F4", selectcolor=GREEN, activebackground=GREEN, fg=INK, relief="flat", pady=7)
         self.rb_objek.pack(fill="x", pady=2); self.rb_acuan.pack(fill="x", pady=2)
-        self.rb_lantai.pack(fill="x", pady=2)
         ubah_f = tk.Frame(edit_i, bg=PANEL); ubah_f.pack(fill="x", pady=(3, 0))
-        tk.Label(ubah_f, text="Ubah kelas mask aktif (Shift+A/S/F)", bg=PANEL, fg=MUTED,
+        tk.Label(ubah_f, text="Ubah kelas mask aktif (Shift+A/S)", bg=PANEL, fg=MUTED,
                  font=("Segoe UI", 8)).pack(anchor="w")
         baris_ubah = tk.Frame(ubah_f, bg=PANEL); baris_ubah.pack(fill="x")
-        for nilai, teks, warna in (("objek", "→ MERAH", RED), ("acuan", "→ BIRU", BLUE), ("lantai", "→ HIJAU", GREEN)):
+        for nilai, teks, warna in (("objek", "→ MERAH", RED), ("acuan", "→ BIRU", BLUE)):
             tk.Button(baris_ubah, text=teks, command=lambda n=nilai: self.ubah_kelas_mask(n), bg=warna,
                       fg="#FFFFFF", relief="flat", font=("Segoe UI", 8, "bold"),
                       pady=4).pack(side="left", expand=True, fill="x", padx=1)
-        tk.Scale(edit_i, from_=0, to=0.75, resolution=.05, orient="horizontal", variable=self.depth_alpha,
-                 command=lambda _: self.ganti_depth(), label="Overlay depth (samar)", bg=PANEL, fg=INK,
+        tk.Scale(edit_i, from_=0, to=1.0, resolution=.05, orient="horizontal", variable=self.depth_alpha,
+                 command=lambda _: self.ganti_depth(), label="Overlay depth (1,0 = depth murni)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(2, 0))
         tk.Scale(edit_i, from_=0, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
                  command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
@@ -1651,7 +1647,7 @@ class Studio(tk.Tk):
         if dari is None:
             self.status.set("Pilih dulu mask yang mau diubah kelasnya, dengan mengklik salah satu titiknya.")
             return "break"
-        nama = {"objek": "merah", "acuan": "biru", "lantai": "hijau / lantai"}
+        nama = {"objek": "merah", "acuan": "biru"}
         self.mode_label.set(ke)
         self._mode_label_dipilih = True
         self.kanvas.mode = ke
@@ -2686,7 +2682,6 @@ class Studio(tk.Tk):
         if hasattr(self, "rb_objek"):
             self.rb_objek.configure(text=f"Mask {objek.replace('_', ' ')}  (MERAH)")
             self.rb_acuan.configure(text=f"Mask {acuan.replace('_', ' ')} / bidang acuan  (BIRU)")
-            self.rb_lantai.configure(text="Mask lantai / bordes  (HIJAU)")
 
     def rentang(self):
         if not self.sesi: return (0, -1)
@@ -3036,8 +3031,7 @@ class Studio(tk.Tk):
         rapih = rapikan_sam2(rgb, {"tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"]},
                               {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
         rapih = verifikasi_depth(rapih, depth)
-        # Model belum mengusulkan lantai; poligon hijau digambar tangan.
-        return {"acuan": rapih["tapakan"], "objek": rapih["bidang_tegak"], "lantai": []}
+        return {"acuan": rapih["tapakan"], "objek": rapih["bidang_tegak"]}
 
     def batch_auto_label(self):
         if not self.sesi:
@@ -3071,7 +3065,7 @@ class Studio(tk.Tk):
                 poligon = self._rekomendasi_tangga_data(rgb, depth, info)
                 h, w = rgb.shape[:2]
                 baris = []
-                for mode, cls in (("acuan", 0), ("objek", 1), ("lantai", 4)):
+                for mode, cls in (("acuan", 0), ("objek", 1)):
                     for poly in poligon[mode]:
                         if len(poly) >= 3:
                             baris.append(str(cls) + " " + " ".join(f"{v:.6f}" for x, y in poly for v in (x / w, y / h)))
@@ -3113,14 +3107,12 @@ class Studio(tk.Tk):
         shift = bool(event.state & 0x1)
         if ctrl and event.keysym.lower() == "z":
             return self.kanvas.redo_riwayat() if shift or event.keysym == "Z" else self.kanvas.undo_riwayat()
-        if shift and event.keysym in {"A", "S", "F"}:
-            return self.ubah_kelas_mask({"A": "objek", "S": "acuan", "F": "lantai"}[event.keysym])
+        if shift and event.keysym in {"A", "S"}:
+            return self.ubah_kelas_mask({"A": "objek", "S": "acuan"}[event.keysym])
         if shift and event.keysym in {"Prior", "Page_Up", "KP_Prior"}:
             return self.ubah_kelas_mask("objek")
         if shift and event.keysym in {"Next", "Page_Down", "KP_Next"}:
             return self.ubah_kelas_mask("acuan")
-        if shift and event.keysym in {"Home", "KP_Home"}:
-            return self.ubah_kelas_mask("lantai")
         if event.keysym in {"plus", "equal", "KP_Add"}:
             return self.zoom_tombol(1.25)
         if event.keysym in {"minus", "KP_Subtract"}:
@@ -3142,15 +3134,11 @@ class Studio(tk.Tk):
                 return self.pindah_frame_keyboard(1)
             if event.keysym.lower() == "d":
                 return self.pindah_frame_keyboard(-1)
-            if event.keysym.lower() == "f":
-                return self.pilih_mode_keyboard("lantai")
         else:
             if event.keysym in {"Prior", "Page_Up", "KP_Prior"}:
                 return self.pilih_mode_keyboard("objek")
             if event.keysym in {"Next", "Page_Down", "KP_Next"}:
                 return self.pilih_mode_keyboard("acuan")
-            if event.keysym in {"Home", "KP_Home"}:
-                return self.pilih_mode_keyboard("lantai")
             if event.keysym == "Left":
                 return self.pindah_frame_keyboard(-1)
             if event.keysym == "Right":
@@ -3159,10 +3147,10 @@ class Studio(tk.Tk):
 
     def teks_kontrol_label(self):
         alat = " • G = geser • X = blok hapus • Esc = titik • +/− = zoom • 0 = muat"
-        return (("A = merah • S = biru • F = hijau/lantai • Shift+A/S/F ubah kelas mask • "
+        return (("A = merah • S = biru • Shift+A/S ubah kelas mask • "
                  "Space = berikutnya • D = sebelumnya • Ctrl+Z = Undo"
                  if self.kontrol_label.get() == "mudah" else
-                 "PgUp = merah • PgDn = biru • Home = hijau/lantai • Shift+PgUp/PgDn/Home ubah kelas "
+                 "PgUp = merah • PgDn = biru • Shift+PgUp/PgDn ubah kelas "
                  "mask • ←/→ = frame • Ctrl+Z = Undo") + alat)
 
     def ganti_kontrol_label(self):
@@ -3181,8 +3169,7 @@ class Studio(tk.Tk):
             self.nomor_mask.set(indeks + 1)
         self.kanvas.focus_set()
         self.kanvas.render()
-        warna = {"objek": "merah / bidang tegak", "acuan": "biru / tapakan",
-                 "lantai": "hijau / lantai dan bordes"}[nama]
+        warna = {"objek": "merah / bidang tegak", "acuan": "biru / tapakan"}[nama]
         self.status.set(f"Mode {warna} aktif. Titik warna lain tidak akan ikut terseleksi.")
         return "break"
 
@@ -3270,9 +3257,6 @@ class Studio(tk.Tk):
             d = {"versi": 2, "disimpan_iso": datetime.now().isoformat(timespec="seconds"),
                  "poligon": self.kanvas.poligon}
         d["diperiksa_manual"] = bool(nilai)
-        # Penanda terpisah untuk lantai: mask lantai kosong hanya berarti
-        # "tidak ada lantai" bila frame diperiksa setelah kelas lantai ada.
-        d["lantai_diperiksa"] = bool(nilai)
         d["otomatis"] = not bool(nilai)
         d["diperiksa_iso"] = datetime.now().isoformat(timespec="seconds") if nilai else None
         tulis_json(j, d)
@@ -3294,11 +3278,8 @@ class Studio(tk.Tk):
         if not self.label_path:
             lbl.config(text="—  belum ada frame dipilih", bg=PANEL, fg=MUTED); return
         if self.status_periksa():
-            draft = baca_json(self.label_path / "label_draft.json", {})
             if not self._ada_poligon():
                 teks = "✔  DIPERIKSA • tanpa tangga (contoh latar)"
-            elif not draft.get("lantai_diperiksa"):
-                teks = "✔  DIPERIKSA • lantai belum"
             else:
                 teks = "✔  SUDAH DIPERIKSA MANUAL"
             lbl.config(text=teks, bg="#DCEFD8", fg="#1E5B2A")
@@ -3316,12 +3297,10 @@ class Studio(tk.Tk):
         lama = baca_json(self.label_path / "label_draft.json", {})
         disunting = bool(lama.get("poligon")) and lama.get("poligon") != self.kanvas.poligon
         diperiksa = bool(lama.get("diperiksa_manual", False)) or disunting
-        ada_lantai = any(len(poly) >= 3 for poly in self.kanvas.poligon.get("lantai", []))
         tulis_json(self.label_path / "label_draft.json", {
             "versi": 3,
             "otomatis": not diperiksa,
             "diperiksa_manual": diperiksa,
-            "lantai_diperiksa": bool(lama.get("lantai_diperiksa")) or ada_lantai,
             "diperiksa_iso": (lama.get("diperiksa_iso")
                               or (datetime.now().isoformat(timespec="seconds") if disunting else None)),
             "disimpan_iso": datetime.now().isoformat(timespec="seconds"),
@@ -3541,7 +3520,7 @@ class Studio(tk.Tk):
         peta = KELAS_MODE.get(kategori, KELAS_MODE["tangga_naik"])
         h, w = self.kanvas.rgb.shape[:2]
         baris, jumlah = [], {}
-        for mode in ("acuan", "objek", "lantai"):
+        for mode in ("acuan", "objek"):
             nama_kelas = peta[mode]; cls = KELAS_YOLO[nama_kelas]
             sah = [poly for poly in self.kanvas.poligon[mode] if len(poly) >= 3]
             jumlah[nama_kelas] = len(sah)
@@ -3559,7 +3538,6 @@ class Studio(tk.Tk):
                 kosong = np.zeros((h, w), np.uint8)
                 cv2.imwrite(str(self.label_path/"mask_objek.png"), kosong)
                 cv2.imwrite(str(self.label_path/"mask_acuan.png"), kosong)
-                cv2.imwrite(str(self.label_path/"mask_lantai.png"), kosong)
                 if not senyap:
                     self.status.set(f"{self.label_path.name}: tanpa tangga, disimpan sebagai contoh latar (mask kosong).")
             else:
@@ -3579,15 +3557,13 @@ class Studio(tk.Tk):
         # menunjukkan kosong, berkas menunjukkan isi, dan pelatihan memakai
         # berkas -- sehingga koreksi pemakainya hilang tanpa jejak. Terukur
         # sebelum perbaikan: 4 frame dengan IoU draft-lawan-PNG serendah 0,46.
-        obj = self._mask("objek"); ref = self._mask("acuan"); lantai = self._mask("lantai")
+        obj = self._mask("objek"); ref = self._mask("acuan")
         h, w = self.kanvas.rgb.shape[:2]
         kosong = np.zeros((h, w), np.uint8)
         cv2.imwrite(str(self.label_path/"mask_objek.png"),
                     (obj if obj is not None else kosong) * 255)
         cv2.imwrite(str(self.label_path/"mask_acuan.png"),
                     (ref if ref is not None else kosong) * 255)
-        cv2.imwrite(str(self.label_path/"mask_lantai.png"),
-                    (lantai if lantai is not None else kosong) * 255)
         rinci = ", ".join(f"{k}={v}" for k, v in jumlah.items())
         if not senyap:
             self.status.set(f"Label disimpan untuk {self.label_path.name}: {len(baris)} instance ({rinci}).")
@@ -3600,7 +3576,10 @@ class Studio(tk.Tk):
         """
         p = self.label_path
         label = p / "label_yolo_seg.txt"
-        masker = [p / "mask_objek.png", p / "mask_acuan.png", p / "mask_lantai.png"]
+        masker = [p / "mask_objek.png", p / "mask_acuan.png"]
+        # mask_lantai.png peninggalan kelas lantai yang sudah ditarik: ikut
+        # dibuang bila ada, tetapi isinya tidak lagi menahan pembersihan.
+        lama_lantai = p / "mask_lantai.png"
         if label.exists() and label.read_text(encoding="utf-8").strip():
             return
         for f in masker:
@@ -3608,7 +3587,7 @@ class Studio(tk.Tk):
                 m = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
                 if m is None or m.any():
                     return
-        for f in masker + [label]:
+        for f in masker + [label, lama_lantai]:
             f.unlink(missing_ok=True)
 
     def bangun_yolo(self):
