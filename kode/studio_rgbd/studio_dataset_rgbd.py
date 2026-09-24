@@ -757,7 +757,9 @@ class KanvasLabel(tk.Canvas):
         """Lup kecil pada titik aktif agar batas masking presisi saat zoom."""
         if self.rgb is None:
             return
-        gx, gy = self.canvas_ke_gambar(x, y) or (0, 0)
+        # Bebas dari batas citra: lup tetap mengikuti kursor persis saat
+        # menggeser vertex di tepi, alih-alih melompat ke pojok (0, 0).
+        gx, gy = self.canvas_ke_gambar_bebas(x, y)
         # Bidang yang lebih kecil dengan pembesaran lebih tinggi membuat
         # posisi vertex jauh lebih jelas, terutama saat dua batas berdekatan.
         r, faktor = 18, 6
@@ -784,6 +786,20 @@ class KanvasLabel(tk.Canvas):
         h, w = self.rgb.shape[:2]
         return (gx, gy) if 0 <= gx < w and 0 <= gy < h else None
 
+    def canvas_ke_gambar_bebas(self, x, y) -> tuple[float, float]:
+        """Sama seperti :meth:`canvas_ke_gambar`, tanpa batas dan tanpa ``None``.
+
+        Titik yang sedang digeser sering melewati tepi citra sesaat --
+        gerakan tetikus jarang berhenti persis di piksel terakhir yang valid,
+        apalagi untuk vertex yang memang berada di tepi. ``canvas_ke_gambar``
+        mengembalikan ``None`` di situ, dan pemanggil yang menjadikannya acuan
+        arah gerak (bukan posisi akhir) salah bila jatuh ke (0, 0): (0, 0)
+        adalah SUDUT KIRI-ATAS citra, bukan "tidak ada gerakan". Posisi akhir
+        titik tetap dijepit ke batas citra di tempat lain (:meth:`geser_titik`),
+        jadi nilai bebas ini aman dipakai untuk menghitung SELISIH gerak.
+        """
+        return ((x - self.ox) / self.scale, (y - self.oy) / self.scale)
+
     def tambah(self, e):
         # Alat tarik yang sedang aktif menggantikan tugas modifier.
         if self.alat == "geser":
@@ -802,8 +818,12 @@ class KanvasLabel(tk.Canvas):
             kelompok = [(n, p, t) for n, p, t in self.titik_dipilih
                          if p < len(self.poligon[n]) and t < len(self.poligon[n][p])]
             asal = {k: tuple(self.poligon[k[0]][k[1]][k[2]]) for k in kelompok}
+            # Acuan arah gerak, BUKAN posisi akhir -- lihat canvas_ke_gambar_bebas.
+            # Titik yang dipegang seringkali persis di tepi citra; awal (0, 0)
+            # dari fallback lama membuat delta gerak salah total sejak tarikan
+            # pertama, dan vertex melompat ke pojok kiri-atas citra.
             self._drag_titik = {"utama": kunci, "kelompok": kelompok, "asal": asal,
-                                "awal": self.canvas_ke_gambar(e.x, e.y) or (0, 0),
+                                "awal": self.canvas_ke_gambar_bebas(e.x, e.y),
                                 "layar": (e.x, e.y)}
             self.render()
             return
@@ -852,29 +872,31 @@ class KanvasLabel(tk.Canvas):
             return self.ubah_seleksi_titik(e)
         if self._drag_titik is None:
             return
-        p = self.canvas_ke_gambar(e.x, e.y)
-        if p:
-            drag = self._drag_titik
-            dx, dy = p[0] - drag["awal"][0], p[1] - drag["awal"][1]
-            utama_asal = drag["asal"][drag["utama"]]
-            calon_utama = (utama_asal[0] + dx, utama_asal[1] + dy)
-            tempel = self._titik_magnet(calon_utama, drag["kelompok"])
-            if tempel == calon_utama:
-                tempel = self._magnet_garis(calon_utama, drag["kelompok"])
-            dx, dy = tempel[0] - utama_asal[0], tempel[1] - utama_asal[1]
-            # Bila beberapa titik dipilih, batasi translasi berdasarkan
-            # SELURUH grup. Dulu hanya titik utama yang aman, sehingga vertex
-            # lain dapat terdorong keluar dari citra seperti pada screenshot.
-            h, w = self.rgb.shape[:2]
-            xs = [drag["asal"][k][0] for k in drag["kelompok"]]
-            ys = [drag["asal"][k][1] for k in drag["kelompok"]]
-            dx = min(max(dx, -min(xs)), (w - 1) - max(xs))
-            dy = min(max(dy, -min(ys)), (h - 1) - max(ys))
-            for nama, ip, it in drag["kelompok"]:
-                x0, y0 = drag["asal"][(nama, ip, it)]
-                self.poligon[nama][ip][it] = (x0 + dx, y0 + dy)
-            drag["layar"] = (e.x, e.y)
-            self.render_nanti()
+        # Bebas dari batas citra: dulu geser berhenti (titik terasa "macet")
+        # begitu kursor melewati tepi citra, karena canvas_ke_gambar mengem-
+        # balikan None di situ dan pembaruan posisi dilewati begitu saja.
+        p = self.canvas_ke_gambar_bebas(e.x, e.y)
+        drag = self._drag_titik
+        dx, dy = p[0] - drag["awal"][0], p[1] - drag["awal"][1]
+        utama_asal = drag["asal"][drag["utama"]]
+        calon_utama = (utama_asal[0] + dx, utama_asal[1] + dy)
+        tempel = self._titik_magnet(calon_utama, drag["kelompok"])
+        if tempel == calon_utama:
+            tempel = self._magnet_garis(calon_utama, drag["kelompok"])
+        dx, dy = tempel[0] - utama_asal[0], tempel[1] - utama_asal[1]
+        # Bila beberapa titik dipilih, batasi translasi berdasarkan
+        # SELURUH grup. Dulu hanya titik utama yang aman, sehingga vertex
+        # lain dapat terdorong keluar dari citra seperti pada screenshot.
+        h, w = self.rgb.shape[:2]
+        xs = [drag["asal"][k][0] for k in drag["kelompok"]]
+        ys = [drag["asal"][k][1] for k in drag["kelompok"]]
+        dx = min(max(dx, -min(xs)), (w - 1) - max(xs))
+        dy = min(max(dy, -min(ys)), (h - 1) - max(ys))
+        for nama, ip, it in drag["kelompok"]:
+            x0, y0 = drag["asal"][(nama, ip, it)]
+            self.poligon[nama][ip][it] = (x0 + dx, y0 + dy)
+        drag["layar"] = (e.x, e.y)
+        self.render_nanti()
 
     def selesai_geser_titik(self, _e=None):
         # Pelepasan tombol tetikus sesudah Shift atau Ctrl dilepas tidak pernah
