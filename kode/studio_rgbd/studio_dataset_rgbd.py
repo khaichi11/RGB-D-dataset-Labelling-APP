@@ -2977,6 +2977,19 @@ class Studio(tk.Tk):
         self._buka_frame_ekspor(self.frame_paths[s[0]])
 
     def _buka_frame_ekspor(self, p: Path):
+        # Selesaikan dulu autosave yang masih tertunda milik frame yang
+        # DITINGGALKAN, sebelum label_path/poligon diganti ke frame baru.
+        # Autosave ditunda 450 ms (jadwalkan_autosave); tanpa flush ini,
+        # berpindah frame lebih cepat dari itu membuang edit yang belum
+        # sempat tersimpan -- termasuk hapus blok -- sehingga frame lama
+        # kembali ke versi sebelum diedit saat dibuka lagi, riwayat Undo-nya
+        # ikut hilang (direset ke versi lama), dan bila draft itu belum
+        # pernah tersimpan sama sekali, auto-segmentasi berjalan ulang
+        # karena frame dianggap belum berlabel.
+        if self._autosave_setelah is not None:
+            self.after_cancel(self._autosave_setelah)
+            self._autosave_setelah = None
+            self.simpan_draft_label()
         bgr=cv2.imread(str(p/"color_raw.png")); dep=np.load(p/"depth_aligned_to_color.npy")
         if bgr is None: return
         # Pilihan A/S dipertahankan antar-frame. Penguncian hanya
