@@ -327,6 +327,24 @@ def _cerahkan(rgb: np.ndarray, kekuatan: float) -> np.ndarray:
     return hasil if kekuatan >= 1 else cv2.addWeighted(rgb, 1 - kekuatan, hasil, kekuatan, 0)
 
 
+def _pertajam(rgb: np.ndarray, kekuatan: float) -> np.ndarray:
+    """Unsharp mask: satu keluarga dengan penajaman Laplace.
+
+    Kernel Laplace langsung (mis. [[0,-1,0],[-1,5,-1],[0,-1,0]]) menajamkan
+    SETIAP piksel bertetangga, termasuk derau sensor satu-dua piksel pada
+    citra gelap -- persis yang paling banyak dikuatkan justru bukan tepi
+    anak tangga. Unsharp mask memakai selisih citra terhadap versi halusnya
+    (Gaussian blur) sebagai "detail", sehingga radius blur menentukan skala
+    detail yang ditajamkan; radius 1,5 px di sini menekankan tepi tanpa
+    terlalu menajamkan derau satu piksel. ``kekuatan`` adalah seberapa besar
+    detail itu ditambahkan kembali.
+    """
+    if kekuatan <= 0:
+        return rgb
+    halus = cv2.GaussianBlur(rgb, (0, 0), sigmaX=1.5)
+    return cv2.addWeighted(rgb, 1 + kekuatan, halus, -kekuatan, 0)
+
+
 class KanvasLabel(tk.Canvas):
     """Editor poligon responsif: tambah, pindah titik, zoom di posisi kursor."""
 
@@ -341,6 +359,7 @@ class KanvasLabel(tk.Canvas):
         self.oy = 0.0
         self.depth_alpha = 0.0
         self.kecerahan = 0.0     # 0 = asli, 1 = CLAHE penuh (lihat _cerahkan)
+        self.ketajaman = 0.0     # 0 = asli, unsharp mask (lihat _pertajam)
         self.mask_alpha = 0.42
         self.mode = "objek"
         # Tiap kelas menampung BANYAK poligon: satu anak tangga = satu instance.
@@ -535,10 +554,13 @@ class KanvasLabel(tk.Canvas):
 
     def gambar_tampil(self) -> np.ndarray:
         assert self.rgb is not None
-        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.kecerahan, 3))
+        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3),
+              round(self.kecerahan, 3), round(self.ketajaman, 3))
         if self._tampil_key == key and self._tampil_cache is not None:
             return self._tampil_cache
-        out = _cerahkan(self.rgb, self.kecerahan)
+        # Tajam setelah cerah: menajamkan derau mentah pada frame gelap lebih
+        # kuat daripada menajamkan tepi yang CLAHE sudah bantu tonjolkan.
+        out = _pertajam(_cerahkan(self.rgb, self.kecerahan), self.ketajaman)
         if self.depth is not None and self.depth_alpha > 0:
             d = self.depth.astype(np.float32)
             valid = d > 0
@@ -562,7 +584,7 @@ class KanvasLabel(tk.Canvas):
         margin = 12
         size = (max(1, round(w * self.scale)), max(1, round(h * self.scale)))
         key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.kecerahan, 3),
-              round(self.scale, 5), size)
+              round(self.ketajaman, 3), round(self.scale, 5), size)
         # Drag titik bisa memanggil render puluhan kali/detik. Gambar dasar
         # cukup dibuat sekali; yang berubah hanya garis poligon di atasnya.
         if self._photo_key != key or self._photo is None:
@@ -597,25 +619,43 @@ class KanvasLabel(tk.Canvas):
                     # Opacity 0 berarti hanya garis: titik tetap mudah dipilih
                     # tanpa menutupi warna RGB/depth di belakangnya.
                     if cepat:
+                        # Halo gelap di bawah garis: pada citra gelap/berderau
+                        # atau saat banyak mask bertumpuk, garis warna pastel
+                        # (merah/biru muda) tipis 1-2 px mudah lebur ke latar.
+                        # Halo memberi kontras tetap terlepas dari isi citra.
+                        self.create_line(pts + [pts[0]], fill="#000000",
+                                         width=4 if aktif else 3, tags=("overlay",))
                         self.create_line(pts + [pts[0]], fill="#FFFFFF" if aktif else garis,
                                          width=2 if aktif else 1, tags=("overlay",))
                     elif self.mask_alpha <= .01:
+                        self.create_polygon(pts, fill="", outline="#000000",
+                                            width=5 if aktif else 4, tags=("overlay",))
                         self.create_polygon(pts, fill="", outline="#FFFFFF" if aktif else garis,
                                             width=3 if aktif else 2, tags=("overlay",))
                     else:
                         pola = "gray12" if self.mask_alpha <= .20 else "gray25" if self.mask_alpha <= .38 else "gray50" if self.mask_alpha <= .62 else "gray75"
+                        self.create_polygon(pts, fill="", outline="#000000",
+                                            width=5 if aktif else 4, tags=("overlay",))
                         self.create_polygon(pts, fill=garis, outline="#FFFFFF" if aktif else garis,
                                             stipple=pola, width=3 if aktif else 2, tags=("overlay",))
                     cx = sum(p[0] for p in pts) / len(pts); cy = sum(p[1] for p in pts) / len(pts)
                     if not cepat:
                         self.create_text(cx, cy, text=str(idx), fill=garis if self.mask_alpha <= .01 else "white",
                                          font=("Segoe UI", 11, "bold"), tags=("overlay",))
+                        self.create_text(cx, cy, text=str(idx), fill="",
+                                         font=("Segoe UI", 11, "bold"), tags=("overlay",))
                 elif len(pts) >= 2:
+                    self.create_line(pts, fill="#000000", width=4, tags=("overlay",))
                     self.create_line(pts, fill=garis, width=2, tags=("overlay",))
                 for it, (x, y) in enumerate(pts):
                     dipilih = (nama, idx - 1, it) in self.titik_dipilih
                     if cepat and not aktif and not dipilih:
                         continue
+                    # Cincin hitam tipis di luar outline warna: titik tetap
+                    # jelas terpisah dari garis mask dan dari latar gelap.
+                    self.create_oval(x - (7 if dipilih else 5), y - (7 if dipilih else 5),
+                                     x + (7 if dipilih else 5), y + (7 if dipilih else 5),
+                                     fill="", outline="#000000", width=1, tags=("overlay",))
                     self.create_oval(x - (6 if dipilih else 4), y - (6 if dipilih else 4),
                                      x + (6 if dipilih else 4), y + (6 if dipilih else 4),
                                      fill=titik, outline="#FFD400" if dipilih else garis,
@@ -1274,6 +1314,7 @@ class Studio(tk.Tk):
         self.depth_alpha = DoubleVar(value=0.28)
         self.mask_alpha = DoubleVar(value=0.42)
         self.kecerahan = DoubleVar(value=float(preferensi.get("kecerahan", 0.0)))
+        self.ketajaman = DoubleVar(value=float(preferensi.get("ketajaman", 0.0)))
         self.magnet_titik = BooleanVar(value=True)
         self.mode_label = StringVar(value="objek")
         self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
@@ -1621,6 +1662,9 @@ class Studio(tk.Tk):
         tk.Scale(edit_i, from_=0, to=1.0, resolution=.1, orient="horizontal", variable=self.kecerahan,
                  command=lambda _: self.ganti_kecerahan(), label="Cerahkan (frame gelap/malam)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
+        tk.Scale(edit_i, from_=0, to=2.0, resolution=.1, orient="horizontal", variable=self.ketajaman,
+                 command=lambda _: self.ganti_ketajaman(), label="Pertajam (unsharp mask)", bg=PANEL, fg=INK,
+                 highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
         alat_f = tk.Frame(edit_i, bg=PANEL); alat_f.pack(fill="x", pady=(4, 0))
         baris_alat = tk.Frame(alat_f, bg=PANEL); baris_alat.pack(fill="x")
         for nilai, teks in (("normal", "✏ Titik"), ("geser", "✋ Geser (G)"), ("blok", "▭ Blok (X)")):
@@ -1748,7 +1792,8 @@ class Studio(tk.Tk):
                                           "kode_adegan": self.kode.get().strip(),
                                           "kontrol_label": self.kontrol_label.get(),
                                           "mode_touchpad": bool(self.mode_touchpad.get()),
-                                          "kecerahan": float(self.kecerahan.get())})
+                                          "kecerahan": float(self.kecerahan.get()),
+                                          "ketajaman": float(self.ketajaman.get())})
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
@@ -3549,6 +3594,10 @@ class Studio(tk.Tk):
     def ganti_depth(self): self.kanvas.depth_alpha=float(self.depth_alpha.get()); self.kanvas.render()
     def ganti_kecerahan(self):
         self.kanvas.kecerahan = float(self.kecerahan.get())
+        self.kanvas.render()
+        self.simpan_preferensi()
+    def ganti_ketajaman(self):
+        self.kanvas.ketajaman = float(self.ketajaman.get())
         self.kanvas.render()
         self.simpan_preferensi()
     def ganti_opasitas_mask(self): self.kanvas.mask_alpha=float(self.mask_alpha.get()); self.kanvas.render()
