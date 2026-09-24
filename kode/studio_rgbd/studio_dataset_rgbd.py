@@ -307,6 +307,26 @@ class TombolRounded(tk.Canvas):
         return result
 
 
+def _cerahkan(rgb: np.ndarray, kekuatan: float) -> np.ndarray:
+    """CLAHE pada kanal L (LAB) untuk memperjelas struktur pada frame gelap.
+
+    CLAHE menyesuaikan kontras per PETAK LOKAL, bukan menaikkan kecerahan
+    rata citra. Pada frame yang hampir tak berisi sinyal (sangat gelap,
+    dominan derau sensor seperti rekaman malam), penguatan seragam (gamma
+    atau linear) hanya memperbesar derau tanpa membuat tepi anak tangga lebih
+    terlihat -- CLAHE menonjolkan tepi yang memang ada tanpa mengarang detail
+    yang tidak terekam. ``kekuatan`` mencampur hasil CLAHE dengan citra asli,
+    0 = tidak berubah, 1 = CLAHE penuh, sehingga tidak cerah-mati saja.
+    """
+    if kekuatan <= 0:
+        return rgb
+    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
+    l2 = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(l)
+    hasil = cv2.cvtColor(cv2.merge((l2, a, b)), cv2.COLOR_LAB2RGB)
+    return hasil if kekuatan >= 1 else cv2.addWeighted(rgb, 1 - kekuatan, hasil, kekuatan, 0)
+
+
 class KanvasLabel(tk.Canvas):
     """Editor poligon responsif: tambah, pindah titik, zoom di posisi kursor."""
 
@@ -320,6 +340,7 @@ class KanvasLabel(tk.Canvas):
         self.ox = 0.0
         self.oy = 0.0
         self.depth_alpha = 0.0
+        self.kecerahan = 0.0     # 0 = asli, 1 = CLAHE penuh (lihat _cerahkan)
         self.mask_alpha = 0.42
         self.mode = "objek"
         # Tiap kelas menampung BANYAK poligon: satu anak tangga = satu instance.
@@ -514,10 +535,10 @@ class KanvasLabel(tk.Canvas):
 
     def gambar_tampil(self) -> np.ndarray:
         assert self.rgb is not None
-        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3))
+        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.kecerahan, 3))
         if self._tampil_key == key and self._tampil_cache is not None:
             return self._tampil_cache
-        out = self.rgb.copy()
+        out = _cerahkan(self.rgb, self.kecerahan)
         if self.depth is not None and self.depth_alpha > 0:
             d = self.depth.astype(np.float32)
             valid = d > 0
@@ -540,7 +561,8 @@ class KanvasLabel(tk.Canvas):
         cw, ch = max(1, self.winfo_width()), max(1, self.winfo_height())
         margin = 12
         size = (max(1, round(w * self.scale)), max(1, round(h * self.scale)))
-        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.scale, 5), size)
+        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.kecerahan, 3),
+              round(self.scale, 5), size)
         # Drag titik bisa memanggil render puluhan kali/detik. Gambar dasar
         # cukup dibuat sekali; yang berubah hanya garis poligon di atasnya.
         if self._photo_key != key or self._photo is None:
@@ -1251,6 +1273,7 @@ class Studio(tk.Tk):
         self._autosave_setelah = None
         self.depth_alpha = DoubleVar(value=0.28)
         self.mask_alpha = DoubleVar(value=0.42)
+        self.kecerahan = DoubleVar(value=float(preferensi.get("kecerahan", 0.0)))
         self.magnet_titik = BooleanVar(value=True)
         self.mode_label = StringVar(value="objek")
         self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
@@ -1595,6 +1618,9 @@ class Studio(tk.Tk):
         tk.Scale(edit_i, from_=0, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
                  command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
+        tk.Scale(edit_i, from_=0, to=1.0, resolution=.1, orient="horizontal", variable=self.kecerahan,
+                 command=lambda _: self.ganti_kecerahan(), label="Cerahkan (frame gelap/malam)", bg=PANEL, fg=INK,
+                 highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
         alat_f = tk.Frame(edit_i, bg=PANEL); alat_f.pack(fill="x", pady=(4, 0))
         baris_alat = tk.Frame(alat_f, bg=PANEL); baris_alat.pack(fill="x")
         for nilai, teks in (("normal", "✏ Titik"), ("geser", "✋ Geser (G)"), ("blok", "▭ Blok (X)")):
@@ -1721,7 +1747,8 @@ class Studio(tk.Tk):
         tulis_json(self.path_preferensi, {"kategori": self.kategori.get(), "split": self.split.get(),
                                           "kode_adegan": self.kode.get().strip(),
                                           "kontrol_label": self.kontrol_label.get(),
-                                          "mode_touchpad": bool(self.mode_touchpad.get())})
+                                          "mode_touchpad": bool(self.mode_touchpad.get()),
+                                          "kecerahan": float(self.kecerahan.get())})
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
@@ -3520,6 +3547,10 @@ class Studio(tk.Tk):
         self._mode_label_dipilih = True
         self.kanvas.render()
     def ganti_depth(self): self.kanvas.depth_alpha=float(self.depth_alpha.get()); self.kanvas.render()
+    def ganti_kecerahan(self):
+        self.kanvas.kecerahan = float(self.kecerahan.get())
+        self.kanvas.render()
+        self.simpan_preferensi()
     def ganti_opasitas_mask(self): self.kanvas.mask_alpha=float(self.mask_alpha.get()); self.kanvas.render()
     def ganti_magnet_titik(self): self.kanvas.magnet_aktif=bool(self.magnet_titik.get())
     def rapikan_magnet_semua(self):
