@@ -433,8 +433,14 @@ class KanvasLabel(tk.Canvas):
         # menggeser gambar.
         self.bind("<Alt-Button-1>", self.pan_mulai)
         self.bind("<Alt-B1-Motion>", self.pan)
-        self.bind("<Control-z>", lambda _e: self.undo_riwayat())
-        self.bind("<Control-Z>", lambda _e: self.redo_riwayat())
+        # Satu handler untuk kedua pola keysym ("z" dan "Z"), memutuskan
+        # undo/redo dari BIT Shift sungguhan (event.state), bukan dari huruf
+        # keysym. Caps Lock mengubah huruf keysym tanpa menekan Shift --
+        # membedakan lewat huruf membuat Ctrl+Z dengan Caps Lock menyala
+        # salah terbaca sebagai Ctrl+Shift+Z (redo), yang biasanya tidak ada
+        # yang bisa diulang dan terasa seperti "Ctrl+Z tidak bekerja".
+        self.bind("<Control-z>", self._ctrl_z)
+        self.bind("<Control-Z>", self._ctrl_z)
         self.bind("<Control-Shift-Z>", lambda _e: self.redo_riwayat())
         self.bind("<ButtonPress-2>", self.pan_mulai)
         self.bind("<B2-Motion>", self.pan)
@@ -477,6 +483,9 @@ class KanvasLabel(tk.Canvas):
             self.aktif_indeks[nama] = min(self.aktif_indeks.get(nama) or 0, len(daftar) - 1) if daftar else None
         self.titik_dipilih.clear()
         self.render(); self.on_change()
+
+    def _ctrl_z(self, e):
+        return self.redo_riwayat() if (e.state & 0x1) else self.undo_riwayat()
 
     def undo_riwayat(self, _e=None):
         if self._riwayat_pos <= 0:
@@ -3213,7 +3222,9 @@ class Studio(tk.Tk):
         ctrl = bool(event.state & 0x4)
         shift = bool(event.state & 0x1)
         if ctrl and event.keysym.lower() == "z":
-            return self.kanvas.redo_riwayat() if shift or event.keysym == "Z" else self.kanvas.undo_riwayat()
+            # `shift` sudah dari event.state (bit Shift sungguhan), bukan dari
+            # huruf keysym -- lihat KanvasLabel._ctrl_z untuk alasannya.
+            return self.kanvas.redo_riwayat() if shift else self.kanvas.undo_riwayat()
         if shift and event.keysym in {"A", "S"}:
             return self.ubah_kelas_mask({"A": "objek", "S": "acuan"}[event.keysym])
         if shift and event.keysym in {"Prior", "Page_Up", "KP_Prior"}:
