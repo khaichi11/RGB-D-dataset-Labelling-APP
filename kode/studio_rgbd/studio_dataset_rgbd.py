@@ -1690,9 +1690,33 @@ class Studio(tk.Tk):
         # Fokus dapat berpindah ke spinbox/panel; shortcut tetap harus hidup
         # selama pengguna berada di tab Label.
         self.bind_all("<KeyPress>", self._shortcut_label, add="+")
-        # Panel tetap tanpa scrollbar: kontrol dipadatkan dan disusun vertikal
-        # agar alur kerja terlihat sekaligus seperti panel aplikasi desktop.
-        right = tk.Frame(f, bg=BG, width=390); right.pack(side="left", fill="y"); right.pack_propagate(False)
+        # Panel kanan bisa di-scroll. Dulu tanpa scrollbar karena semua kontrol
+        # muat; setelah slider Cerahkan/Pertajam/Bantu riser-tread dan tombol
+        # alat ditambahkan, bagian bawahnya keluar layar pada monitor yang
+        # lebih pendek dan tidak dapat dijangkau sama sekali.
+        luar = tk.Frame(f, bg=BG, width=390); luar.pack(side="left", fill="y"); luar.pack_propagate(False)
+        gulir = tk.Canvas(luar, bg=BG, highlightthickness=0)
+        bilah = ttk.Scrollbar(luar, orient="vertical", command=gulir.yview)
+        gulir.configure(yscrollcommand=bilah.set)
+        bilah.pack(side="right", fill="y"); gulir.pack(side="left", fill="both", expand=True)
+        right = tk.Frame(gulir, bg=BG)
+        jendela = gulir.create_window((0, 0), window=right, anchor="nw")
+        right.bind("<Configure>", lambda _e: gulir.configure(scrollregion=gulir.bbox("all")))
+        gulir.bind("<Configure>", lambda e: gulir.itemconfigure(jendela, width=e.width))
+        self._panel_gulir = gulir
+
+        def gulir_panel(e, langkah):
+            # Hanya bila kursor di atas panel ini; kanvas gambar punya zoom/geser sendiri.
+            w = self.winfo_containing(e.x_root, e.y_root)
+            while w is not None and w is not gulir:
+                w = getattr(w, "master", None)
+            if w is None or gulir.yview() == (0.0, 1.0):
+                return None
+            gulir.yview_scroll(langkah, "units")
+            return "break"
+        self.bind_all("<Button-4>", lambda e: gulir_panel(e, -3), add="+")
+        self.bind_all("<Button-5>", lambda e: gulir_panel(e, 3), add="+")
+        self.bind_all("<MouseWheel>", lambda e: gulir_panel(e, -3 if e.delta > 0 else 3), add="+")
         b, i = self.card(right, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 7))
         self.list_frame = tk.Listbox(i, height=5, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT)
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
