@@ -1708,6 +1708,10 @@ class Studio(tk.Tk):
         def gulir_panel(e, langkah):
             # Hanya bila kursor di atas panel ini; kanvas gambar punya zoom/geser sendiri.
             w = self.winfo_containing(e.x_root, e.y_root)
+            # Widget yang bisa digulir sendiri (daftar frame, teks) tetap menggulir
+            # dirinya saja; tanpa ini daftar frame dan panel bergerak bersamaan.
+            if isinstance(w, (tk.Listbox, tk.Text)):
+                return None
             while w is not None and w is not gulir:
                 w = getattr(w, "master", None)
             if w is None or gulir.yview() == (0.0, 1.0):
@@ -1718,7 +1722,7 @@ class Studio(tk.Tk):
         self.bind_all("<Button-5>", lambda e: gulir_panel(e, 3), add="+")
         self.bind_all("<MouseWheel>", lambda e: gulir_panel(e, -3 if e.delta > 0 else 3), add="+")
         b, i = self.card(right, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 7))
-        self.list_frame = tk.Listbox(i, height=5, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT)
+        self.list_frame = tk.Listbox(i, height=8, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT)
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
         # Klik kanan pada daftar menyalin nama frame yang ditunjuk KURSOR,
         # bukan yang sedang terpilih; keduanya sering berbeda saat menelusuri.
