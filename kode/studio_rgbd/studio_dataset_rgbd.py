@@ -308,23 +308,86 @@ class TombolRounded(tk.Canvas):
 
 
 def _cerahkan(rgb: np.ndarray, kekuatan: float) -> np.ndarray:
-    """CLAHE pada kanal L (LAB) untuk memperjelas struktur pada frame gelap.
+    """Terangkan frame gelap: auto-eksposur, gamma, lalu CLAHE pada kanal L (LAB).
 
-    CLAHE menyesuaikan kontras per PETAK LOKAL, bukan menaikkan kecerahan
-    rata citra. Pada frame yang hampir tak berisi sinyal (sangat gelap,
-    dominan derau sensor seperti rekaman malam), penguatan seragam (gamma
-    atau linear) hanya memperbesar derau tanpa membuat tepi anak tangga lebih
-    terlihat -- CLAHE menonjolkan tepi yang memang ada tanpa mengarang detail
-    yang tidak terekam. ``kekuatan`` mencampur hasil CLAHE dengan citra asli,
-    0 = tidak berubah, 1 = CLAHE penuh, sehingga tidak cerah-mati saja.
+    CLAHE saja hanya menaikkan rerata kecerahan frame malam 211803 dari ~6 ke
+    ~21 (dari 255), masih terlalu gelap untuk melabeli. Karena itu kanal L
+    lebih dulu direntangkan dari persentil 1-99,5% ke rentang penuh
+    (auto-eksposur per frame), bayangan diangkat dengan gamma, baru CLAHE
+    menonjolkan tepi lokal. Pada frame tergelap (rerata 4) hasilnya ~92.
+    Derau sensor ikut terlihat: itu memang yang terekam, bukan dibuat-buat.
+    ``kekuatan`` 0 = tidak berubah, 1 = penuh.
     """
     if kekuatan <= 0:
         return rgb
     lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
     l, a, b = cv2.split(lab)
-    l2 = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(l)
-    hasil = cv2.cvtColor(cv2.merge((l2, a, b)), cv2.COLOR_LAB2RGB)
-    return hasil if kekuatan >= 1 else cv2.addWeighted(rgb, 1 - kekuatan, hasil, kekuatan, 0)
+    lo, hi = np.percentile(l, (1, 99.5))
+    hi = max(float(hi), float(lo) + 8.0)
+    lf = np.clip((l.astype(np.float32) - lo) / (hi - lo), 0, 1) ** (1.0 / (1.0 + 1.5 * kekuatan))
+    l2 = cv2.createCLAHE(clipLimit=2.0 + 2.0 * kekuatan, tileGridSize=(8, 8)).apply((lf * 255).astype(np.uint8))
+    l2 = cv2.addWeighted(l, 1 - kekuatan, l2, kekuatan, 0) if kekuatan < 1 else l2
+    return cv2.cvtColor(cv2.merge((l2, a, b)), cv2.COLOR_LAB2RGB)
+
+
+def golong_arah_permukaan(depth_m: np.ndarray, fx: float, fy: float, cx: float, cy: float) -> np.ndarray:
+    """Golongkan piksel menurut arah permukaan dari depth: 1 menghadap atas, 2 menghadap kamera, 3 lain, 0 tanpa depth.
+
+    Pada frame gelap riser dan tread sama-sama hitam di RGB, tetapi arah
+    permukaannya berbeda 90 derajat dan depth tidak terpengaruh cahaya.
+    Normal dihitung dari titik 3-D (depth dihaluskan), lalu dikelompokkan
+    k-means menjadi tiga arah dominan: yang normalnya paling ke atas (sumbu
+    Y kamera ke bawah) adalah permukaan datar, yang paling menghadap kamera
+    adalah permukaan tegak di depan kamera. Ini ARAH permukaan, bukan label:
+    dinding yang menghadap kamera ikut tergolong "menghadap kamera".
+    """
+    sah = depth_m > 0.15
+    if int(sah.sum()) < 500:
+        return np.zeros(depth_m.shape, np.uint8)
+    z = depth_m.astype(np.float32).copy()
+    z[~sah] = float(np.median(z[sah]))
+    z = cv2.GaussianBlur(z, (0, 0), 3.0)
+    h, w = z.shape
+    L = 5
+    v, u = np.mgrid[0:h, 0:w].astype(np.float32)
+    P = np.dstack([(u - cx) * z / fx, (v - cy) * z / fy, z])
+    n = np.cross(np.roll(P, -L, 1) - np.roll(P, L, 1), np.roll(P, -L, 0) - np.roll(P, L, 0))
+    n /= np.linalg.norm(n, axis=2, keepdims=True) + 1e-9
+    n[(n * P).sum(2) > 0] *= -1
+    contoh = n[sah][np.random.default_rng(0).integers(0, int(sah.sum()), 6000)].astype(np.float32)
+    _, _, pusat = cv2.kmeans(contoh, 3, None, (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1e-3),
+                             3, cv2.KMEANS_PP_CENTERS)
+    pusat /= np.linalg.norm(pusat, axis=1, keepdims=True)
+    atas = int(np.argmin(pusat[:, 1]))
+    kamera = min((i for i in range(3) if i != atas), key=lambda i: pusat[i, 2])
+    kelas = np.argmax(n.reshape(-1, 3) @ pusat.T, axis=1).reshape(h, w)
+    peta = np.full((h, w), 3, np.uint8)
+    peta[kelas == atas] = 1
+    peta[kelas == kamera] = 2
+    peta[~sah] = 0
+    peta = cv2.medianBlur(peta, 7)
+    for c in (1, 2):                                   # bercak derau kecil dibuang
+        nk, lab, stat, _ = cv2.connectedComponentsWithStats((peta == c).astype(np.uint8), 8)
+        kecil = np.flatnonzero(stat[:, cv2.CC_STAT_AREA] < 800)
+        peta[np.isin(lab, kecil[kecil > 0])] = 0
+    return peta
+
+
+def _lapisan_arah(rgb: np.ndarray, peta: np.ndarray, kekuatan: float) -> np.ndarray:
+    """Warnai arah permukaan (biru = atas/tread, merah = hadap kamera/riser) dan garis kuning di batas keduanya."""
+    if kekuatan <= 0 or peta is None:
+        return rgb
+    warna = np.zeros_like(rgb)
+    warna[peta == 1] = (90, 169, 255)
+    warna[peta == 2] = (255, 90, 90)
+    warna[peta == 3] = (140, 140, 140)
+    out = rgb.copy()
+    ada = peta > 0
+    out[ada] = cv2.addWeighted(rgb, 1 - 0.55 * kekuatan, warna, 0.55 * kekuatan, 0)[ada]
+    a, r = (peta == 1).astype(np.uint8), (peta == 2).astype(np.uint8)
+    ker = np.ones((3, 3), np.uint8)
+    out[((cv2.dilate(a, ker) & r) | (cv2.dilate(r, ker) & a)) > 0] = (255, 230, 0)
+    return out
 
 
 def _pertajam(rgb: np.ndarray, kekuatan: float) -> np.ndarray:
@@ -360,6 +423,9 @@ class KanvasLabel(tk.Canvas):
         self.depth_alpha = 0.0
         self.kecerahan = 0.0     # 0 = asli, 1 = CLAHE penuh (lihat _cerahkan)
         self.ketajaman = 0.0     # 0 = asli, unsharp mask (lihat _pertajam)
+        self.bantu_arah = 0.0    # 0 = mati; lapisan arah permukaan dari depth (lihat _lapisan_arah)
+        self.intrinsik = None    # dict fx, fy, cx, cy, depth_scale frame aktif; diisi Studio
+        self._peta_arah = self._peta_arah_key = None
         self.mask_alpha = 0.42
         self.mode = "objek"
         # Tiap kelas menampung BANYAK poligon: satu anak tangga = satu instance.
@@ -564,12 +630,21 @@ class KanvasLabel(tk.Canvas):
     def gambar_tampil(self) -> np.ndarray:
         assert self.rgb is not None
         key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3),
-              round(self.kecerahan, 3), round(self.ketajaman, 3))
+              round(self.kecerahan, 3), round(self.ketajaman, 3), round(self.bantu_arah, 3))
         if self._tampil_key == key and self._tampil_cache is not None:
             return self._tampil_cache
         # Tajam setelah cerah: menajamkan derau mentah pada frame gelap lebih
         # kuat daripada menajamkan tepi yang CLAHE sudah bantu tonjolkan.
         out = _pertajam(_cerahkan(self.rgb, self.kecerahan), self.ketajaman)
+        if self.bantu_arah > 0 and self.depth is not None and self.intrinsik is not None:
+            # Dihitung sekali per frame (~0,1 s). Kuncinya objek depth itu sendiri,
+            # bukan id(): id bisa dipakai ulang oleh array frame berikutnya.
+            if self._peta_arah_key is not self.depth:
+                i = self.intrinsik
+                self._peta_arah = golong_arah_permukaan(self.depth.astype(np.float32) * float(i["depth_scale"]),
+                                                        i["fx"], i["fy"], i["cx"], i["cy"])
+                self._peta_arah_key = self.depth
+            out = _lapisan_arah(out, self._peta_arah, self.bantu_arah)
         if self.depth is not None and self.depth_alpha > 0:
             d = self.depth.astype(np.float32)
             valid = d > 0
@@ -593,7 +668,7 @@ class KanvasLabel(tk.Canvas):
         margin = 12
         size = (max(1, round(w * self.scale)), max(1, round(h * self.scale)))
         key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.kecerahan, 3),
-              round(self.ketajaman, 3), round(self.scale, 5), size)
+              round(self.ketajaman, 3), round(self.bantu_arah, 3), round(self.scale, 5), size)
         # Drag titik bisa memanggil render puluhan kali/detik. Gambar dasar
         # cukup dibuat sekali; yang berubah hanya garis poligon di atasnya.
         if self._photo_key != key or self._photo is None:
@@ -1324,6 +1399,7 @@ class Studio(tk.Tk):
         self.mask_alpha = DoubleVar(value=0.42)
         self.kecerahan = DoubleVar(value=float(preferensi.get("kecerahan", 0.0)))
         self.ketajaman = DoubleVar(value=float(preferensi.get("ketajaman", 0.0)))
+        self.bantu_arah = DoubleVar(value=float(preferensi.get("bantu_arah", 0.0)))
         self.magnet_titik = BooleanVar(value=True)
         self.mode_label = StringVar(value="objek")
         self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
@@ -1674,6 +1750,10 @@ class Studio(tk.Tk):
         tk.Scale(edit_i, from_=0, to=2.0, resolution=.1, orient="horizontal", variable=self.ketajaman,
                  command=lambda _: self.ganti_ketajaman(), label="Pertajam (unsharp mask)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
+        tk.Scale(edit_i, from_=0, to=1.0, resolution=.1, orient="horizontal", variable=self.bantu_arah,
+                 command=lambda _: self.ganti_bantu_arah(),
+                 label="Bantu riser/tread dari depth (biru atas, merah hadap kamera)", bg=PANEL, fg=INK,
+                 highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
         alat_f = tk.Frame(edit_i, bg=PANEL); alat_f.pack(fill="x", pady=(4, 0))
         baris_alat = tk.Frame(alat_f, bg=PANEL); baris_alat.pack(fill="x")
         for nilai, teks in (("normal", "✏ Titik"), ("geser", "✋ Geser (G)"), ("blok", "▭ Blok (X)")):
@@ -1802,7 +1882,8 @@ class Studio(tk.Tk):
                                           "kontrol_label": self.kontrol_label.get(),
                                           "mode_touchpad": bool(self.mode_touchpad.get()),
                                           "kecerahan": float(self.kecerahan.get()),
-                                          "ketajaman": float(self.ketajaman.get())})
+                                          "ketajaman": float(self.ketajaman.get()),
+                                          "bantu_arah": float(self.bantu_arah.get())})
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
@@ -3098,7 +3179,12 @@ class Studio(tk.Tk):
         # Pilihan A/S dipertahankan antar-frame. Penguncian hanya
         # diperlukan sebelum navigasi pertama, bukan setiap kali frame baru
         # dibuka; jika tidak tombol panah berhenti setelah satu perpindahan.
-        self.label_path=p; self.label_info=baca_json(p/"frame.json"); self.kanvas.set_frame(cv2.cvtColor(bgr,cv2.COLOR_BGR2RGB),dep)
+        self.label_path=p; self.label_info=baca_json(p/"frame.json")
+        try:
+            self.kanvas.intrinsik = self._intrinsics(self.label_info)
+        except (KeyError, TypeError, ValueError):
+            self.kanvas.intrinsik = None               # frame tanpa intrinsik: lapisan arah tidak tersedia
+        self.kanvas.set_frame(cv2.cvtColor(bgr,cv2.COLOR_BGR2RGB),dep)
         draft = baca_json(p / "label_draft.json", {})
         if draft.get("poligon"):
             self.kanvas.poligon = {nama: [list(map(tuple, poly)) for poly in draft["poligon"].get(nama, [])]
@@ -3609,6 +3695,10 @@ class Studio(tk.Tk):
         self.simpan_preferensi()
     def ganti_ketajaman(self):
         self.kanvas.ketajaman = float(self.ketajaman.get())
+        self.kanvas.render()
+        self.simpan_preferensi()
+    def ganti_bantu_arah(self):
+        self.kanvas.bantu_arah = float(self.bantu_arah.get())
         self.kanvas.render()
         self.simpan_preferensi()
     def ganti_opasitas_mask(self): self.kanvas.mask_alpha=float(self.mask_alpha.get()); self.kanvas.render()
