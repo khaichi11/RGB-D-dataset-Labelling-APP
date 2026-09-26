@@ -1395,6 +1395,8 @@ class Studio(tk.Tk):
         self.filter_sesi = StringVar(value="tangga_naik")
         self.nomor_mask = IntVar(value=1)
         self._autosave_setelah = None
+        self._jam_x: tuple[int, float] | None = None       # (waktu event X, jam lokal) untuk membuang antrean auto-repeat
+        self._navigasi_selesai = 0.0
         self.depth_alpha = DoubleVar(value=0.28)
         self.mask_alpha = DoubleVar(value=0.42)
         self.kecerahan = DoubleVar(value=float(preferensi.get("kecerahan", 0.0)))
@@ -3369,18 +3371,18 @@ class Studio(tk.Tk):
             if event.keysym.lower() == "s":
                 return self.pilih_mode_keyboard("acuan")
             if event.keysym == "space":
-                return self.pindah_frame_keyboard(1)
+                return self.pindah_frame_keyboard(1, event)
             if event.keysym.lower() == "d":
-                return self.pindah_frame_keyboard(-1)
+                return self.pindah_frame_keyboard(-1, event)
         else:
             if event.keysym in {"Prior", "Page_Up", "KP_Prior"}:
                 return self.pilih_mode_keyboard("objek")
             if event.keysym in {"Next", "Page_Down", "KP_Next"}:
                 return self.pilih_mode_keyboard("acuan")
             if event.keysym == "Left":
-                return self.pindah_frame_keyboard(-1)
+                return self.pindah_frame_keyboard(-1, event)
             if event.keysym == "Right":
-                return self.pindah_frame_keyboard(1)
+                return self.pindah_frame_keyboard(1, event)
         return None
 
     def teks_kontrol_label(self):
@@ -3411,8 +3413,27 @@ class Studio(tk.Tk):
         self.status.set(f"Mode {warna} aktif. Titik warna lain tidak akan ikut terseleksi.")
         return "break"
 
-    def pindah_frame_keyboard(self, arah: int):
+    def pindah_frame_keyboard(self, arah: int, event=None):
+        """Pindah frame dari papan ketik, tanpa menumpuk penekanan auto-repeat.
+
+        Menahan Space mengirim ~30 penekanan per detik, sedangkan membuka satu
+        frame lebih lambat dari itu. Penekanan menumpuk di antrean dan terus
+        diproses setelah tombol dilepas, sehingga frame masih maju sendiri.
+        Cap waktu event (jam server X, ms) dipetakan ke jam lokal; penekanan
+        yang tiba selagi frame sebelumnya masih dimuat dibuang, bukan diantre.
+        """
+        t = getattr(event, "time", 0) if event is not None else 0
+        if t:
+            sekarang = time.perf_counter()
+            if self._jam_x is None or t < self._jam_x[0]:
+                self._jam_x = (t, sekarang)                 # sinkron pertama, atau jam X berputar ulang
+            tiba = self._jam_x[1] + (t - self._jam_x[0]) / 1000.0
+            if tiba > sekarang + 0.05:                      # jam bergeser: sinkron ulang
+                self._jam_x, tiba = (t, sekarang), sekarang
+            if tiba < self._navigasi_selesai:
+                return "break"
         self.pindah_frame_label(arah)
+        self._navigasi_selesai = time.perf_counter()
         return "break"
 
     def _aktif_mask_berubah(self, nama: str, indeks: int | None):
