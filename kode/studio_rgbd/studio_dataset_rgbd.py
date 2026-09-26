@@ -3322,6 +3322,12 @@ class Studio(tk.Tk):
         except ValueError:
             kini = -1 if arah > 0 else 0
         tujuan = max(0, min(kini + arah, len(self.frame_paths) - 1))
+        # Di ujung daftar tujuan sama dengan frame sekarang. Dulu frame itu dibuka
+        # ulang dari awal (gambar dimuat lagi, kanvas dikosongkan lalu digambar
+        # ulang), sehingga menahan Space di frame terakhir membuat layar berkedip.
+        if tujuan == kini:
+            self.status.set("Sudah frame terakhir." if arah > 0 else "Sudah frame pertama.")
+            return
         self.list_frame.selection_clear(0, "end"); self.list_frame.selection_set(tujuan); self.list_frame.activate(tujuan)
         self._buka_frame_ekspor(self.frame_paths[tujuan])
 
