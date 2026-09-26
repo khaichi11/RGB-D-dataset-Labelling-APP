@@ -55,9 +55,8 @@ if __package__:
     from .geometri import Z_MAX, Z_MIN
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
-    from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth, verifikasi_depth
-    from .segmentasi_convnext_depth import usulkan as usulkan_convnext_depth
-    from .segmentasi_sam2 import hangatkan as hangatkan_sam2, rapikan_kelompok as rapikan_sam2
+    from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
+    from .segmentasi_convnext_depth import hangatkan as hangatkan_convnext, usulkan as usulkan_convnext_depth
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from studio_rgbd.kamera_rgbd import (KameraRGBD, cari_rekaman, nama_aman, nama_rekaman,
@@ -66,9 +65,8 @@ else:
     from studio_rgbd.geometri import Z_MAX, Z_MIN
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
-    from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth, verifikasi_depth
-    from studio_rgbd.segmentasi_convnext_depth import usulkan as usulkan_convnext_depth
-    from studio_rgbd.segmentasi_sam2 import hangatkan as hangatkan_sam2, rapikan_kelompok as rapikan_sam2
+    from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
+    from studio_rgbd.segmentasi_convnext_depth import hangatkan as hangatkan_convnext, usulkan as usulkan_convnext_depth
 
 
 BG = "#F3EEE7"
@@ -1417,7 +1415,7 @@ class Studio(tk.Tk):
         self.tabs.bind("<<NotebookTabChanged>>", self.ganti_tab)
         self.after(30, self._poll)
         self.after(120, self.muat_daftar)   # daftar tangga langsung terlihat saat aplikasi dibuka
-        self.after(500, self._hangatkan_sam2_async)
+        self.after(500, self._hangatkan_model_async)
         self.status.set("Siap untuk labeling. Kamera dinyalakan hanya saat Preview Kamera atau Mulai rekam ditekan.")
 
     # ----- struktur data -----
@@ -1806,7 +1804,7 @@ class Studio(tk.Tk):
                        activebackground=PANEL).pack(side="left")
         self.tombol_ringkas(magnet, "🧲 Rapikan semua", self.rapikan_magnet_semua,
                              "#E8DDD5", INK, width=138).pack(side="right")
-        self.tombol(otomatis_i, "✨ Rekomendasi tangga: ConvNeXt RGB-D + SAM 2", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(8, 2))
+        self.tombol(otomatis_i, "✨ Rekomendasi tangga: ConvNeXt RGB-D", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(8, 2))
         self.tombol(otomatis_i, "⚡ Batch auto-label frame baru", self.batch_auto_label, BLUE).pack(fill="x", pady=(4, 2))
         # Penanda status berada tepat di atas tombolnya supaya keadaan frame
         # terbaca sebelum tombol ditekan, bukan sesudahnya.
@@ -3238,17 +3236,17 @@ class Studio(tk.Tk):
     def _auto_segmentasi(self, target: Path):
         if target != self.label_path or self._punya_label(target):
             return
-        self.status.set(f"Auto-segmentasi ConvNeXt RGB-D + SAM 2 untuk {target.name}…")
+        self.status.set(f"Auto-segmentasi ConvNeXt RGB-D untuk {target.name}…")
         self.usulkan_segmentasi()
 
-    def _hangatkan_sam2_async(self):
+    def _hangatkan_model_async(self):
         def kerja():
             try:
-                hangatkan_sam2(); self.q.put(("sam_siap", None))
+                self.q.put(("model_siap", hangatkan_convnext()))
             except Exception as e:  # noqa: BLE001
-                self.q.put(("sam_gagal", str(e)))
-        self._sam_warm_thread = threading.Thread(target=kerja, daemon=True)
-        self._sam_warm_thread.start()
+                self.q.put(("model_gagal", str(e)))
+        self._model_warm_thread = threading.Thread(target=kerja, daemon=True)
+        self._model_warm_thread.start()
 
     def _rekomendasi_tangga_data(self, rgb, depth, info):
         """Versi tanpa Tk untuk worker batch; sama dengan saran tangga UI."""
@@ -3258,20 +3256,19 @@ class Studio(tk.Tk):
         # Jalur batch memakai pengusul yang sama dengan jalur UI; kalau
         # berbeda, label hasil batch dan label hasil klik tidak sebanding.
         # depth Z16 mentah; k membawa depth_scale agar model menerima meter.
+        # Poligon langsung dari peta kelas model, tanpa SAM 2: pada 52 frame
+        # terperiksa 211803, SAM 2 + verifikasi depth menurunkan Dice usulan
+        # dari 0,887 ke 0,841 (bukti/final_d435/eksperimen_semua_data_20260925/auto_label).
         hasil = usulkan_convnext_depth(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), depth, k)
-        depth_info = usulkan_segmentasi(depth, k)
-        rapih = rapikan_sam2(rgb, {"tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"]},
-                              {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
-        rapih = verifikasi_depth(rapih, depth)
-        return {"acuan": rapih["tapakan"], "objek": rapih["bidang_tegak"]}
+        return {"acuan": hasil["tapakan"], "objek": hasil["bidang_tegak"]}
 
     def batch_auto_label(self):
         if not self.sesi:
             messagebox.showinfo("Pilih sesi", "Pilih sesi pada tab Tinjau dahulu.", parent=self); return
         if getattr(self, "_batch_thread", None) and self._batch_thread.is_alive():
             messagebox.showinfo("Batch berjalan", "Tunggu auto-label batch selesai.", parent=self); return
-        if getattr(self, "_sam_warm_thread", None) and self._sam_warm_thread.is_alive():
-            self.status.set("SAM 2 sedang dimuat ke GPU; batch akan tersedia sesaat lagi."); return
+        if getattr(self, "_model_warm_thread", None) and self._model_warm_thread.is_alive():
+            self.status.set("Model ConvNeXt sedang dimuat ke GPU; batch akan tersedia sesaat lagi."); return
         target = [p for p in self.daftar_frame_ekspor() if not self._punya_label(p)]
         if not target:
             messagebox.showinfo("Tidak ada frame baru", "Semua frame sudah memiliki draft atau label.", parent=self); return
@@ -3695,13 +3692,7 @@ class Studio(tk.Tk):
                 # depth_scale agar model menerima kedalaman dalam meter.
                 hasil = usulkan_convnext_depth(cv2.cvtColor(self.kanvas.rgb, cv2.COLOR_RGB2BGR),
                                                self.kanvas.depth, self._intrinsics(info))
-                depth_info = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
-                rapih = rapikan_sam2(self.kanvas.rgb, {
-                    "tapakan": hasil["tapakan"], "bidang_tegak": hasil["bidang_tegak"],
-                }, {"tapakan": depth_info["mask_datar"], "bidang_tegak": depth_info["mask_tegak"]})
-                rapih = verifikasi_depth(rapih, self.kanvas.depth)
-                hasil["tapakan"], hasil["bidang_tegak"] = rapih["tapakan"], rapih["bidang_tegak"]
-                hasil["sumber"] = hasil.get("sumber", "ConvNeXt RGB-D") + " + SAM 2.1 Tiny"
+                # Tanpa SAM 2; alasannya di _rekomendasi_tangga_data.
             else:
                 hasil = usulkan_segmentasi(self.kanvas.depth, self._intrinsics(info))
                 hasil["sumber"] = "depth (bobot YOLO tangga tidak dipakai untuk kategori ini)"
@@ -3942,10 +3933,10 @@ class Studio(tk.Tk):
             while True:
                 k,v=self.q.get_nowait()
                 if k=="status":self.status.set(str(v))
-                elif k=="sam_siap":
-                    self.status.set("SAM 2 siap di GPU. Batch auto-label dapat dijalankan tanpa memuat ulang model.")
-                elif k=="sam_gagal":
-                    self.status.set(f"SAM 2 belum siap: {v}")
+                elif k=="model_siap":
+                    self.status.set(f"Pengusul label siap di GPU: {v}")
+                elif k=="model_gagal":
+                    self.status.set(f"Pengusul label belum siap: {v}")
                 elif k=="batch_auto_selesai":
                     jadi, gagal = v; self.muat_frame()
                     self.status.set(f"Batch auto-label selesai: {jadi} frame dibuat, {gagal} gagal. Periksa dan rapikan hasilnya.")

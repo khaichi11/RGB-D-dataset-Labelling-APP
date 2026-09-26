@@ -34,6 +34,7 @@ dan ditandai `diperiksa_manual` sebelum dipakai melatih.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -48,7 +49,7 @@ KANDIDAT_BOBOT = [
     ('ConvNeXt Atto ImageNet (pra-latih publik)', 'bobot/kandidat/banding5kecil/cnx_atto_in1k/pra/best.pt'),
     ('ConvNeXt Atto (pra-latih publik)', 'bobot/kandidat/banding4/convnext_atto/pra/best.pt'),
 ]
-NAMA_BOBOT_USULAN = 'ConvNeXt V2 Atto RGB-D 384 (fine-tune D435, aplikasi_tangga)'
+NAMA_BOBOT_USULAN = 'ConvNeXt V2 Atto RGB-D 384'   # diganti nama checkpoint yang benar-benar dimuat
 SKALA_DEPTH_D435 = 0.001            # meter per satuan Z16 bila frame.json tidak menyertakannya
 RISER, TREAD = 1, 2
 
@@ -74,19 +75,46 @@ def cari_bobot() -> tuple[str, Path]:
                             + '\n  '.join(rel for _, rel in KANDIDAT_BOBOT))
 
 
+# Urutan pencarian checkpoint pengusul label. Model eksperimen seluruh data
+# (dilatih pada 643 frame terperiksa dari sembilan rekaman) dipakai lebih dulu:
+# pada 52 frame terperiksa rekaman 211803 yang tidak ikut dilatih, Dice
+# usulannya 0,887 lawan 0,814 untuk checkpoint rujukan. Rujukan tetap menjadi
+# cadangan karena checkpoint eksperimen tidak masuk Git. Variabel lingkungan
+# STUDIO_BOBOT_USULAN mengalahkan keduanya, untuk membandingkan checkpoint lain.
+BOBOT_USULAN = [
+    ('ConvNeXt V2 Atto RGB-D 384 (eksperimen seluruh data 2026-09-25)',
+     'runs/eksperimen_semua_data_20260925/deployment_penuh.pt'),
+    ('ConvNeXt V2 Atto RGB-D 384 (rujukan final_d435)',
+     'bobot/final_d435/cnx_atto_in1k_384.pt'),
+]
+
+
+def pilih_bobot_usulan() -> tuple[str, Path]:
+    """Nama dan jalur checkpoint pengusul label yang pertama tersedia."""
+    env = os.environ.get('STUDIO_BOBOT_USULAN', '').strip()
+    if env:
+        p = Path(env).expanduser()
+        if not p.exists():
+            raise FileNotFoundError(f'STUDIO_BOBOT_USULAN menunjuk berkas yang tidak ada:\n  {p}')
+        return f'ConvNeXt RGB-D ({p.name}, dari STUDIO_BOBOT_USULAN)', p
+    for nama, rel in BOBOT_USULAN:
+        p = akar_aplikasi() / rel
+        if p.exists():
+            return nama, p
+    raise FileNotFoundError('Checkpoint pengusul label tidak ditemukan. Yang dicari, berurutan:\n  '
+                            + '\n  '.join(str(akar_aplikasi() / rel) for _, rel in BOBOT_USULAN))
+
+
 def bobot_usulan() -> Path:
-    """Checkpoint rujukan aplikasi yang dipakai pengusul label."""
-    p = akar_aplikasi() / 'bobot' / 'final_d435' / 'cnx_atto_in1k_384.pt'
-    if not p.exists():
-        raise FileNotFoundError(f'Checkpoint pengusul label tidak ditemukan:\n  {p}')
-    return p
+    """Checkpoint yang dipakai pengusul label (lihat :data:`BOBOT_USULAN`)."""
+    return pilih_bobot_usulan()[1]
 
 
 def _muat():
     """Muat model sekali lalu simpan; memuat ulang tiap frame terlalu lambat."""
-    global _MODEL
+    global _MODEL, NAMA_BOBOT_USULAN
     if _MODEL is None:
-        jalur = bobot_usulan()
+        NAMA_BOBOT_USULAN, jalur = pilih_bobot_usulan()
         akar = str(akar_aplikasi())
         if akar not in sys.path:
             sys.path.insert(0, akar)
