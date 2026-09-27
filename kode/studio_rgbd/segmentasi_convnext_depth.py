@@ -36,12 +36,14 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 _MODEL = None
+_KUNCI = threading.RLock()
 
 # Bobot lama untuk uji_berkas.py (kode model stair_fusion_atto). Tidak dipakai pengusul label.
 KANDIDAT_BOBOT = [
@@ -111,22 +113,43 @@ def bobot_usulan() -> Path:
 
 
 def _muat():
-    """Muat model sekali lalu simpan; memuat ulang tiap frame terlalu lambat."""
+    """Muat model sekali lalu simpan; memuat ulang tiap frame terlalu lambat.
+
+    Kunci mencegah pemuatan ganda: pemanasan di thread latar dan auto-label
+    frame pertama di thread UI bisa memanggil fungsi ini bersamaan.
+    """
     global _MODEL, NAMA_BOBOT_USULAN
-    if _MODEL is None:
-        NAMA_BOBOT_USULAN, jalur = pilih_bobot_usulan()
-        akar = str(akar_aplikasi())
-        if akar not in sys.path:
-            sys.path.insert(0, akar)
-        from rgbd_convnext.konfigurasi_utama import muat_model_utama
-        _MODEL = muat_model_utama(jalur)
+    with _KUNCI:
+        if _MODEL is None:
+            NAMA_BOBOT_USULAN, jalur = pilih_bobot_usulan()
+            akar = str(akar_aplikasi())
+            if akar not in sys.path:
+                sys.path.insert(0, akar)
+            from rgbd_convnext.konfigurasi_utama import muat_model_utama
+            _MODEL = muat_model_utama(jalur)
     return _MODEL
 
 
 def hangatkan() -> str:
-    """Muat model lebih awal agar klik pertama tidak terasa lambat."""
+    """Muat model dan jalankan satu inferensi kosong di thread pemanggil."""
     _muat()
+    panaskan_utas_ini()
     return NAMA_BOBOT_USULAN
+
+
+def panaskan_utas_ini() -> None:
+    """Satu inferensi kosong di thread pemanggil.
+
+    Inferensi pertama tiap thread menanggung pembuatan handle cuDNN/cuBLAS
+    (~0,35 s terukur di Studio, lalu 10-17 ms per frame). Handle itu milik
+    thread, jadi pemanasan di thread latar tidak menolong thread UI; Studio
+    memanggil fungsi ini sekali di thread UI begitu model siap, sebelum
+    auto-label frame pertama.
+    """
+    mu = _muat()
+    from rgbd_convnext.konfigurasi_utama import prediksi_kelas
+    with _KUNCI:
+        prediksi_kelas(mu, np.zeros((480, 848, 3), np.uint8), np.ones((480, 848), np.float32))
 
 
 def kedalaman_meter(depth: np.ndarray, k: dict | None = None, skala_depth: float | None = None) -> np.ndarray:
@@ -236,7 +259,8 @@ def usulkan(rgb_bgr: np.ndarray, depth: np.ndarray, k: dict | None = None,
     from rgbd_convnext.konfigurasi_utama import prediksi_kelas
 
     meter = kedalaman_meter(depth, k, skala_depth)
-    peta_kelas = prediksi_kelas(mu, rgb_bgr, meter)
+    with _KUNCI:
+        peta_kelas = prediksi_kelas(mu, rgb_bgr, meter)
     return {
         'tapakan': _poligon(peta_kelas == TREAD),
         'bidang_tegak': _poligon(peta_kelas == RISER),

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import json
 import os
 import queue
@@ -56,7 +57,8 @@ if __package__:
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
-    from .segmentasi_convnext_depth import hangatkan as hangatkan_convnext, usulkan as usulkan_convnext_depth
+    from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
+                                         usulkan as usulkan_convnext_depth)
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from studio_rgbd.kamera_rgbd import (KameraRGBD, cari_rekaman, nama_aman, nama_rekaman,
@@ -66,7 +68,8 @@ else:
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
-    from studio_rgbd.segmentasi_convnext_depth import hangatkan as hangatkan_convnext, usulkan as usulkan_convnext_depth
+    from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
+                                         usulkan as usulkan_convnext_depth)
 
 
 BG = "#F3EEE7"
@@ -659,26 +662,48 @@ class KanvasLabel(tk.Canvas):
         if self.rgb is None:
             return
         h, w = self.rgb.shape[:2]
-        # Gambar penuh lebih stabil daripada tile saat kanvas digeser cepat:
-        # tile sempat dapat menyisakan area gelap. Beban zoom tetap dibatasi
-        # lewat render cepat BILINEAR dan overlay ringan di bawah.
+        # Pada zoom besar yang dibuat hanya bagian citra yang terlihat, ditambah
+        # cadangan 35% layar di tiap sisi. Dulu seluruh citra diperbesar: pada
+        # zoom 4x itu 3392x1920 piksel (~0,1-0,15 s per langkah zoom), padahal
+        # yang tampak hanya selebar kanvas. Selama geser tetap di dalam
+        # cadangan, foto lama dipakai ulang dan hanya dipindah (Canvas.move),
+        # sehingga tidak ada area kosong yang sempat terlihat.
         cw, ch = max(1, self.winfo_width()), max(1, self.winfo_height())
         margin = 12
-        size = (max(1, round(w * self.scale)), max(1, round(h * self.scale)))
-        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.kecerahan, 3),
-              round(self.ketajaman, 3), round(self.bantu_arah, 3), round(self.scale, 5), size)
+        s = self.scale
+        dasar = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.kecerahan, 3),
+                 round(self.ketajaman, 3), round(self.bantu_arah, 3), round(s, 5))
+        lama = self._photo_key if self._photo is not None else None
+        if w * h * s * s <= 2_500_000:
+            wilayah = (0, 0, w, h)
+        else:
+            lihat = (max(0, int((-self.ox) / s)), max(0, int((-self.oy) / s)),
+                     min(w, int(math.ceil((cw - self.ox) / s)) + 1), min(h, int(math.ceil((ch - self.oy) / s)) + 1))
+            if lihat[2] <= lihat[0] or lihat[3] <= lihat[1]:
+                wilayah = lama[-1] if lama is not None and lama[:-1] == dasar else (0, 0, w, h)
+            elif (lama is not None and lama[:-1] == dasar and lama[-1][0] <= lihat[0] and lama[-1][1] <= lihat[1]
+                  and lama[-1][2] >= lihat[2] and lama[-1][3] >= lihat[3]):
+                wilayah = lama[-1]
+            else:
+                px, py = cw * .35 / s, ch * .35 / s
+                wilayah = (max(0, int(lihat[0] - px)), max(0, int(lihat[1] - py)),
+                           min(w, int(lihat[2] + px) + 1), min(h, int(lihat[3] + py) + 1))
+        key = dasar + (wilayah,)
         # Drag titik bisa memanggil render puluhan kali/detik. Gambar dasar
         # cukup dibuat sekali; yang berubah hanya garis poligon di atasnya.
         if self._photo_key != key or self._photo is None:
-            # LANCZOS di setiap tick roda mouse mahal, terutama di RGB-D
-            # resolusi tinggi. Ketika zoom masih berlangsung gunakan BILINEAR,
-            # lalu render LANCZOS sekali setelah pengguna berhenti.
+            x0, y0, x1, y1 = wilayah
+            size = (max(1, round((x1 - x0) * s)), max(1, round((y1 - y0) * s)))
+            # LANCZOS di setiap tick roda mouse mahal. Ketika zoom masih
+            # berlangsung gunakan BILINEAR, lalu render LANCZOS sekali setelah
+            # pengguna berhenti.
             resample = Image.BILINEAR if self._zoom_cepat or size[0] * size[1] > 3_000_000 else Image.LANCZOS
-            self._photo = ImageTk.PhotoImage(Image.fromarray(self.gambar_tampil()).resize(size, resample))
+            potong = np.ascontiguousarray(self.gambar_tampil()[y0:y1, x0:x1])
+            self._photo = ImageTk.PhotoImage(Image.fromarray(potong).resize(size, resample))
             self._photo_key = key
         # Foto dasar mahal untuk digambar ulang. Saat titik digeser, yang
         # berubah hanyalah overlay sehingga gambar RGB tetap dipertahankan.
-        gambar_x, gambar_y = self.ox, self.oy
+        gambar_x, gambar_y = self.ox + self._photo_key[-1][0] * s, self.oy + self._photo_key[-1][1] * s
         background_key = (self._photo_key, round(gambar_x, 2), round(gambar_y, 2))
         if self._canvas_background_key != background_key:
             self.delete("gambar")
@@ -1722,7 +1747,11 @@ class Studio(tk.Tk):
         self.bind_all("<Button-5>", lambda e: gulir_panel(e, 3), add="+")
         self.bind_all("<MouseWheel>", lambda e: gulir_panel(e, -3 if e.delta > 0 else 3), add="+")
         b, i = self.card(right, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 7))
-        self.list_frame = tk.Listbox(i, height=8, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT)
+        # extended: Shift+klik / seret memblok rentang, Ctrl+klik menambah satu,
+        # supaya banyak frame bisa dibuang ke sampah sekaligus. exportselection
+        # dimatikan agar pilihan tidak lenyap saat teks lain dipilih.
+        self.list_frame = tk.Listbox(i, height=8, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT,
+                                     selectmode="extended", exportselection=False)
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
         # Klik kanan pada daftar menyalin nama frame yang ditunjuk KURSOR,
         # bukan yang sedang terpilih; keduanya sering berbeda saat menelusuri.
@@ -3186,6 +3215,11 @@ class Studio(tk.Tk):
     def pilih_frame(self):
         s=self.list_frame.curselection()
         if not s:return
+        if len(s) > 1:
+            # Saat memblok, frame tidak dibuka satu per satu: menyeret di atas
+            # 50 baris akan memuat 50 frame dan membuat aplikasi tersendat.
+            self.status.set(f"{len(s)} frame dipilih. Tekan Sampahkan untuk membuang/memulihkan semuanya.")
+            return
         self._buka_frame_ekspor(self.frame_paths[s[0]])
 
     def _buka_frame_ekspor(self, p: Path):
@@ -3605,34 +3639,52 @@ class Studio(tk.Tk):
         return "break"
 
     def toggle_sampah_frame(self):
-        if not self.label_path:
+        pilihan = [self.frame_paths[i] for i in self.list_frame.curselection() if i < len(self.frame_paths)]
+        target = pilihan if len(pilihan) > 1 else ([self.label_path] if self.label_path else [])
+        if not target:
             messagebox.showinfo("Pilih frame", "Pilih frame yang ingin dipindahkan atau dipulihkan.", parent=self)
             return
-        state = baca_json(self.label_path / "frame_state.json", {"di_sampah": False})
-        state["di_sampah"] = not state.get("di_sampah", False)
-        state["waktu_ubah_iso"] = datetime.now().isoformat(timespec="seconds")
-        tulis_json(self.label_path / "frame_state.json", state)
+        ke_sampah = not self.tampil_sampah_frame.get()
+        if len(target) > 1 and not messagebox.askyesno(
+                "Sampah frame", f"{'Buang' if ke_sampah else 'Pulihkan'} {len(target)} frame terpilih"
+                f"{' ke sampah' if ke_sampah else ' dari sampah'}?", parent=self):
+            return
+        # Edit yang masih menunggu autosave disimpan dulu; setelah label_path
+        # dikosongkan di bawah, autosave itu tidak lagi tahu frame tujuannya.
+        if self._autosave_setelah is not None:
+            self.after_cancel(self._autosave_setelah)
+            self._autosave_setelah = None
+            self.simpan_draft_label()
+        for f in target:
+            state = baca_json(f / "frame_state.json", {"di_sampah": False})
+            state["di_sampah"] = ke_sampah if len(target) > 1 else not state.get("di_sampah", False)
+            state["waktu_ubah_iso"] = datetime.now().isoformat(timespec="seconds")
+            tulis_json(f / "frame_state.json", state)
         # Hanya frame INI yang ditandai - folder dan isinya tidak dipindah,
         # jadi frame lain, label, dan ekspor yang bisa dilanjutkan tidak
         # terganggu. Pemulihan tinggal membalik tanda lewat tampilan sampah.
-        self.status.set("Frame dibuang ke sampah, lanjut ke frame berikutnya. Centang 'Tampilkan sampah frame' untuk memulihkannya."
-                        if state["di_sampah"] else
-                        "Frame dipulihkan dari sampah, lanjut ke frame berikutnya.")
+        jumlah = f"{len(target)} frame" if len(target) > 1 else "Frame"
+        pesan = (f"{jumlah} dibuang ke sampah, lanjut ke frame berikutnya. Centang 'Tampilkan sampah frame' untuk memulihkannya."
+                 if state["di_sampah"] else
+                 f"{jumlah} dipulihkan dari sampah, lanjut ke frame berikutnya.")
         # Indeks frame yang baru saja ditandai dicatat SEBELUM daftar dimuat
         # ulang. Setelah pemuatan ulang frame itu tidak lagi ada, sehingga
         # indeks yang sama menunjuk frame berikutnya.
-        try:
-            i = self.frame_paths.index(self.label_path)
-        except ValueError:
-            i = 0
+        i = min((self.frame_paths.index(f) for f in target if f in self.frame_paths), default=0)
         self.label_path = None
         self.muat_frame(lanjut_ke=i)
+        self.status.set(pesan)
 
     def hapus_frame_permanen(self):
         """Hapus hanya satu paket turunan ekspor; RAW sesi tetap tidak tersentuh."""
         p = self.label_path
         if not p:
             messagebox.showinfo("Pilih frame", "Pilih frame ekspor yang akan dihapus permanen.", parent=self); return
+        if len(self.list_frame.curselection()) > 1:
+            # Hapus permanen tidak dapat dibatalkan, jadi sengaja satu per satu;
+            # untuk banyak frame pakai Sampahkan, yang bisa dipulihkan.
+            messagebox.showinfo("Pilih satu frame", "Hapus permanen hanya untuk satu frame.\n"
+                                "Untuk banyak frame gunakan Sampahkan (bisa dipulihkan).", parent=self); return
         exports = (self.sesi / "exports").resolve() if self.sesi else None
         if exports is None or exports not in p.resolve().parents:
             messagebox.showerror("Target tidak aman", "Frame bukan bagian dari exports sesi aktif.", parent=self); return
@@ -3935,6 +3987,9 @@ class Studio(tk.Tk):
                 if k=="status":self.status.set(str(v))
                 elif k=="model_siap":
                     self.status.set(f"Pengusul label siap di GPU: {v}")
+                    # Handle cuDNN milik thread; panaskan juga thread UI sekarang
+                    # agar auto-label frame pertama tidak membeku ~0,35 s.
+                    self.after(100, panaskan_utas_ini)
                 elif k=="model_gagal":
                     self.status.set(f"Pengusul label belum siap: {v}")
                 elif k=="batch_auto_selesai":
