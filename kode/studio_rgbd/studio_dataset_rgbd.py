@@ -25,6 +25,7 @@ import re
 import shutil
 import sys
 import threading
+from collections import OrderedDict
 import time
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +59,7 @@ if __package__:
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
+                                         model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
                                          usulkan as usulkan_convnext_depth)
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -69,6 +71,7 @@ else:
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
+                                         model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
                                          usulkan as usulkan_convnext_depth)
 
 
@@ -374,8 +377,33 @@ def golong_arah_permukaan(depth_m: np.ndarray, fx: float, fy: float, cx: float, 
     return peta
 
 
+def arah_dari_kelas(peta_kelas: np.ndarray) -> np.ndarray:
+    """Peta kelas model (1 riser, 2 tread) ke kode lapisan arah (1 tread/atas, 2 riser/hadap kamera)."""
+    out = np.zeros(peta_kelas.shape, np.uint8)
+    out[peta_kelas == 2] = 1
+    out[peta_kelas == 1] = 2
+    return out
+
+
+def garis_pemandu(peta: np.ndarray) -> list[np.ndarray]:
+    """Garis batas pemandu, dalam koordinat citra: tepi luar tangga dan tepi tiap tread.
+
+    Kontur gabungan (riser+tread) memberi batas tangga terhadap dinding/lantai;
+    kontur tread memberi batas tread-riser. Tepi tread yang bersebelahan dengan
+    latar jatuh tepat di kontur gabungan, sehingga tidak tampil ganda.
+    """
+    ker = np.ones((5, 5), np.uint8)
+    garis = []
+    for biner in ((peta == 1) | (peta == 2), peta == 1):
+        b = cv2.morphologyEx(biner.astype(np.uint8), cv2.MORPH_OPEN, ker)
+        kontur, _ = cv2.findContours(b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        garis += [cv2.approxPolyDP(k, 1.0, True).reshape(-1, 2).astype(np.float32)
+                  for k in kontur if cv2.contourArea(k) >= 400]
+    return garis
+
+
 def _lapisan_arah(rgb: np.ndarray, peta: np.ndarray, kekuatan: float) -> np.ndarray:
-    """Warnai arah permukaan (biru = atas/tread, merah = hadap kamera/riser) dan garis kuning di batas keduanya."""
+    """Warnai tread biru dan riser merah; garis batasnya digambar Canvas (garis_pemandu)."""
     if kekuatan <= 0 or peta is None:
         return rgb
     warna = np.zeros_like(rgb)
@@ -385,9 +413,6 @@ def _lapisan_arah(rgb: np.ndarray, peta: np.ndarray, kekuatan: float) -> np.ndar
     out = rgb.copy()
     ada = peta > 0
     out[ada] = cv2.addWeighted(rgb, 1 - 0.55 * kekuatan, warna, 0.55 * kekuatan, 0)[ada]
-    a, r = (peta == 1).astype(np.uint8), (peta == 2).astype(np.uint8)
-    ker = np.ones((3, 3), np.uint8)
-    out[((cv2.dilate(a, ker) & r) | (cv2.dilate(r, ker) & a)) > 0] = (255, 230, 0)
     return out
 
 
@@ -424,9 +449,13 @@ class KanvasLabel(tk.Canvas):
         self.depth_alpha = 0.0
         self.kecerahan = 0.0     # 0 = asli, 1 = CLAHE penuh (lihat _cerahkan)
         self.ketajaman = 0.0     # 0 = asli, unsharp mask (lihat _pertajam)
-        self.bantu_arah = 0.0    # 0 = mati; lapisan arah permukaan dari depth (lihat _lapisan_arah)
+        self.bantu_arah = 0.0    # 0 = mati; pemandu riser/tread (lihat _lapisan_arah, garis_pemandu)
         self.intrinsik = None    # dict fx, fy, cx, cy, depth_scale frame aktif; diisi Studio
+        # Studio mengisi penyedia_peta: fungsi tanpa argumen yang mengembalikan
+        # peta kelas model (0/1 riser/2 tread) frame aktif, atau None.
+        self.penyedia_peta = None
         self._peta_arah = self._peta_arah_key = None
+        self._garis_pemandu: list[np.ndarray] = []
         self.mask_alpha = 0.42
         self.mode = "objek"
         # Tiap kelas menampung BANYAK poligon: satu anak tangga = satu instance.
@@ -641,9 +670,23 @@ class KanvasLabel(tk.Canvas):
             # Dihitung sekali per frame (~0,1 s). Kuncinya objek depth itu sendiri,
             # bukan id(): id bisa dipakai ulang oleh array frame berikutnya.
             if self._peta_arah_key is not self.depth:
-                i = self.intrinsik
-                self._peta_arah = golong_arah_permukaan(self.depth.astype(np.float32) * float(i["depth_scale"]),
-                                                        i["fx"], i["fy"], i["cx"], i["cy"])
+                # Utamakan peta model RGB-D: pada 211803 garis batasnya median
+                # 1,4 px (terang) / 2,9 px (gelap) dari label manual, sedangkan
+                # arah normal depth 5,7 / 6,7 px dan recall riser 0,27 / 0,54.
+                # Arah normal hanya cadangan bila model tidak tersedia.
+                peta = None
+                if self.penyedia_peta is not None:
+                    try:
+                        peta = self.penyedia_peta()
+                    except Exception:                       # noqa: BLE001
+                        peta = None
+                if peta is not None:
+                    self._peta_arah = arah_dari_kelas(peta)
+                else:
+                    i = self.intrinsik
+                    self._peta_arah = golong_arah_permukaan(self.depth.astype(np.float32) * float(i["depth_scale"]),
+                                                            i["fx"], i["fy"], i["cx"], i["cy"])
+                self._garis_pemandu = garis_pemandu(self._peta_arah)
                 self._peta_arah_key = self.depth
             out = _lapisan_arah(out, self._peta_arah, self.bantu_arah)
         if self.depth is not None and self.depth_alpha > 0:
@@ -713,6 +756,14 @@ class KanvasLabel(tk.Canvas):
         # merah = sisi tinggi (riser), biru = permukaan datar (tapakan). Warna
         # ini bukan hiasan: yang biru dipakai RANSAC sebagai BIDANG ACUAN, dan
         # yang merah sebagai objek yang diukur tingginya terhadap bidang itu.
+        if self.bantu_arah > 0 and self._garis_pemandu and self._peta_arah_key is self.depth:
+            # Garis pemandu vektor: tetap setipis 1 px pada zoom berapa pun, dan
+            # putus-putus kuning agar tidak tertukar dengan mask yang disunting.
+            for g in self._garis_pemandu:
+                pts = (g * self.scale + (self.ox, self.oy)).ravel().tolist()
+                pts += pts[:2]
+                self.create_line(*pts, fill="#000000", width=3, tags=("overlay",))
+                self.create_line(*pts, fill="#FFE34D", width=1, dash=(5, 3), tags=("overlay",))
         specs = (("objek", "#FF5A5A", "#FFD9D9"), ("acuan", "#5AA9FF", "#D7E9FF"))
         cepat = self._drag_titik is not None or self._zoom_cepat
         for nama, garis, titik in specs:
@@ -1418,6 +1469,15 @@ class Studio(tk.Tk):
         self.filter_sesi = StringVar(value="tangga_naik")
         self.nomor_mask = IntVar(value=1)
         self._autosave_setelah = None
+        # Frame tetangga dibaca lebih dulu di thread latar. Disk dataset ini
+        # terukur lambat (rata-rata ~56 ms per permintaan baca, sesekali
+        # 0,8-2 s untuk satu PNG saat partisi penuh), sehingga membaca frame
+        # baru baru saat Space ditekan membuat navigasi tersendat.
+        self._cache_frame: "OrderedDict[Path, dict]" = OrderedDict()
+        self._kunci_cache = threading.Lock()
+        self._syarat_prefetch = threading.Condition()
+        self._antrean_prefetch: list[Path] = []
+        threading.Thread(target=self._pekerja_prefetch, daemon=True).start()
         self._jam_x: tuple[int, float] | None = None       # (waktu event X, jam lokal) untuk membuang antrean auto-repeat
         self._navigasi_selesai = 0.0
         self.depth_alpha = DoubleVar(value=0.28)
@@ -1705,6 +1765,7 @@ class Studio(tk.Tk):
         f = tk.Frame(self.tab_label, bg=BG); f.pack(fill="both", expand=True, padx=14, pady=14)
         left = tk.Frame(f, bg=BG); left.pack(side="left", fill="both", expand=True, padx=(0, 12))
         self.kanvas = KanvasLabel(left, self.hitung_ukuran, self._aktif_mask_berubah); self.kanvas.pack(fill="both", expand=True)
+        self.kanvas.penyedia_peta = self._peta_model_kini
         self.kanvas.lapor_blok = self._lapor_blok
         self.kanvas.touchpad = bool(self.mode_touchpad.get())
         # Ctrl+C menyalin nama frame yang sedang dibuka. Berguna saat melaporkan
@@ -1809,7 +1870,7 @@ class Studio(tk.Tk):
                  highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
         tk.Scale(edit_i, from_=0, to=1.0, resolution=.1, orient="horizontal", variable=self.bantu_arah,
                  command=lambda _: self.ganti_bantu_arah(),
-                 label="Bantu riser/tread dari depth (biru atas, merah hadap kamera)", bg=PANEL, fg=INK,
+                 label="Pemandu riser/tread model RGB-D (biru tread, merah riser, garis kuning batas)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
         alat_f = tk.Frame(edit_i, bg=PANEL); alat_f.pack(fill="x", pady=(4, 0))
         baris_alat = tk.Frame(alat_f, bg=PANEL); baris_alat.pack(fill="x")
@@ -3236,8 +3297,9 @@ class Studio(tk.Tk):
             self.after_cancel(self._autosave_setelah)
             self._autosave_setelah = None
             self.simpan_draft_label()
-        bgr=cv2.imread(str(p/"color_raw.png")); dep=np.load(p/"depth_aligned_to_color.npy")
-        if bgr is None: return
+        data = self._baca_frame(p)
+        if data is None: return
+        bgr, dep = data["bgr"], data["dep"]
         # Pilihan A/S dipertahankan antar-frame. Penguncian hanya
         # diperlukan sebelum navigasi pertama, bukan setiap kali frame baru
         # dibuka; jika tidak tombol panah berhenti setelah satu perpindahan.
@@ -3266,6 +3328,84 @@ class Studio(tk.Tk):
                               if self.kontrol_label.get() == "mudah" else
                               "PgUp merah, PgDn biru, panah pindah frame."))
         self.after(40, self.kanvas.focus_set)
+
+    # ------------------------------------------------ baca frame + prefetch
+    _UKURAN_CACHE = 10
+
+    def _baca_berkas_frame(self, p: Path) -> dict | None:
+        bgr = cv2.imread(str(p / "color_raw.png"))
+        if bgr is None:
+            return None
+        return {"bgr": bgr, "dep": np.load(p / "depth_aligned_to_color.npy"), "peta": None}
+
+    def _simpan_cache(self, p: Path, data: dict) -> None:
+        with self._kunci_cache:
+            self._cache_frame[p] = data
+            self._cache_frame.move_to_end(p)
+            while len(self._cache_frame) > self._UKURAN_CACHE:
+                self._cache_frame.popitem(last=False)
+
+    def _baca_frame(self, p: Path) -> dict | None:
+        """Frame dari cache prefetch bila ada, dari disk bila belum; lalu pesan tetangganya."""
+        with self._kunci_cache:
+            data = self._cache_frame.get(p)
+        if data is None:
+            data = self._baca_berkas_frame(p)
+            if data is not None:
+                self._simpan_cache(p, data)
+        self._pesan_prefetch(p)
+        return data
+
+    def _pesan_prefetch(self, p: Path) -> None:
+        try:
+            i = self.frame_paths.index(p)
+        except ValueError:
+            return
+        # Maju lebih diutamakan: arah label yang biasa adalah Space/next.
+        urut = [self.frame_paths[j] for j in (i + 1, i - 1, i + 2, i + 3)
+                if 0 <= j < len(self.frame_paths)]
+        with self._syarat_prefetch:
+            self._antrean_prefetch = urut
+            self._syarat_prefetch.notify()
+
+    def _peta_model_kini(self) -> np.ndarray | None:
+        """Peta kelas model untuk frame aktif (penyedia pemandu kanvas)."""
+        p = self.label_path
+        if p is None or self.kanvas.rgb is None:
+            return None
+        if (self.label_info or {}).get("kategori", "tangga_naik") != "tangga_naik":
+            return None
+        with self._kunci_cache:
+            data = self._cache_frame.get(p)
+        if data is not None and data.get("peta") is not None:
+            return data["peta"]
+        peta = peta_kelas_convnext(cv2.cvtColor(self.kanvas.rgb, cv2.COLOR_RGB2BGR), self.kanvas.depth,
+                                   self._intrinsics(self.label_info or {}))
+        if data is not None:
+            data["peta"] = peta
+        return peta
+
+    def _pekerja_prefetch(self) -> None:
+        """Thread latar: baca frame tetangga, dan hitung peta model bila model siap."""
+        while True:
+            with self._syarat_prefetch:
+                while not self._antrean_prefetch:
+                    self._syarat_prefetch.wait()
+                p = self._antrean_prefetch.pop(0)
+            try:
+                with self._kunci_cache:
+                    data = self._cache_frame.get(p)
+                if data is None:
+                    data = self._baca_berkas_frame(p)
+                    if data is None:
+                        continue
+                    self._simpan_cache(p, data)
+                if data.get("peta") is None and model_convnext_siap():
+                    info = baca_json(p / "frame.json", {})
+                    if info.get("kategori", "tangga_naik") == "tangga_naik" and "intrinsics_rgb_native" in info:
+                        data["peta"] = peta_kelas_convnext(data["bgr"], data["dep"], self._intrinsics(info))
+            except Exception:                               # noqa: BLE001
+                continue                                    # prefetch hanya percepatan; jalur utama tetap membaca sendiri
 
     def _auto_segmentasi(self, target: Path):
         if target != self.label_path or self._punya_label(target):

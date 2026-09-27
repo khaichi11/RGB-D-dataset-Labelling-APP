@@ -243,6 +243,21 @@ def _poligon(biner: np.ndarray, luas_min: int = 2500, rasio_min: float = 0.08,
     return keluar
 
 
+def peta_kelas(rgb_bgr: np.ndarray, depth: np.ndarray, k: dict | None = None,
+               skala_depth: float | None = None) -> np.ndarray:
+    """Peta kelas per piksel (0 latar, 1 riser, 2 tread) dari model pengusul."""
+    mu = _muat()
+    from rgbd_convnext.konfigurasi_utama import prediksi_kelas
+    meter = kedalaman_meter(depth, k, skala_depth)
+    with _KUNCI:
+        return prediksi_kelas(mu, rgb_bgr, meter)
+
+
+def model_siap() -> bool:
+    """Model sudah dimuat; thread latar boleh memakainya tanpa memicu pemuatan."""
+    return _MODEL is not None
+
+
 def usulkan(rgb_bgr: np.ndarray, depth: np.ndarray, k: dict | None = None,
             skala_depth: float | None = None) -> dict:
     """Usulkan poligon tapakan dan bidang tegak dari citra dan kedalaman.
@@ -252,18 +267,10 @@ def usulkan(rgb_bgr: np.ndarray, depth: np.ndarray, k: dict | None = None,
               (lihat :func:`kedalaman_meter`)
     k       : intrinsik frame dari Studio; kunci `depth_scale` dipakai bila ada
     """
-    mu = _muat()
-    akar = str(akar_aplikasi())
-    if akar not in sys.path:
-        sys.path.insert(0, akar)
-    from rgbd_convnext.konfigurasi_utama import prediksi_kelas
-
-    meter = kedalaman_meter(depth, k, skala_depth)
-    with _KUNCI:
-        peta_kelas = prediksi_kelas(mu, rgb_bgr, meter)
+    peta_kelas_ = peta_kelas(rgb_bgr, depth, k, skala_depth)
     return {
-        'tapakan': _poligon(peta_kelas == TREAD),
-        'bidang_tegak': _poligon(peta_kelas == RISER),
+        'tapakan': _poligon(peta_kelas_ == TREAD),
+        'bidang_tegak': _poligon(peta_kelas_ == RISER),
         'sumber': f'{NAMA_BOBOT_USULAN} (kedalaman sebagai masukan model)',
-        'peta_kelas': peta_kelas,
+        'peta_kelas': peta_kelas_,
     }
