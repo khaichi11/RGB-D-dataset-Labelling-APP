@@ -9,6 +9,10 @@ impor torch, dan supaya Studio tetap bisa dipakai melabeli di mesin tanpa GPU:
 torch baru diimpor saat tab ini benar-benar dipakai.
 """
 from __future__ import annotations
+try:
+    from .ui_bantu import kolom_gulir
+except ImportError:
+    from ui_bantu import kolom_gulir
 
 import threading
 import time
@@ -67,9 +71,7 @@ class UjiRealtime:
         f.pack(fill="both", expand=True, padx=24, pady=24)
         kiri = tk.Frame(f, bg=BG)
         kiri.pack(side="left", fill="both", expand=True, padx=(0, 12))
-        kanan = tk.Frame(f, bg=BG, width=360)
-        kanan.pack(side="left", fill="y")
-        kanan.pack_propagate(False)
+        kanan = kolom_gulir(f, 370, BG)          # bisa di-scroll: kontrol tidak hilang di layar pendek
 
         b, i = self._kartu(kiri, "Tampilan langsung")
         b.pack(fill="both", expand=True)
