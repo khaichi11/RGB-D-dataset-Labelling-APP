@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Pasang dengan:  git config core.hooksPath .githooks
+exec "$(dirname "$0")/cek_rahasia.sh"

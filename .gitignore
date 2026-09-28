@@ -36,3 +36,13 @@ __pycache__/
 # Artefak eksperimen U-Net yang dipilih secara eksplisit untuk reproduksi.
 # Dataset, checkpoint sementara, dan artefak model lain tetap diabaikan.
 !/artefak_unet/*.pt
+
+# Rahasia (token, kredensial) tidak pernah masuk Git, di folder mana pun.
+# Aturan ini sengaja paling bawah agar mengalahkan pengecualian di atasnya.
+**/.env
+**/.env.*
+!**/.env.example
+*.token
+.huggingface/
+!/.githooks/
+!/.githooks/**

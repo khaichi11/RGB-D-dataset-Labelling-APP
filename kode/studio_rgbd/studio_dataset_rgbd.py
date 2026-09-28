@@ -1590,6 +1590,7 @@ class Studio(tk.Tk):
         self.tab_rekam = tk.Frame(self.tabs, bg=BG); self.tab_tinjau = tk.Frame(self.tabs, bg=BG)
         self.tab_ekspor = tk.Frame(self.tabs, bg=BG); self.tab_label = tk.Frame(self.tabs, bg=BG)
         self.tab_uji = tk.Frame(self.tabs, bg=BG); self.tab_uji_berkas = tk.Frame(self.tabs, bg=BG)
+        self.tab_split = tk.Frame(self.tabs, bg=BG)
         self.tabs.add(self.tab_rekam, text="  1. Rekam  "); self.tabs.add(self.tab_tinjau, text="  2. Tinjau & Potong  ")
         self.tabs.add(self.tab_ekspor, text="  3. Ekspor Frame  "); self.tabs.add(self.tab_label, text="  4. Label & Ukur  ")
         # Tab 5 berbeda tujuan dari tab 1-4: bukan membuat dataset, melainkan
@@ -1601,8 +1602,24 @@ class Studio(tk.Tk):
         # membandingkan antar-model, sedangkan aliran kamera tidak pernah sama
         # dua kali.
         self.tabs.add(self.tab_uji_berkas, text="  6. Uji Model pada Berkas  ")
+        # Tab 7 membagi frame berlabel ke train/val/test; skrip latih membaca
+        # berkas yang sama lewat --split, jadi yang tampil di sini = yang dilatih.
+        self.tabs.add(self.tab_split, text="  7. Split Dataset  ")
         self.ui_rekam(); self.ui_tinjau(); self.ui_ekspor(); self.ui_label(); self.ui_uji()
-        self.ui_uji_berkas()
+        self.ui_uji_berkas(); self.ui_split()
+
+    def ui_split(self):
+        """Panel pembagian train/val/test dan push dataset ke Hugging Face."""
+        try:
+            try:
+                from .tab_split import TabSplit
+            except ImportError:
+                from tab_split import TabSplit
+            self.panel_split = TabSplit(self.tab_split, self)
+        except Exception as e:                                    # noqa: BLE001
+            self.panel_split = None
+            tk.Label(self.tab_split, text=f"Panel split dataset gagal dimuat:\n{e}",
+                     bg=BG, fg=MUTED, justify="left").pack(padx=24, pady=24)
 
     def ui_uji_berkas(self):
         """Panel pengujian model pada gambar, video, atau folder frame RGB-D."""
