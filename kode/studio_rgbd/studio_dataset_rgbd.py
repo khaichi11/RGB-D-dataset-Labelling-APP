@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 try:
     import cv2
@@ -57,6 +57,8 @@ if __package__:
     from .geometri import Z_MAX, Z_MIN
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
+    from . import catatan_rekaman as CR
+    from .ui_bantu import kolom_gulir
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -69,6 +71,8 @@ else:
     from studio_rgbd.geometri import Z_MAX, Z_MIN
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
+    from studio_rgbd import catatan_rekaman as CR
+    from studio_rgbd.ui_bantu import kolom_gulir
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -1683,35 +1687,44 @@ class Studio(tk.Tk):
         # dibaca thread render sebagai int biasa.
         self.label_live.bind("<Configure>", self._atur_ukuran_preview)
 
+    def _kolom_gulir(self, induk, lebar: int) -> tk.Frame:
+        return kolom_gulir(induk, lebar, BG, padx=(0, 12))
+
     def ui_tinjau(self):
         f = tk.Frame(self.tab_tinjau, bg=BG); f.pack(fill="both", expand=True, padx=18, pady=18)
-        left = tk.Frame(f, bg=BG, width=320); left.pack(side="left", fill="y", padx=(0, 12)); left.pack_propagate(False)
+        # Kolom kiri bisa di-scroll: daftar rekaman, tombolnya, dan kartu catatan
+        # tidak muat pada layar pendek, dan tanpa ini tombol bawah hilang.
+        left = self._kolom_gulir(f, 330)
         right = tk.Frame(f, bg=BG); right.pack(side="left", fill="both", expand=True)
+        self._ui_catatan_rekaman(left)
         b, i = self.card(left, "Rekaman") ; b.pack(fill="both", expand=True)
         tk.Label(i, text="Kategori", bg=PANEL, fg=MUTED).pack(anchor="w")
         pilih_kategori = ttk.Combobox(i, textvariable=self.filter_sesi, values=KATEGORI,
                                       state="readonly")
         pilih_kategori.pack(fill="x", pady=(2, 8))
         pilih_kategori.bind("<<ComboboxSelected>>", lambda _e: self.muat_daftar())
-        self.list_sesi = tk.Listbox(i, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT, activestyle="none", height=22)
+        self.list_sesi = tk.Listbox(i, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT,
+                                    selectforeground=INK, activestyle="none", height=8, exportselection=False)
         self.list_sesi.pack(fill="both", expand=True); self.list_sesi.bind("<<ListboxSelect>>", lambda e: self.pilih_sesi())
-        self.tombol(i, "Muat ulang daftar", self.muat_daftar, "#E8DDD5", INK).pack(fill="x", pady=(10, 3))
-        self.tombol(i, "Pindah ke tempat sampah / pulihkan", self.toggle_sampah, "#E8DDD5", INK).pack(fill="x")
-        self.tombol(i, "Hapus preview video", self.hapus_preview_permanen, "#F3D8D4", INK).pack(fill="x", pady=(4, 0))
-        self.tombol(i, "Hapus rekaman permanen", self.hapus_sesi_permanen, RED).pack(fill="x", pady=(4, 0))
+        # Tombol dipadatkan menjadi dua baris agar kartu catatan di bawahnya
+        # tidak mendorong tombol keluar layar pada jendela pendek.
+        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(6, 0))
+        self.tombol_ringkas(baris, "↻ Muat ulang", self.muat_daftar, "#E8DDD5", INK, width=96).pack(side="left", expand=True, fill="x")
+        self.tombol_ringkas(baris, "🗑 Sampah/pulihkan", self.toggle_sampah, "#E8DDD5", INK, width=130).pack(side="left", expand=True, fill="x", padx=(3, 0))
+        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(3, 0))
+        self.tombol_ringkas(baris, "Hapus preview", self.hapus_preview_permanen, "#F3D8D4", INK, width=110).pack(side="left", expand=True, fill="x")
+        self.tombol_ringkas(baris, "Hapus rekaman", self.hapus_sesi_permanen, RED, width=110).pack(side="left", expand=True, fill="x", padx=(3, 0))
         tk.Checkbutton(i, text="\U0001f5d1 Tampilkan isi tempat sampah", variable=self.tampil_sampah,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
-                       command=self.muat_daftar).pack(anchor="w", pady=(6, 0))
-        garis = tk.Frame(i, bg="#EFE6DF", height=1); garis.pack(fill="x", pady=(12, 8))
-        tk.Label(i, text="KATEGORI REKAMAN TERPILIH", bg=PANEL, fg=ACCENT,
-                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
-        tk.Label(i, textvariable=self.kategori_sesi, bg=PANEL, fg=INK,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(1, 6))
-        ttk.Combobox(i, textvariable=self.kategori_baru, values=KATEGORI,
-                     state="readonly").pack(fill="x")
-        self.tombol(i, "Pindahkan ke kategori ini", self.pindah_kategori, "#E8DDD5", INK).pack(fill="x", pady=(5, 0))
-        tk.Label(i, text="Memindahkan hanya mengubah folder dan session.json.",
-                 bg=PANEL, fg=MUTED, wraplength=250, justify="left").pack(anchor="w", pady=(5, 0))
+                       command=self.muat_daftar).pack(anchor="w", pady=(4, 0))
+        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(4, 0))
+        tk.Label(baris, text="Kategori:", bg=PANEL, fg=MUTED).pack(side="left")
+        tk.Label(baris, textvariable=self.kategori_sesi, bg=PANEL, fg=INK,
+                 font=("Segoe UI", 9, "bold")).pack(side="left", padx=(3, 0))
+        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(2, 0))
+        ttk.Combobox(baris, textvariable=self.kategori_baru, values=KATEGORI, state="readonly",
+                     width=12).pack(side="left", fill="x", expand=True)
+        self.tombol_ringkas(baris, "Pindahkan", self.pindah_kategori, "#E8DDD5", INK, width=80).pack(side="left", padx=(3, 0))
         b, i = self.card(right, "Tinjau rekaman") ; b.pack(fill="both", expand=True)
         # Kontrol di-pack ke bawah DULU (side="bottom") supaya tidak pernah
         # terpotong saat jendela pendek; kanvas mengambil sisa ruang.
@@ -1751,21 +1764,185 @@ class Studio(tk.Tk):
         tk.Label(bawah, textvariable=self.hasil_ukur, bg=PANEL, fg=ACCENT, justify="left",
                  font=("Segoe UI", 10, "bold"), wraplength=700).pack(anchor="w", pady=(4, 0))
         tk.Label(bawah, textvariable=self.durasi, bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 4))
-        self.scale_awal = tk.Scale(bawah, from_=0, to=0, orient="horizontal", variable=self.awal, label="Awal potongan", bg=PANEL, fg=INK, highlightthickness=0)
-        self.scale_akhir = tk.Scale(bawah, from_=0, to=0, orient="horizontal", variable=self.akhir, label="Akhir potongan", bg=PANEL, fg=INK, highlightthickness=0)
-        self.scale_awal.pack(fill="x"); self.scale_akhir.pack(fill="x")
+        # Awal dan akhir berdampingan: bertumpuk, keduanya ikut mendorong tombol
+        # simpan keluar layar pada laptop pendek.
+        potong = tk.Frame(bawah, bg=PANEL); potong.pack(fill="x")
+        self.scale_awal = tk.Scale(potong, from_=0, to=0, orient="horizontal", variable=self.awal, label="Awal potongan", bg=PANEL, fg=INK, highlightthickness=0)
+        self.scale_akhir = tk.Scale(potong, from_=0, to=0, orient="horizontal", variable=self.akhir, label="Akhir potongan", bg=PANEL, fg=INK, highlightthickness=0)
+        self.scale_awal.pack(side="left", fill="x", expand=True, padx=(0, 6)); self.scale_akhir.pack(side="left", fill="x", expand=True)
         manual = tk.Frame(bawah, bg=PANEL); manual.pack(fill="x", pady=(4, 0))
-        tk.Label(manual, text="Atau ketik frame", bg=PANEL, fg=MUTED).pack(side="left")
-        ent_awal = tk.Spinbox(manual, from_=0, to=999999, textvariable=self.awal, width=8,
+        tk.Label(manual, text="Ketik frame", bg=PANEL, fg=MUTED).pack(side="left")
+        ent_awal = tk.Spinbox(manual, from_=0, to=999999, textvariable=self.awal, width=7,
                                command=lambda: self.rentang_manual.set(True))
         ent_awal.pack(side="left", padx=(6, 2)); ent_awal.bind("<FocusOut>", lambda _e: self.rentang_manual.set(True))
         tk.Label(manual, text="s.d.", bg=PANEL, fg=MUTED).pack(side="left")
-        ent_akhir = tk.Spinbox(manual, from_=0, to=999999, textvariable=self.akhir, width=8,
+        ent_akhir = tk.Spinbox(manual, from_=0, to=999999, textvariable=self.akhir, width=7,
                                 command=lambda: self.rentang_manual.set(True))
         ent_akhir.pack(side="left", padx=2); ent_akhir.bind("<FocusOut>", lambda _e: self.rentang_manual.set(True))
-        self.tombol_ringkas(manual, "Awal = kini", self.tetapkan_awal_kini, "#E8DDD5", INK, width=92).pack(side="left", padx=(8, 2))
-        self.tombol_ringkas(manual, "Akhir = kini", self.tetapkan_akhir_kini, "#E8DDD5", INK, width=92).pack(side="left", padx=2)
+        self.tombol_ringkas(manual, "Awal = kini", self.tetapkan_awal_kini, "#E8DDD5", INK, width=84).pack(side="left", padx=(8, 2))
+        self.tombol_ringkas(manual, "Akhir = kini", self.tetapkan_akhir_kini, "#E8DDD5", INK, width=84).pack(side="left", padx=2)
         self.tombol(bawah, "Simpan rentang potong (non-destruktif)", self.simpan_potong, GREEN).pack(fill="x", pady=(8, 0))
+
+    # ------------------------------------------------ catatan rekaman & scene
+    def _ui_catatan_rekaman(self, induk) -> None:
+        """Kartu warna stabilo, catatan/lokasi, dan scene rekaman terpilih."""
+        self._catatan_setelah = None
+        self._sesi_catatan = None
+        self._cache_catatan: dict = {}
+        b, i = self.card(induk, "Catatan rekaman & scene"); b.pack(side="bottom", fill="x", pady=(10, 0))
+        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x")
+        tk.Label(baris, text="Stabilo", bg=PANEL, fg=MUTED).pack(side="left", padx=(0, 4))
+        for nama, w in CR.WARNA.items():
+            tk.Button(baris, bg=w, activebackground=w, width=2, relief="flat", bd=1,
+                      command=lambda n=nama: self.atur_warna_sesi(n)).pack(side="left", padx=1)
+        tk.Button(baris, text="✕", width=2, relief="flat", bg="#EEE7E2",
+                  command=lambda: self.atur_warna_sesi(None)).pack(side="left", padx=(4, 0))
+        tk.Label(i, text="Catatan / lokasi (tersimpan otomatis)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
+        self.teks_catatan = tk.Text(i, height=3, wrap="word", bg="#FFF9F4", fg=INK, relief="flat",
+                                    font=("Segoe UI", 9), undo=True)
+        self.teks_catatan.pack(fill="x")
+        self.teks_catatan.bind("<KeyRelease>", lambda _e: self._jadwal_simpan_catatan())
+        self.teks_catatan.bind("<FocusOut>", lambda _e: self._simpan_catatan_sekarang())
+        tk.Label(i, text="Scene (klik ganda = lompat ke sana)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
+        self.list_scene = tk.Listbox(i, height=3, bg="#FFF9F4", fg=INK, relief="flat", activestyle="none",
+                                     exportselection=False, font=("Segoe UI", 9))
+        self.list_scene.pack(fill="x")
+        self.list_scene.bind("<Double-Button-1>", lambda _e: self.lompat_scene())
+        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(4, 0))
+        self.tombol_ringkas(baris, "+ Dari awal–akhir potongan", self.tambah_scene, GREEN, width=170).pack(side="left")
+        self.tombol_ringkas(baris, "Nama", self.ganti_nama_scene, "#E8DDD5", INK, width=50).pack(side="left", padx=2)
+        self.tombol_ringkas(baris, "Hapus", self.hapus_scene, "#F3D8D4", INK, width=50).pack(side="left")
+
+    def _catatan_cache(self, sesi: Path) -> dict:
+        """catatan.json per rekaman, dibaca ulang hanya bila berkasnya berubah (disk dataset lambat)."""
+        f = Path(sesi) / CR.NAMA_BERKAS
+        try:
+            kunci = f.stat().st_mtime_ns
+        except OSError:
+            kunci = None
+        lama = self._cache_catatan.get(sesi)
+        if lama is None or lama[0] != kunci:
+            lama = (kunci, CR.baca(sesi))
+            self._cache_catatan[sesi] = lama
+        return lama[1]
+
+    def _teks_item_sesi(self, p: Path, ikon: str = "") -> str:
+        d = self._catatan_cache(p)
+        tanda = ("  📝" if d["catatan"] else "") + (f"  ◆{len(d['scene'])}" if d["scene"] else "")
+        return f"{ikon}{p.name.replace('TANGGA_NAIK_', '')}{tanda}"
+
+    def _warnai_item_sesi(self, i: int, p: Path) -> None:
+        w = CR.WARNA.get(self._catatan_cache(p)["warna"])
+        self.list_sesi.itemconfig(i, bg=w or "#FFF9F4", selectbackground=w or ACCENT_SOFT)
+
+    def _segarkan_item_sesi(self, sesi: Path) -> None:
+        if sesi in getattr(self, "_map_sesi", []):
+            i = self._map_sesi.index(sesi)
+            ikon = "\U0001f5d1 " if self._state(sesi).get("di_sampah") else ""
+            terpilih = i in self.list_sesi.curselection()
+            self.list_sesi.delete(i); self.list_sesi.insert(i, self._teks_item_sesi(sesi, ikon))
+            self._warnai_item_sesi(i, sesi)
+            if terpilih:
+                self.list_sesi.selection_set(i)
+
+    def _muat_catatan_ui(self) -> None:
+        self._sesi_catatan = self.sesi
+        d = self._catatan_cache(self.sesi) if self.sesi else {"catatan": "", "scene": []}
+        self.teks_catatan.delete("1.0", "end"); self.teks_catatan.insert("1.0", d["catatan"])
+        self.teks_catatan.edit_reset()
+        self.list_scene.delete(0, "end")
+        for sc in d["scene"]:
+            self.list_scene.insert("end", f"{sc['nama']}   ({sc['awal']}–{sc['akhir']})")
+
+    def _jadwal_simpan_catatan(self) -> None:
+        if self._catatan_setelah is not None:
+            self.after_cancel(self._catatan_setelah)
+        self._catatan_setelah = self.after(600, self._simpan_catatan_sekarang)
+
+    def _simpan_catatan_sekarang(self) -> None:
+        """Tulis catatan ke rekaman yang SEDANG dimuat di kartu, bukan yang baru dipilih."""
+        if getattr(self, "_catatan_setelah", None) is not None:
+            self.after_cancel(self._catatan_setelah)
+            self._catatan_setelah = None
+        sesi = getattr(self, "_sesi_catatan", None)
+        if sesi is None or not sesi.exists():
+            return
+        teks = self.teks_catatan.get("1.0", "end").strip()
+        d = CR.baca(sesi)
+        if d["catatan"] == teks:
+            return
+        d["catatan"] = teks
+        CR.tulis(sesi, d)
+        self._segarkan_item_sesi(sesi)
+
+    def _ubah_catatan(self, ubah) -> None:
+        if not self.sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman dahulu.", parent=self); return
+        self._simpan_catatan_sekarang()
+        d = CR.baca(self.sesi)
+        ubah(d)
+        CR.tulis(self.sesi, d)
+        self._segarkan_item_sesi(self.sesi)
+        self._muat_catatan_ui()
+
+    def atur_warna_sesi(self, warna: str | None) -> None:
+        self._ubah_catatan(lambda d: d.update(warna=warna))
+
+    def tambah_scene(self) -> None:
+        awal, akhir = int(self.awal.get()), int(self.akhir.get())
+        if akhir <= awal:
+            messagebox.showinfo("Rentang scene", "Atur Awal dan Akhir potongan dahulu (Awal = kini, Akhir = kini).",
+                                parent=self); return
+        n = len(self._catatan_cache(self.sesi)["scene"]) + 1 if self.sesi else 1
+        nama = simpledialog.askstring("Scene baru", f"Nama scene untuk frame {awal}–{akhir}\n"
+                                      "(mis. Tangga A, Bordes, Tangga gedung F):",
+                                      initialvalue=f"Scene {n}", parent=self)
+        if nama and nama.strip():
+            self._ubah_catatan(lambda d: d["scene"].append({"nama": nama.strip(), "awal": awal, "akhir": akhir}))
+
+    def _scene_terpilih(self) -> int | None:
+        sel = self.list_scene.curselection()
+        return sel[0] if sel else None
+
+    def ganti_nama_scene(self) -> None:
+        i = self._scene_terpilih()
+        if i is None or not self.sesi:
+            return
+        lama = CR.baca(self.sesi)["scene"][i]["nama"]
+        nama = simpledialog.askstring("Ganti nama scene", "Nama baru:", initialvalue=lama, parent=self)
+        if nama and nama.strip():
+            self._ubah_catatan(lambda d: d["scene"][i].update(nama=nama.strip()))
+
+    def hapus_scene(self) -> None:
+        i = self._scene_terpilih()
+        if i is None or not self.sesi:
+            return
+        if messagebox.askyesno("Hapus scene", "Hapus scene ini? Frame dan label tidak tersentuh.", parent=self):
+            self._ubah_catatan(lambda d: d["scene"].pop(i))
+
+    def lompat_scene(self) -> None:
+        i = self._scene_terpilih()
+        if i is None or not self.sesi:
+            return
+        sc = CR.baca(self.sesi)["scene"][i]
+        self.awal.set(int(sc["awal"])); self.akhir.set(int(sc["akhir"])); self.rentang_manual.set(True)
+        self.posisi.set(int(sc["awal"]))
+        try:
+            self._tampilkan(int(sc["awal"]))
+        except Exception:                                      # noqa: BLE001
+            pass
+        self.status.set(f"Scene {sc['nama']}: rentang potong {sc['awal']}–{sc['akhir']} siap diekspor.")
+
+    def _perbarui_info_rekaman(self, p: Path) -> None:
+        sesi = p.parent.parent.parent
+        d = self._catatan_cache(sesi)
+        sc = CR.scene_untuk(d, CR.indeks_frame(p.name))
+        baris = []
+        if d["catatan"]:
+            baris.append("📍 " + CR.ringkas(d, 140))
+        if sc:
+            baris.append(f"Scene: {sc['nama']}")
+        self.info_rekaman.config(text="\n".join(baris), bg=CR.WARNA.get(d["warna"]) or PANEL)
 
     def ui_ekspor(self):
         f = tk.Frame(self.tab_ekspor, bg=BG); f.pack(fill="both", expand=True, padx=30, pady=28)
@@ -1825,6 +2002,11 @@ class Studio(tk.Tk):
         self.bind_all("<Button-5>", lambda e: gulir_panel(e, 3), add="+")
         self.bind_all("<MouseWheel>", lambda e: gulir_panel(e, -3 if e.delta > 0 else 3), add="+")
         b, i = self.card(right, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 7))
+        # Catatan rekaman dan scene frame aktif, supaya tahu "rekaman ini di
+        # mana" sebelum mulai melabel. Disunting di tab Tinjau.
+        self.info_rekaman = tk.Label(i, text="", bg=PANEL, fg=ACCENT, justify="left", anchor="w",
+                                     wraplength=250, font=("Segoe UI", 9))
+        self.info_rekaman.pack(fill="x", pady=(0, 4))
         # extended: Shift+klik / seret memblok rentang, Ctrl+klik menambah satu,
         # supaya banyak frame bisa dibuang ke sampah sekaligus. exportselection
         # dimatikan agar pilihan tidak lenyap saat teks lain dipilih.
@@ -1918,7 +2100,7 @@ class Studio(tk.Tk):
         self.lencana_periksa = tk.Label(otomatis_i, text="—  belum ada frame dipilih", bg=PANEL,
                                         fg=MUTED, font=("Segoe UI", 9, "bold"), pady=5)
         self.lencana_periksa.pack(fill="x", pady=(8, 2))
-        self.tombol(otomatis_i, "✔ Tandai sudah diperiksa manual", self.toggle_periksa, "#7FA96B").pack(fill="x", pady=(0, 2))
+        self.tombol(otomatis_i, "✔ Tandai sudah diperiksa manual (Enter)", self.toggle_periksa, "#7FA96B").pack(fill="x", pady=(0, 2))
         tk.Label(otomatis_i, text="X lalu tarik = blok hapus (atau Ctrl+tarik) • G lalu tarik = geser "
                                   "(atau Alt+tarik / tombol tengah) • Esc kembali ke titik • "
                                   "Shift+tarik pilih titik • Ctrl+C nama frame • Ctrl+Shift+C jalur lengkap",
@@ -2022,6 +2204,9 @@ class Studio(tk.Tk):
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
+        # Catatan/scene dan label bisa berubah di tab lain; tab Split memuat ulang sendiri.
+        if self.tabs.select() == str(getattr(self, "tab_split", "")) and getattr(self, "panel_split", None):
+            self.panel_split.muat_ulang()
         # Uji realtime memakai kamera secara eksklusif; hentikan begitu pengguna
         # pindah ke tab lain agar device tidak diperebutkan dengan preview/rekam.
         if self.tabs.select() != str(self.tab_uji) and getattr(self, 'panel_uji', None) is not None:
@@ -2368,7 +2553,8 @@ class Studio(tk.Tk):
             state = self._state(p)
             if state.get("di_sampah") != self.tampil_sampah.get(): continue
             ikon = "\U0001f5d1 " if state.get("di_sampah") else ""
-            self._map_sesi.append(p); self.list_sesi.insert("end", f"{ikon}{p.parent.name}  |  {p.name}")
+            self._map_sesi.append(p); self.list_sesi.insert("end", self._teks_item_sesi(p, ikon))
+            self._warnai_item_sesi(len(self._map_sesi) - 1, p)
         if self._map_sesi:
             target = self._map_sesi.index(self.sesi) if self.sesi in self._map_sesi else 0
             self.list_sesi.selection_set(target); self.list_sesi.activate(target)
@@ -2378,8 +2564,10 @@ class Studio(tk.Tk):
     def pilih_sesi(self):
         sel = self.list_sesi.curselection()
         if not sel: return
+        self._simpan_catatan_sekarang()
         self._tutup_video(); self._hapus_ukur()
         self.sesi = self._map_sesi[sel[0]]
+        self._muat_catatan_ui()
         p = self.sesi / "derived" / "frame_index.csv"
         self.indeks = []
         if p.exists():
@@ -3279,13 +3467,15 @@ class Studio(tk.Tk):
         if not self.sesi: messagebox.showinfo("Pilih sesi", "Pilih rekaman pada tab Tinjau dahulu.", parent=self); return
         semua = self.daftar_frame_ekspor()
         self.frame_paths=[]
+        catatan_sesi = self._catatan_cache(self.sesi)
         self.list_frame.delete(0,"end")
         for p in semua:
             state = baca_json(p / "frame_state.json", {"di_sampah": False})
             if state.get("di_sampah", False) != self.tampil_sampah_frame.get(): continue
             ikon = "\U0001f5d1 " if state.get("di_sampah") else ""
             self.frame_paths.append(p)
-            self.list_frame.insert("end",f"{ikon}{p.parent.parent.name} / {p.name}")
+            sc = CR.scene_untuk(catatan_sesi, CR.indeks_frame(p.name))
+            self.list_frame.insert("end", f"{ikon}{p.name}" + (f"  · {sc['nama']}" if sc else ""))
         self.status.set(f"{len(self.frame_paths)} frame ekspor dimuat.")
         if lanjut_ke is not None:
             self._pilih_indeks_frame(lanjut_ke)
@@ -3340,6 +3530,7 @@ class Studio(tk.Tk):
             # tinggal mengoreksi; draft/label yang sudah ada tidak ditimpa.
             self.after(180, lambda target=p: self._auto_segmentasi(target))
         self.perbarui_lencana_periksa()
+        self._perbarui_info_rekaman(p)
         self.perbarui_konteks_label(self.label_info.get("kategori"))
         self.ukur_status.set(("Tekan A (merah) atau S (biru), lalu klik/tarik titik. Space berpindah frame."
                               if self.kontrol_label.get() == "mudah" else
@@ -3549,6 +3740,18 @@ class Studio(tk.Tk):
             return self.muat_pas()
         if event.keysym == "Escape":
             return self.pilih_alat("normal")
+        if not ctrl and event.keysym in ("Return", "KP_Enter"):
+            # Enter: label ini sudah dicek manusia -> tandai lalu lanjut frame
+            # berikutnya. Shift+Enter mencabut tanda (kembali usulan otomatis).
+            if shift:
+                self.tandai_diperiksa(False)
+                return "break"
+            nama = self.label_path.name if self.label_path else None
+            self.tandai_diperiksa(True, senyap=True)
+            self.pindah_frame_keyboard(1, event)
+            if nama:
+                self.status.set(f"✔ {nama} ditandai diperiksa manual, lanjut ke frame berikutnya (Shift+Enter mencabut).")
+            return "break"
         if not ctrl and event.keysym.lower() == "g":
             return self.pilih_alat("geser")
         if not ctrl and event.keysym.lower() == "x":
