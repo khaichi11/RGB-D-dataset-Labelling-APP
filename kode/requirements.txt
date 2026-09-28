@@ -1,8 +1,15 @@
-# Lingkungan folder uji_kamera - laptop Windows/Linux x86
-# Jetson/ARM: pyrealsense2 TIDAK ada rodanya, lihat SETUP_jetson.sh
-numpy>=1.24
+# Pustaka Studio RGB-D (Linux/Windows x86_64, Python 3.10-3.12).
+# Dipasang otomatis oleh ../pasang.sh.
+numpy>=1.26
 opencv-python>=4.8
-pyrealsense2>=2.54
 Pillow>=10.0
-# baru diperlukan di 05_ukur_tangga_naik.py
-ultralytics>=8.3
+pyrealsense2>=2.54          # kamera D435; tidak ada wheel untuk macOS Apple Silicon dan Jetson/ARM
+torch>=2.1                  # wheel Linux dari PyPI sudah membawa CUDA; tanpa GPU NVIDIA berjalan di CPU
+torchvision>=0.16
+timm>=1.0                   # encoder ConvNeXt model tangga (rgbd_convnext)
+huggingface_hub>=1.0        # login, tombol push dataset, registri model
+pyarrow>=15                 # dataset Parquet untuk Hugging Face
+
+# Opsional, hanya untuk pengusul label lama di tab Label/Uji (tidak dipakai alur utama):
+# ultralytics>=8.3
+# rfdetr>=1.2
