@@ -344,7 +344,10 @@ class UjiBerkas:
                 bgr, dm = self._frames[0]
                 self._satu(bgr, dm, 0, 1)
         except Exception as e:                                    # noqa: BLE001
-            self.induk.after(0, lambda: messagebox.showerror("Gagal menjalankan", str(e), parent=self.induk))
+            # Salin pesannya sekarang: Python menghapus `e` begitu blok except
+            # selesai, sedangkan lambda baru dijalankan belakangan oleh Tk.
+            pesan = str(e)
+            self.induk.after(0, lambda: messagebox.showerror("Gagal menjalankan", pesan, parent=self.induk))
         finally:
             self.induk.after(0, self.berhenti)
 
