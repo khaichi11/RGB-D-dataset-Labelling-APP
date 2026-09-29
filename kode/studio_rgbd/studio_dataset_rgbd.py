@@ -1797,13 +1797,17 @@ class Studio(tk.Tk):
         self._sesi_catatan = None
         self._cache_catatan: dict = {}
         b, i = self.card(induk, "Catatan rekaman & scene"); b.pack(side="bottom", fill="x", pady=(10, 0))
-        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x")
-        tk.Label(baris, text="Stabilo", bg=PANEL, fg=MUTED).pack(side="left", padx=(0, 4))
+        # Kotak warna kecil (Frame, bukan Button yang lebar minimalnya besar) agar
+        # tombol hapus warna tidak terdorong keluar kartu seperti sebelumnya.
+        tk.Label(i, text="Stabilo (klik warna; ✕ menghapus)", bg=PANEL, fg=MUTED).pack(anchor="w")
+        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(2, 0))
         for nama, w in CR.WARNA.items():
-            tk.Button(baris, bg=w, activebackground=w, width=2, relief="flat", bd=1,
-                      command=lambda n=nama: self.atur_warna_sesi(n)).pack(side="left", padx=1)
-        tk.Button(baris, text="✕", width=2, relief="flat", bg="#EEE7E2",
-                  command=lambda: self.atur_warna_sesi(None)).pack(side="left", padx=(4, 0))
+            kotak = tk.Frame(baris, bg=w, width=26, height=22, cursor="hand2",
+                             highlightbackground="#CFC4BC", highlightthickness=1)
+            kotak.pack(side="left", padx=2)
+            kotak.bind("<Button-1>", lambda _e, n=nama: self.atur_warna_sesi(n))
+        self.tombol_ringkas(baris, "✕ Hapus warna", lambda: self.atur_warna_sesi(None),
+                            "#E8DDD5", INK, width=110).pack(side="left", padx=(8, 0))
         tk.Label(i, text="Catatan / lokasi (tersimpan otomatis)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
         self.teks_catatan = tk.Text(i, height=3, wrap="word", bg="#FFF9F4", fg=INK, relief="flat",
                                     font=("Segoe UI", 9), undo=True)
@@ -1979,6 +1983,11 @@ class Studio(tk.Tk):
         # Fokus dapat berpindah ke spinbox/panel; shortcut tetap harus hidup
         # selama pengguna berada di tab Label.
         self.bind_all("<KeyPress>", self._shortcut_label, add="+")
+        # Kotak pilihan dan slider menahan fokus keyboard setelah dipakai, sehingga
+        # Space/panah tidak lagi berpindah frame (panah malah mengganti pilihan
+        # atau menggeser slider). Di tab Label fokus dikembalikan ke kanvas.
+        self.bind_class("TCombobox", "<<ComboboxSelected>>", self._fokus_kanvas_label, add="+")
+        self.bind_class("Scale", "<ButtonRelease-1>", self._fokus_kanvas_label, add="+")
         # Panel kanan bisa di-scroll. Dulu tanpa scrollbar karena semua kontrol
         # muat; setelah slider Cerahkan/Pertajam/Bantu riser-tread dan tombol
         # alat ditambahkan, bagian bawahnya keluar layar pada monitor yang
@@ -4185,6 +4194,10 @@ class Studio(tk.Tk):
         if self.kanvas.depth_alpha <= 0:                  # memilih tampilan depth berarti ingin melihatnya
             self.depth_alpha.set(0.6); self.kanvas.depth_alpha = 0.6
         self.kanvas.render(); self.simpan_preferensi()
+        self.after_idle(self.kanvas.focus_set)
+    def _fokus_kanvas_label(self, _e=None):
+        if self.tabs.select() == str(self.tab_label):
+            self.after_idle(self.kanvas.focus_set)
     def ganti_kecerahan(self):
         self.kanvas.kecerahan = float(self.kecerahan.get())
         self.kanvas.render()
