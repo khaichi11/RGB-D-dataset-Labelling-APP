@@ -59,7 +59,7 @@ if __package__:
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
     from .ui_bantu import kolom_gulir
-    from . import visual_depth, ir_selaras
+    from . import visual_depth
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -74,7 +74,7 @@ else:
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
     from studio_rgbd.ui_bantu import kolom_gulir
-    from studio_rgbd import visual_depth, ir_selaras
+    from studio_rgbd import visual_depth
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -705,7 +705,7 @@ class KanvasLabel(tk.Canvas):
             kunci = (self.depth_mode, id(self.intrinsik))
             if self._depth_vis_key != kunci or self._depth_vis_obj is not self.depth:
                 vis = self.penyedia_depth_vis(self.depth_mode) if self.penyedia_depth_vis else None
-                if vis is None and self.depth_mode != "ir":
+                if vis is None and self.depth_mode not in visual_depth.BUTUH_BERKAS:
                     vis = visual_depth.gambar(self.depth, self.depth_mode, self.intrinsik)
                 if vis is not None and vis.ndim == 2:
                     vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2RGB)
@@ -3631,13 +3631,13 @@ class Studio(tk.Tk):
         with self._kunci_cache:
             data = self._cache_frame.get(self.label_path) if self.label_path else None
         vis = (data or {}).get("vis", {}).get(mode)
-        if vis is None and mode == "ir" and self.label_path is not None:
+        if vis is None and mode in visual_depth.BUTUH_BERKAS and self.label_path is not None:
             try:
-                vis = ir_selaras.selaraskan(self.label_path, self.kanvas.depth)
+                vis = visual_depth.hitung_dari_folder(self.label_path, self.kanvas.depth, self.kanvas.intrinsik, mode)
             except (OSError, KeyError, ValueError):
                 vis = None
             if data is not None and vis is not None:
-                data.setdefault("vis", {})["ir"] = vis
+                data.setdefault("vis", {})[mode] = vis
         return vis
 
     def _peta_model_kini(self) -> np.ndarray | None:
@@ -3677,12 +3677,10 @@ class Studio(tk.Tk):
                     vis = data.setdefault("vis", {})
                     if mode not in vis:
                         info = baca_json(p / "frame.json", {})
-                        if mode == "ir":
-                            ir = ir_selaras.selaraskan(p, data["dep"])
-                            if ir is not None:
-                                vis[mode] = ir
-                        elif "intrinsics_rgb_native" in info:
-                            vis[mode] = visual_depth.gambar(data["dep"], mode, self._intrinsics(info))
+                        if "intrinsics_rgb_native" in info:
+                            v = visual_depth.hitung_dari_folder(p, data["dep"], self._intrinsics(info), mode)
+                            if v is not None:
+                                vis[mode] = v
                 if data.get("peta") is None and model_convnext_siap():
                     info = baca_json(p / "frame.json", {})
                     if info.get("kategori", "tangga_naik") == "tangga_naik" and "intrinsics_rgb_native" in info:
