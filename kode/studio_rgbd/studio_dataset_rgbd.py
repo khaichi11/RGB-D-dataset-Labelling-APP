@@ -1819,6 +1819,14 @@ class Studio(tk.Tk):
         self.teks_catatan = tk.Text(i, height=3, wrap="word", bg="#FFF9F4", fg=INK, relief="flat",
                                     font=("Segoe UI", 9), undo=True)
         self.teks_catatan.pack(fill="x")
+        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(4, 0))
+        tk.Label(baris, text="Cahaya terukur (lux)", bg=PANEL, fg=MUTED).pack(side="left")
+        self.lux_var = StringVar()
+        isian = tk.Entry(baris, textvariable=self.lux_var, width=8, relief="flat", bg="#FFF9F4")
+        isian.pack(side="left", padx=4)
+        isian.bind("<KeyRelease>", lambda _e: self._jadwal_simpan_catatan())
+        isian.bind("<FocusOut>", lambda _e: self._simpan_catatan_sekarang())
+        tk.Label(baris, text="dari lux meter di lokasi", bg=PANEL, fg=MUTED, font=("Segoe UI", 8)).pack(side="left")
         self.teks_catatan.bind("<KeyRelease>", lambda _e: self._jadwal_simpan_catatan())
         self.teks_catatan.bind("<FocusOut>", lambda _e: self._simpan_catatan_sekarang())
         tk.Label(i, text="Scene (klik ganda = lompat ke sana)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
@@ -1867,6 +1875,7 @@ class Studio(tk.Tk):
         self._sesi_catatan = self.sesi
         d = self._catatan_cache(self.sesi) if self.sesi else {"catatan": "", "scene": []}
         self.teks_catatan.delete("1.0", "end"); self.teks_catatan.insert("1.0", d["catatan"])
+        self.lux_var.set(d.get("lux", ""))
         self.teks_catatan.edit_reset()
         self.list_scene.delete(0, "end")
         for sc in d["scene"]:
@@ -1886,10 +1895,11 @@ class Studio(tk.Tk):
         if sesi is None or not sesi.exists():
             return
         teks = self.teks_catatan.get("1.0", "end").strip()
+        lux = self.lux_var.get().strip().replace(",", ".")
         d = CR.baca(sesi)
-        if d["catatan"] == teks:
+        if d["catatan"] == teks and d.get("lux", "") == lux:
             return
-        d["catatan"] = teks
+        d["catatan"], d["lux"] = teks, lux
         CR.tulis(sesi, d)
         self._segarkan_item_sesi(sesi)
 
@@ -1960,6 +1970,11 @@ class Studio(tk.Tk):
             baris.append("📍 " + CR.ringkas(d, 140))
         if sc:
             baris.append(f"Scene: {sc['nama']}")
+        cahaya = f"Cahaya lokasi: {d['lux']} lux" if d.get("lux") else "Cahaya lokasi: belum diukur"
+        if self.kanvas.rgb is not None:
+            l, kat = CR.kecerahan(self.kanvas.rgb)
+            cahaya += f"  •  kecerahan gambar {l:.0f}/255 ({kat})"
+        baris.append(cahaya)
         self.info_rekaman.config(text="\n".join(baris), bg=CR.WARNA.get(d["warna"]) or PANEL)
 
     def ui_ekspor(self):
