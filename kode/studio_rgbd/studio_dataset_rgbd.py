@@ -454,6 +454,8 @@ class KanvasLabel(tk.Canvas):
         self.oy = 0.0
         self.depth_alpha = 0.0
         self.depth_mode = "bidang"   # lihat visual_depth.MODE
+        self.pakai_ir = False        # latar inframerah selaras, bukan RGB
+        self.warna_bidang = 0.0      # 0..1 kekuatan warna ketinggian di atas latar
         self.penyedia_depth_vis = None   # Studio: fungsi(mode) -> citra hasil prefetch atau None
         self._depth_vis = self._depth_vis_key = self._depth_vis_obj = None
         self.kecerahan = 0.0     # 0 = asli, 1 = CLAHE penuh (lihat _cerahkan)
@@ -668,13 +670,25 @@ class KanvasLabel(tk.Canvas):
 
     def gambar_tampil(self) -> np.ndarray:
         assert self.rgb is not None
-        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), self.depth_mode,
+        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), self.depth_mode, self.pakai_ir,
+               round(self.warna_bidang, 3),
               round(self.kecerahan, 3), round(self.ketajaman, 3), round(self.bantu_arah, 3))
         if self._tampil_key == key and self._tampil_cache is not None:
             return self._tampil_cache
         # Tajam setelah cerah: menajamkan derau mentah pada frame gelap lebih
         # kuat daripada menajamkan tepi yang CLAHE sudah bantu tonjolkan.
-        out = _pertajam(_cerahkan(self.rgb, self.kecerahan), self.ketajaman)
+        latar = self.rgb
+        if self.pakai_ir and self.penyedia_depth_vis is not None:
+            # Inframerah selaras sebagai gambar dasar (frame gelap); RGB bila IR tidak ada.
+            ir = self.penyedia_depth_vis("ir")
+            if ir is not None:
+                latar = cv2.cvtColor(ir, cv2.COLOR_GRAY2RGB) if ir.ndim == 2 else ir
+        out = _pertajam(_cerahkan(latar, self.kecerahan), self.ketajaman)
+        if self.warna_bidang > 0 and self.depth is not None and self.intrinsik is not None:
+            bid = self.penyedia_depth_vis("bidang") if self.penyedia_depth_vis else None
+            if bid is None:
+                bid = visual_depth.gambar(self.depth, "bidang", self.intrinsik)
+            out = visual_depth.warnai(out, bid, self.warna_bidang)
         if self.bantu_arah > 0 and self.depth is not None and self.intrinsik is not None:
             # Dihitung sekali per frame (~0,1 s). Kuncinya objek depth itu sendiri,
             # bukan id(): id bisa dipakai ulang oleh array frame berikutnya.
@@ -729,7 +743,8 @@ class KanvasLabel(tk.Canvas):
         cw, ch = max(1, self.winfo_width()), max(1, self.winfo_height())
         margin = 12
         s = self.scale
-        dasar = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), self.depth_mode, round(self.kecerahan, 3),
+        dasar = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), self.depth_mode, self.pakai_ir,
+                 round(self.warna_bidang, 3), round(self.kecerahan, 3),
                  round(self.ketajaman, 3), round(self.bantu_arah, 3), round(s, 5))
         lama = self._photo_key if self._photo is not None else None
         if w * h * s * s <= 2_500_000:
@@ -1503,6 +1518,8 @@ class Studio(tk.Tk):
         self.ketajaman = DoubleVar(value=float(preferensi.get("ketajaman", 0.0)))
         self.bantu_arah = DoubleVar(value=float(preferensi.get("bantu_arah", 0.0)))
         self.depth_mode = StringVar(value=preferensi.get("depth_mode", "bidang"))
+        self.pakai_ir = BooleanVar(value=bool(preferensi.get("pakai_ir", False)))
+        self.warna_bidang = DoubleVar(value=float(preferensi.get("warna_bidang", 0.0)))
         self.magnet_titik = BooleanVar(value=True)
         self.mode_label = StringVar(value="objek")
         self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
@@ -1997,6 +2014,8 @@ class Studio(tk.Tk):
         self.kanvas.touchpad = bool(self.mode_touchpad.get())
         self.kanvas.depth_mode = self.depth_mode.get()
         self.kanvas.penyedia_depth_vis = self._depth_vis_kini
+        self.kanvas.pakai_ir = bool(self.pakai_ir.get())
+        self.kanvas.warna_bidang = float(self.warna_bidang.get())
         # Ctrl+C menyalin nama frame yang sedang dibuka. Berguna saat melaporkan
         # frame bermasalah: namanya cukup panjang untuk salah ketik.
         self.kanvas.bind("<Control-c>", lambda _e: self.salin_nama_frame())
@@ -2010,6 +2029,7 @@ class Studio(tk.Tk):
         # atau menggeser slider). Di tab Label fokus dikembalikan ke kanvas.
         self.bind_class("TCombobox", "<<ComboboxSelected>>", self._fokus_kanvas_label, add="+")
         self.bind_class("Scale", "<ButtonRelease-1>", self._fokus_kanvas_label, add="+")
+        self.bind_class("Checkbutton", "<ButtonRelease-1>", self._fokus_kanvas_label, add="+")
         # Panel kanan bisa di-scroll. Dulu tanpa scrollbar karena semua kontrol
         # muat; setelah slider Cerahkan/Pertajam/Bantu riser-tread dan tombol
         # alat ditambahkan, bagian bawahnya keluar layar pada monitor yang
@@ -2098,6 +2118,12 @@ class Studio(tk.Tk):
         tk.Scale(edit_i, from_=0, to=1.0, resolution=.05, orient="horizontal", variable=self.depth_alpha,
                  command=lambda _: self.ganti_depth(), label="Overlay depth (1,0 = depth murni)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(2, 0))
+        tk.Checkbutton(edit_i, text="🌙 Inframerah sebagai latar (frame gelap)", variable=self.pakai_ir,
+                       bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
+                       command=self.ganti_latar_ir).pack(anchor="w", pady=(4, 0))
+        tk.Scale(edit_i, from_=0, to=1.0, resolution=.05, orient="horizontal", variable=self.warna_bidang,
+                 command=lambda _: self.ganti_warna_bidang(), label="Warna ketinggian (tiap anak tangga satu warna)",
+                 bg=PANEL, fg=INK, highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
         baris_depth = tk.Frame(edit_i, bg=PANEL); baris_depth.pack(fill="x", pady=(0, 2))
         tk.Label(baris_depth, text="Tampilan bantu", bg=PANEL, fg=MUTED).pack(side="left")
         pilih_depth = ttk.Combobox(baris_depth, state="readonly", width=30,
@@ -2250,7 +2276,9 @@ class Studio(tk.Tk):
                                           "kecerahan": float(self.kecerahan.get()),
                                           "ketajaman": float(self.ketajaman.get()),
                                           "bantu_arah": float(self.bantu_arah.get()),
-                                          "depth_mode": self.depth_mode.get()})
+                                          "depth_mode": self.depth_mode.get(),
+                                          "pakai_ir": bool(self.pakai_ir.get()),
+                                          "warna_bidang": float(self.warna_bidang.get())})
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
@@ -3631,7 +3659,9 @@ class Studio(tk.Tk):
         with self._kunci_cache:
             data = self._cache_frame.get(self.label_path) if self.label_path else None
         vis = (data or {}).get("vis", {}).get(mode)
-        if vis is None and mode in visual_depth.BUTUH_BERKAS and self.label_path is not None:
+        # Dihitung sekali per frame lalu disimpan: menggeser slider warna tidak
+        # boleh menghitung ulang bidang (~90 ms) di setiap geseran.
+        if vis is None and self.label_path is not None and self.kanvas.intrinsik is not None:
             try:
                 vis = visual_depth.hitung_dari_folder(self.label_path, self.kanvas.depth, self.kanvas.intrinsik, mode)
             except (OSError, KeyError, ValueError):
@@ -3672,15 +3702,20 @@ class Studio(tk.Tk):
                     if data is None:
                         continue
                     self._simpan_cache(p, data)
+                perlu = set()
                 if self.kanvas.depth_alpha > 0:
-                    mode = self.kanvas.depth_mode
-                    vis = data.setdefault("vis", {})
-                    if mode not in vis:
-                        info = baca_json(p / "frame.json", {})
-                        if "intrinsics_rgb_native" in info:
-                            v = visual_depth.hitung_dari_folder(p, data["dep"], self._intrinsics(info), mode)
-                            if v is not None:
-                                vis[mode] = v
+                    perlu.add(self.kanvas.depth_mode)
+                if self.kanvas.pakai_ir:
+                    perlu.add("ir")
+                if self.kanvas.warna_bidang > 0:
+                    perlu.add("bidang")
+                vis = data.setdefault("vis", {})
+                info = baca_json(p / "frame.json", {}) if perlu - set(vis) else {}
+                for mode in perlu - set(vis):
+                    if "intrinsics_rgb_native" in info:
+                        v = visual_depth.hitung_dari_folder(p, data["dep"], self._intrinsics(info), mode)
+                        if v is not None:
+                            vis[mode] = v
                 if data.get("peta") is None and model_convnext_siap():
                     info = baca_json(p / "frame.json", {})
                     if info.get("kategori", "tangga_naik") == "tangga_naik" and "intrinsics_rgb_native" in info:
@@ -4227,6 +4262,14 @@ class Studio(tk.Tk):
             self.depth_alpha.set(0.6); self.kanvas.depth_alpha = 0.6
         self.kanvas.render(); self.simpan_preferensi()
         self.after_idle(self.kanvas.focus_set)
+    def ganti_latar_ir(self):
+        self.kanvas.pakai_ir = bool(self.pakai_ir.get())
+        self.kanvas.render(); self.simpan_preferensi(); self._fokus_kanvas_label()
+        if self.kanvas.pakai_ir and self.label_path and not (self.label_path / "ir_left_raw.png").exists():
+            self.status.set("Frame ini tidak punya berkas inframerah; latar tetap RGB.")
+    def ganti_warna_bidang(self):
+        self.kanvas.warna_bidang = float(self.warna_bidang.get())
+        self.kanvas.render(); self.simpan_preferensi()
     def _fokus_kanvas_label(self, _e=None):
         if self.tabs.select() == str(self.tab_label):
             self.after_idle(self.kanvas.focus_set)
