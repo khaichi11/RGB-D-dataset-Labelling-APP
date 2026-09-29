@@ -27,7 +27,9 @@ import numpy as np
 
 MODE = {"bidang": "Bidang (warna per ketinggian anak tangga)", "relief": "Relief 3-D (bentuk anak tangga)",
         "normal": "Arah permukaan (warna normal)", "jarak": "Jarak (warna turbo)",
-        "ir": "Inframerah selaras (frame gelap)"}
+        "ir": "Inframerah selaras (frame gelap)",
+        "ir_bidang": "Inframerah + warna bidang (frame gelap)"}
+BUTUH_BERKAS = ("ir", "ir_bidang")        # butuh berkas IR frame, dihitung Studio (hitung_dari_folder)
 # "ir" tidak dihitung di sini karena butuh berkas IR frame; lihat ir_selaras.py.
 # "kontras" tetap tersedia untuk eksperimen, tetapi tidak ditawarkan di Studio:
 # pada frame 211803/105840 hasilnya berderau dan tepinya kurang terbaca.
@@ -116,8 +118,10 @@ def _bidang(d: np.ndarray, n: np.ndarray, sah: np.ndarray, k: dict, periode: flo
     P = np.dstack([(u - k["cx"]) * d / k["fx"], (v - k["cy"]) * d / k["fy"], d])
     tinggi = P @ atas
     tinggi -= np.percentile(tinggi[sah], 2) if sah.any() else 0
-    kos = n @ atas
-    datar, tegak = kos > 0.88, np.abs(kos) < 0.45
+    # Kemiringan dihaluskan sebelum diberi ambang: tanpa ini derau depth
+    # membuat bercak "tidak datar" di tengah lantai/tread (tampak abu-abu).
+    kos = cv2.GaussianBlur((n @ atas).astype(np.float32), (0, 0), 4.0)
+    datar, tegak = kos > 0.85, np.abs(kos) < 0.45
     hue = ((tinggi / periode) % 1.0 * 179).astype(np.uint8)
     sat = np.where(datar, 200, np.where(tegak, 30, 80)).astype(np.uint8)
     val = (70 + 185 * np.where(datar, 1.0, np.clip(n @ CAHAYA, 0, 1))).astype(np.uint8)
@@ -132,3 +136,29 @@ def _bidang(d: np.ndarray, n: np.ndarray, sah: np.ndarray, k: dict, periode: flo
     simpan = np.zeros(nk, bool); simpan[1:] = panjang[1:] >= 60
     out[simpan[lab]] = (25, 25, 25)
     return out
+
+
+def gabung_ir(bidang_rgb: np.ndarray, ir: np.ndarray, bobot_ir: float = 0.75) -> np.ndarray:
+    """Warna (hue, saturasi) dari mode Bidang, terang-gelap dan tekstur dari IR selaras.
+
+    Garis tepi hitam Bidang tidak ikut: di atas tekstur IR ia tampak seperti
+    coretan, sedangkan tepi anak tangga sudah terlihat dari IR itu sendiri.
+    """
+    hsv = cv2.cvtColor(bidang_rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
+    tepi = (bidang_rgb.max(2) < 40) & (bidang_rgb.sum(2) > 0)
+    hsv[..., 1][tepi] = 0
+    hsv[..., 2] = np.clip((1 - bobot_ir) * np.where(tepi, 150, hsv[..., 2]) + bobot_ir * ir.astype(np.float32), 0, 255)
+    out = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+    out[(bidang_rgb.sum(2) == 0) & (ir == 0)] = 0
+    return out
+
+
+def hitung_dari_folder(folder, depth: np.ndarray, intrinsik: dict, mode: str) -> np.ndarray | None:
+    """Tampilan bantu untuk satu folder frame, termasuk mode yang butuh berkas IR."""
+    if mode in BUTUH_BERKAS:
+        from . import ir_selaras
+        ir = ir_selaras.selaraskan(folder, depth)
+        if mode == "ir" or ir is None:
+            return ir if mode == "ir" else gambar(depth, "bidang", intrinsik)
+        return gabung_ir(gambar(depth, "bidang", intrinsik), ir)
+    return gambar(depth, mode, intrinsik)
