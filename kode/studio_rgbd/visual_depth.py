@@ -162,3 +162,21 @@ def hitung_dari_folder(folder, depth: np.ndarray, intrinsik: dict, mode: str) ->
             return ir if mode == "ir" else gambar(depth, "bidang", intrinsik)
         return gabung_ir(gambar(depth, "bidang", intrinsik), ir)
     return gambar(depth, mode, intrinsik)
+
+
+def warnai(latar_rgb: np.ndarray, bidang_rgb: np.ndarray, kekuatan: float) -> np.ndarray:
+    """Oleskan warna ketinggian Bidang pada latar (RGB atau IR) tanpa menutup teksturnya.
+
+    Hue dan saturasi dari Bidang, terang-gelap dari latar; ``kekuatan`` 0..1
+    mencampur hasilnya dengan latar asli. Garis tepi hitam Bidang tidak ikut.
+    """
+    if kekuatan <= 0 or bidang_rgb is None:
+        return latar_rgb
+    hb = cv2.cvtColor(bidang_rgb, cv2.COLOR_RGB2HSV)
+    hl = cv2.cvtColor(latar_rgb, cv2.COLOR_RGB2HSV)
+    tepi = (bidang_rgb.max(2) < 40) & (bidang_rgb.sum(2) > 0)
+    s = hb[..., 1].copy(); s[tepi] = 0
+    # Latar gelap diangkat sedikit agar warna tetap terbaca pada frame gelap.
+    v = np.maximum(hl[..., 2], 60).astype(np.uint8)
+    warna = cv2.cvtColor(np.dstack([hb[..., 0], s, v]), cv2.COLOR_HSV2RGB)
+    return cv2.addWeighted(latar_rgb, 1 - kekuatan, warna, kekuatan, 0)
