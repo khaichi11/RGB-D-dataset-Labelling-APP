@@ -59,6 +59,7 @@ if __package__:
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
     from .ui_bantu import kolom_gulir
+    from . import visual_depth
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -73,6 +74,7 @@ else:
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
     from studio_rgbd.ui_bantu import kolom_gulir
+    from studio_rgbd import visual_depth
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -451,6 +453,8 @@ class KanvasLabel(tk.Canvas):
         self.ox = 0.0
         self.oy = 0.0
         self.depth_alpha = 0.0
+        self.depth_mode = "relief"   # lihat visual_depth.MODE
+        self._depth_vis = self._depth_vis_key = self._depth_vis_obj = None
         self.kecerahan = 0.0     # 0 = asli, 1 = CLAHE penuh (lihat _cerahkan)
         self.ketajaman = 0.0     # 0 = asli, unsharp mask (lihat _pertajam)
         self.bantu_arah = 0.0    # 0 = mati; pemandu riser/tread (lihat _lapisan_arah, garis_pemandu)
@@ -663,7 +667,7 @@ class KanvasLabel(tk.Canvas):
 
     def gambar_tampil(self) -> np.ndarray:
         assert self.rgb is not None
-        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3),
+        key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), self.depth_mode,
               round(self.kecerahan, 3), round(self.ketajaman, 3), round(self.bantu_arah, 3))
         if self._tampil_key == key and self._tampil_cache is not None:
             return self._tampil_cache
@@ -694,14 +698,14 @@ class KanvasLabel(tk.Canvas):
                 self._peta_arah_key = self.depth
             out = _lapisan_arah(out, self._peta_arah, self.bantu_arah)
         if self.depth is not None and self.depth_alpha > 0:
-            d = self.depth.astype(np.float32)
-            valid = d > 0
-            if valid.any():
-                lo, hi = np.percentile(d[valid], (3, 97))
-                vis = np.clip((d - lo) * 255 / max(hi - lo, 1), 0, 255).astype(np.uint8)
-                warna = cv2.applyColorMap(vis, cv2.COLORMAP_TURBO)
-                warna = cv2.cvtColor(warna, cv2.COLOR_BGR2RGB)
-                out = cv2.addWeighted(out, 1 - self.depth_alpha, warna, self.depth_alpha, 0)
+            # Relief 3-D menampakkan bentuk anak tangga dari depth, juga pada frame
+            # yang gelap total di kamera RGB (lihat visual_depth). Dihitung sekali
+            # per frame dan per mode.
+            kunci = (self.depth_mode, id(self.intrinsik))
+            if self._depth_vis_key != kunci or self._depth_vis_obj is not self.depth:
+                self._depth_vis = visual_depth.gambar(self.depth, self.depth_mode, self.intrinsik)
+                self._depth_vis_key, self._depth_vis_obj = kunci, self.depth
+            out = cv2.addWeighted(out, 1 - self.depth_alpha, self._depth_vis, self.depth_alpha, 0)
         self._tampil_key, self._tampil_cache = key, out
         return out
 
@@ -718,7 +722,7 @@ class KanvasLabel(tk.Canvas):
         cw, ch = max(1, self.winfo_width()), max(1, self.winfo_height())
         margin = 12
         s = self.scale
-        dasar = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), round(self.kecerahan, 3),
+        dasar = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), self.depth_mode, round(self.kecerahan, 3),
                  round(self.ketajaman, 3), round(self.bantu_arah, 3), round(s, 5))
         lama = self._photo_key if self._photo is not None else None
         if w * h * s * s <= 2_500_000:
@@ -1489,6 +1493,7 @@ class Studio(tk.Tk):
         self.kecerahan = DoubleVar(value=float(preferensi.get("kecerahan", 0.0)))
         self.ketajaman = DoubleVar(value=float(preferensi.get("ketajaman", 0.0)))
         self.bantu_arah = DoubleVar(value=float(preferensi.get("bantu_arah", 0.0)))
+        self.depth_mode = StringVar(value=preferensi.get("depth_mode", "relief"))
         self.magnet_titik = BooleanVar(value=True)
         self.mode_label = StringVar(value="objek")
         self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
@@ -1962,6 +1967,7 @@ class Studio(tk.Tk):
         self.kanvas.penyedia_peta = self._peta_model_kini
         self.kanvas.lapor_blok = self._lapor_blok
         self.kanvas.touchpad = bool(self.mode_touchpad.get())
+        self.kanvas.depth_mode = self.depth_mode.get()
         # Ctrl+C menyalin nama frame yang sedang dibuka. Berguna saat melaporkan
         # frame bermasalah: namanya cukup panjang untuk salah ketik.
         self.kanvas.bind("<Control-c>", lambda _e: self.salin_nama_frame())
@@ -2058,6 +2064,15 @@ class Studio(tk.Tk):
         tk.Scale(edit_i, from_=0, to=1.0, resolution=.05, orient="horizontal", variable=self.depth_alpha,
                  command=lambda _: self.ganti_depth(), label="Overlay depth (1,0 = depth murni)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(2, 0))
+        baris_depth = tk.Frame(edit_i, bg=PANEL); baris_depth.pack(fill="x", pady=(0, 2))
+        tk.Label(baris_depth, text="Tampilan depth", bg=PANEL, fg=MUTED).pack(side="left")
+        pilih_depth = ttk.Combobox(baris_depth, state="readonly", width=30,
+                                   values=list(visual_depth.MODE.values()))
+        pilih_depth.set(visual_depth.MODE.get(self.depth_mode.get(), visual_depth.MODE["relief"]))
+        pilih_depth.pack(side="left", padx=4, fill="x", expand=True)
+        pilih_depth.bind("<<ComboboxSelected>>", lambda _e: self.ganti_mode_depth(pilih_depth.get()))
+        tk.Label(edit_i, text="Frame gelap: Relief 3-D + overlay 1,0 menampilkan bentuk anak tangga dari sensor depth.",
+                 bg=PANEL, fg=MUTED, wraplength=300, justify="left", font=("Segoe UI", 8)).pack(anchor="w")
         tk.Scale(edit_i, from_=0, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
                  command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
@@ -2200,7 +2215,8 @@ class Studio(tk.Tk):
                                           "mode_touchpad": bool(self.mode_touchpad.get()),
                                           "kecerahan": float(self.kecerahan.get()),
                                           "ketajaman": float(self.ketajaman.get()),
-                                          "bantu_arah": float(self.bantu_arah.get())})
+                                          "bantu_arah": float(self.bantu_arah.get()),
+                                          "depth_mode": self.depth_mode.get()})
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
@@ -4147,6 +4163,12 @@ class Studio(tk.Tk):
         self._mode_label_dipilih = True
         self.kanvas.render()
     def ganti_depth(self): self.kanvas.depth_alpha=float(self.depth_alpha.get()); self.kanvas.render()
+    def ganti_mode_depth(self, label: str):
+        self.depth_mode.set(next((k for k, v in visual_depth.MODE.items() if v == label), "relief"))
+        self.kanvas.depth_mode = self.depth_mode.get()
+        if self.kanvas.depth_alpha <= 0:                  # memilih tampilan depth berarti ingin melihatnya
+            self.depth_alpha.set(0.6); self.kanvas.depth_alpha = 0.6
+        self.kanvas.render(); self.simpan_preferensi()
     def ganti_kecerahan(self):
         self.kanvas.kecerahan = float(self.kecerahan.get())
         self.kanvas.render()
