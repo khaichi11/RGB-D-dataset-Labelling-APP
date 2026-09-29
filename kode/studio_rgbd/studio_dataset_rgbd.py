@@ -59,7 +59,7 @@ if __package__:
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
     from .ui_bantu import kolom_gulir
-    from . import visual_depth
+    from . import visual_depth, ir_selaras
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -74,7 +74,7 @@ else:
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
     from studio_rgbd.ui_bantu import kolom_gulir
-    from studio_rgbd import visual_depth
+    from studio_rgbd import visual_depth, ir_selaras
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -705,9 +705,14 @@ class KanvasLabel(tk.Canvas):
             kunci = (self.depth_mode, id(self.intrinsik))
             if self._depth_vis_key != kunci or self._depth_vis_obj is not self.depth:
                 vis = self.penyedia_depth_vis(self.depth_mode) if self.penyedia_depth_vis else None
-                self._depth_vis = vis if vis is not None else visual_depth.gambar(self.depth, self.depth_mode, self.intrinsik)
+                if vis is None and self.depth_mode != "ir":
+                    vis = visual_depth.gambar(self.depth, self.depth_mode, self.intrinsik)
+                if vis is not None and vis.ndim == 2:
+                    vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2RGB)
+                self._depth_vis = vis
                 self._depth_vis_key, self._depth_vis_obj = kunci, self.depth
-            out = cv2.addWeighted(out, 1 - self.depth_alpha, self._depth_vis, self.depth_alpha, 0)
+            if self._depth_vis is not None:                   # IR tidak ada: tampilkan RGB saja
+                out = cv2.addWeighted(out, 1 - self.depth_alpha, self._depth_vis, self.depth_alpha, 0)
         self._tampil_key, self._tampil_cache = key, out
         return out
 
@@ -1318,8 +1323,10 @@ class KanvasLabel(tk.Canvas):
         self._urutkan_dari_bawah(ke, poly)
         self.titik_dipilih.clear()
         self.catat_riwayat(); self.render(); self.on_change()
+        # Dulu baris ini berada sesudah return sehingga tidak pernah jalan:
+        # nomor mask di panel tidak ikut pindah ke kelas barunya.
+        self._beritahu_aktif(ke, self.aktif_indeks.get(ke))
         return dari
-        self._beritahu_aktif(nama, self.aktif_indeks[nama])
 
     def bersihkan(self, nama):
         self.poligon[nama] = []
@@ -2077,13 +2084,13 @@ class Studio(tk.Tk):
                  command=lambda _: self.ganti_depth(), label="Overlay depth (1,0 = depth murni)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(2, 0))
         baris_depth = tk.Frame(edit_i, bg=PANEL); baris_depth.pack(fill="x", pady=(0, 2))
-        tk.Label(baris_depth, text="Tampilan depth", bg=PANEL, fg=MUTED).pack(side="left")
+        tk.Label(baris_depth, text="Tampilan bantu", bg=PANEL, fg=MUTED).pack(side="left")
         pilih_depth = ttk.Combobox(baris_depth, state="readonly", width=30,
                                    values=list(visual_depth.MODE.values()))
         pilih_depth.set(visual_depth.MODE.get(self.depth_mode.get(), visual_depth.MODE["bidang"]))
         pilih_depth.pack(side="left", padx=4, fill="x", expand=True)
         pilih_depth.bind("<<ComboboxSelected>>", lambda _e: self.ganti_mode_depth(pilih_depth.get()))
-        tk.Label(edit_i, text="Frame gelap: mode Bidang + overlay 1,0 menampilkan tiap anak tangga sebagai blok warna dari sensor depth.",
+        tk.Label(edit_i, text="Frame gelap: Inframerah selaras atau Bidang + overlay 1,0 menampilkan anak tangga dari sensor IR/depth.",
                  bg=PANEL, fg=MUTED, wraplength=300, justify="left", font=("Segoe UI", 8)).pack(anchor="w")
         tk.Scale(edit_i, from_=0, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
                  command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
@@ -3605,10 +3612,18 @@ class Studio(tk.Tk):
             self._syarat_prefetch.notify()
 
     def _depth_vis_kini(self, mode: str) -> np.ndarray | None:
-        """Tampilan depth frame aktif dari cache prefetch (None bila belum ada)."""
+        """Tampilan bantu frame aktif dari cache prefetch; IR dihitung di sini bila belum ada."""
         with self._kunci_cache:
             data = self._cache_frame.get(self.label_path) if self.label_path else None
-        return (data or {}).get("vis", {}).get(mode)
+        vis = (data or {}).get("vis", {}).get(mode)
+        if vis is None and mode == "ir" and self.label_path is not None:
+            try:
+                vis = ir_selaras.selaraskan(self.label_path, self.kanvas.depth)
+            except (OSError, KeyError, ValueError):
+                vis = None
+            if data is not None and vis is not None:
+                data.setdefault("vis", {})["ir"] = vis
+        return vis
 
     def _peta_model_kini(self) -> np.ndarray | None:
         """Peta kelas model untuk frame aktif (penyedia pemandu kanvas)."""
@@ -3647,7 +3662,11 @@ class Studio(tk.Tk):
                     vis = data.setdefault("vis", {})
                     if mode not in vis:
                         info = baca_json(p / "frame.json", {})
-                        if "intrinsics_rgb_native" in info:
+                        if mode == "ir":
+                            ir = ir_selaras.selaraskan(p, data["dep"])
+                            if ir is not None:
+                                vis[mode] = ir
+                        elif "intrinsics_rgb_native" in info:
                             vis[mode] = visual_depth.gambar(data["dep"], mode, self._intrinsics(info))
                 if data.get("peta") is None and model_convnext_siap():
                     info = baca_json(p / "frame.json", {})

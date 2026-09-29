@@ -26,7 +26,9 @@ import cv2
 import numpy as np
 
 MODE = {"bidang": "Bidang (warna per ketinggian anak tangga)", "relief": "Relief 3-D (bentuk anak tangga)",
-        "normal": "Arah permukaan (warna normal)", "jarak": "Jarak (warna turbo)"}
+        "normal": "Arah permukaan (warna normal)", "jarak": "Jarak (warna turbo)",
+        "ir": "Inframerah selaras (frame gelap)"}
+# "ir" tidak dihitung di sini karena butuh berkas IR frame; lihat ir_selaras.py.
 # "kontras" tetap tersedia untuk eksperimen, tetapi tidak ditawarkan di Studio:
 # pada frame 211803/105840 hasilnya berderau dan tepinya kurang terbaca.
 CAHAYA = np.array([0.25, -0.9, -0.35], np.float32)       # kamera: x kanan, y bawah, z maju -> dari atas-depan

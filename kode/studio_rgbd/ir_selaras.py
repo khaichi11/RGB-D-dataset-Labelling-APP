@@ -1,0 +1,68 @@
+"""Citra inframerah D435 yang diselaraskan ke koordinat RGB, untuk melabel frame gelap.
+
+Pada frame yang gelap total, RGB hanya berisi beberapa tingkat kecerahan
+(211803 frame_002493: rerata 5 dari 255), sehingga detail tidak dapat
+dipulihkan dengan pencerahan apa pun. Kamera IR kiri D435 tetap melihat
+(rerata ~100) karena diterangi proyektor laser, tetapi (1) tertutup pola titik
+proyektor dan (2) berada di posisi kamera yang berbeda dari RGB.
+
+(1) Pola titik (bintik terang 2-4 px) dibuang dengan opening abu-abu lalu
+    median; struktur yang lebih besar dari titik (tepi anak tangga) tetap.
+(2) Setiap piksel RGB dipetakan ke IR lewat depth selaras-RGB dan kalibrasi:
+    X_ir = R (X_rgb - t), dengan R dan t dari ``extrinsics_depth_ke_rgb``
+    frame.json apa adanya. Konvensi ini diperiksa terhadap ``depth_raw`` (yang
+    berada di koordinat IR): 96% titik cocok dalam 5 mm, median 1,5-1,7 mm;
+    konvensi transpos hanya 32-40%.
+Piksel RGB tanpa depth tidak punya padanan IR dan diisi dari tetangganya bila
+lubangnya kecil, selain itu hitam.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+
+def bersihkan_titik(ir: np.ndarray, ukuran: int = 7) -> np.ndarray:
+    ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ukuran, ukuran))
+    b = cv2.morphologyEx(ir, cv2.MORPH_OPEN, ker)
+    return cv2.medianBlur(b, 5)
+
+
+def selaraskan(folder: Path, depth_selaras: np.ndarray | None = None) -> np.ndarray | None:
+    """IR kiri (tanpa pola titik) dalam koordinat citra RGB, uint8 abu-abu; None bila tidak ada IR."""
+    folder = Path(folder)
+    f_ir = folder / "ir_left_raw.png"
+    if not f_ir.exists():
+        return None
+    ir = cv2.imread(str(f_ir), cv2.IMREAD_UNCHANGED)
+    if ir is None:
+        return None
+    if ir.dtype != np.uint8:
+        ir = cv2.normalize(ir, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    info = json.loads((folder / "frame.json").read_text())
+    kc, kd = info["intrinsics_rgb_native"], info["intrinsics_depth_native"]
+    ek = info["extrinsics_depth_ke_rgb"]
+    R = np.array(ek["rotation_row_major"], np.float32).reshape(3, 3)
+    t = np.array(ek["translation_meter"], np.float32)
+    if depth_selaras is None:
+        depth_selaras = np.load(folder / "depth_aligned_to_color.npy")
+    z = depth_selaras.astype(np.float32) * float(info.get("depth_scale", 0.001))
+    bersih = bersihkan_titik(ir)
+    h, w = z.shape
+    v, u = np.mgrid[0:h, 0:w].astype(np.float32)
+    Xc = np.dstack([(u - kc["ppx"]) * z / kc["fx"], (v - kc["ppy"]) * z / kc["fy"], z])
+    Xd = (Xc - t) @ R.T                                      # = R (X_rgb - t) per piksel
+    zd = np.maximum(Xd[..., 2], 1e-6)
+    ud = (Xd[..., 0] / zd * kd["fx"] + kd["ppx"]).astype(np.float32)
+    vd = (Xd[..., 1] / zd * kd["fy"] + kd["ppy"]).astype(np.float32)
+    out = cv2.remap(bersih, ud, vd, cv2.INTER_LINEAR, borderValue=0)
+    lubang = (z <= 0).astype(np.uint8)
+    if lubang.any():
+        # Lubang depth kecil diisi dari tetangga; area tanpa depth yang luas tetap hitam.
+        kecil = lubang & (cv2.erode(lubang, np.ones((9, 9), np.uint8)) == 0)
+        out[lubang > 0] = 0
+        out = cv2.inpaint(out, kecil.astype(np.uint8), 3, cv2.INPAINT_TELEA)
+    return cv2.createCLAHE(2.0, (8, 8)).apply(out)
