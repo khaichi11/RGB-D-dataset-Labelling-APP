@@ -93,6 +93,24 @@ Setelah membagi dataset di tab 7, pelatihan tinggal satu perintah dari tombol
 **📋 Perintah latih** (tempel di terminal). Model hasil latih otomatis masuk
 registri model Hugging Face `khaichi11/Skripsi` bila laptop sudah login.
 
+## Dataset di Hugging Face: melabel ulang di laptop mana pun
+
+Tab **7. Split Dataset** punya dua tombol:
+
+- **☁ Push dataset ke HF**: semua frame ekspor (berlabel maupun belum) diunggah
+  sebagai Parquet ke `khaichi11/Stairs-Skripsi` (privat): RGB, depth, IR, label,
+  status diperiksa, sampah, catatan rekaman, dan pembagian split.
+- **⬇ Tarik dari HF**: frame dibangun kembali ke `dataset/studio_rgbd/rekaman/...`.
+  Rekaman hasil tarik tampil "(tanpa video)" di tab Tinjau dan bisa langsung
+  dilabel. Gambar yang sudah ada tidak ditimpa; label lokal yang lebih baru
+  dipertahankan, label dari HF yang lebih baru dipakai.
+
+Alur di beberapa laptop: **Tarik → melabel → Push**.
+
+Video mentah (`raw.db3`, ±95 GB) **tidak** diunggah. Melabel ulang hanya butuh
+frame ekspor; video hanya diperlukan untuk mengekspor frame baru. Simpan video
+di disk eksternal sebagai arsip.
+
 ## Keamanan data
 
 - Token hanya di `~/.cache/huggingface/` (hasil login) atau di

@@ -177,6 +177,7 @@ class TabSplit:
         for teks, cmd, w, warna, fg in (("↻ Muat ulang", self.muat_ulang, 100, "#E8DDD5", INK),
                                         ("📋 Perintah latih", self.salin_latih, 130, "#E8DDD5", INK),
                                         ("📋 Perintah uji (test)", self.salin_uji, 150, "#E8DDD5", INK),
+                                        ("⬇ Tarik dari HF", self.tarik_hf, 130, "#E8DDD5", INK),
                                         ("☁ Push dataset ke HF", self.push_hf, 160, BLUE, "white")):
             st.tombol_ringkas(baris, teks, cmd, warna, fg, width=w).pack(side="left", fill="x", expand=True, padx=2)
 
@@ -255,6 +256,14 @@ class TabSplit:
                     self._sibuk = False
                     self.ringkas.config(text=isi)
                     messagebox.showerror("Split dataset", isi)
+                elif jenis == "tarik_selesai":
+                    self._sibuk = False
+                    teks = (f"Tarik selesai: {isi['frame_baru']} frame baru, {isi['label_diperbarui']} label "
+                            f"diperbarui dari HF, {isi['label_lokal_lebih_baru']} label lokal lebih baru dipertahankan.")
+                    self.ringkas.config(text=teks)
+                    messagebox.showinfo("Hugging Face", teks + "\n\nPilih rekamannya di tab 2. Tinjau untuk melabel.")
+                    self.muat_ulang()
+                    self.studio.muat_daftar()
                 elif jenis == "hf_selesai":
                     self._sibuk = False
                     self.ringkas.config(text=f"Dataset terunggah: {isi}")
@@ -698,6 +707,28 @@ class TabSplit:
                 + ' --bobot <folder-hasil-latih>/best.pt --keluar <folder-hasil-latih>/uji_test.json')
         self._salin(teks, "Perintah uji")
 
+    def tarik_hf(self) -> None:
+        """Pulihkan frame ekspor + label dari HF agar bisa dilabel ulang tanpa video mentah."""
+        if not unggah_hf.konfigurasi()["token"] and not masuk_hf(self.studio):
+            return
+        if self._sibuk:
+            return
+        k = unggah_hf.konfigurasi()
+        if not messagebox.askyesno("Tarik dataset", f"Unduh dataset dari huggingface.co/datasets/{k['repo']}\n"
+                                   "dan pulihkan frame ekspornya di laptop ini?\n\n"
+                                   "Gambar yang sudah ada tidak ditimpa. Label lokal yang lebih baru\n"
+                                   "dipertahankan; label dari HF yang lebih baru dipakai."):
+            return
+        self._sibuk = True
+
+        def kerja():
+            try:
+                self._q.put(("tarik_selesai", unggah_hf.tarik(self.akar, self.berkas,
+                                                               lambda t: self._q.put(("status", t)))))
+            except Exception as e:                           # noqa: BLE001
+                self._q.put(("galat", f"Tarik dari Hugging Face gagal: {e}"))
+        threading.Thread(target=kerja, daemon=True).start()
+
     def push_hf(self) -> None:
         k = unggah_hf.konfigurasi()
         if not k["token"]:
@@ -706,7 +737,7 @@ class TabSplit:
             k = unggah_hf.konfigurasi()
         if self._sibuk:
             return
-        if not messagebox.askyesno("Push dataset", f"Unggah seluruh frame berlabel (Parquet) ke\n"
+        if not messagebox.askyesno("Push dataset", f"Unggah seluruh frame ekspor + label (Parquet) ke\n"
                                                    f"huggingface.co/datasets/{k['repo']}?\n\n"
                                                    f"Isi repo akan diganti dengan keadaan dataset sekarang."
                                                    + ("\nRepo baru dibuat PRIVAT." if k["privat"] else "")):

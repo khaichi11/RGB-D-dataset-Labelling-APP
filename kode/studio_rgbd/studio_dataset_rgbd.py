@@ -1572,7 +1572,14 @@ class Studio(tk.Tk):
         hasil = []
         for k in KATEGORI:
             hasil.extend(sorted((self.root_data / "rekaman" / k).glob("*"), reverse=True))
-        return [p for p in hasil if p.is_dir() and self.bag(p).exists()]
+        # Rekaman tanpa video mentah tetap ditampilkan bila punya frame ekspor
+        # (mis. hasil Tarik dataset dari Hugging Face): masih bisa dilabel ulang.
+        return [p for p in hasil if p.is_dir() and (self.bag(p).exists() or self._ada_ekspor(p))]
+
+    @staticmethod
+    def _ada_ekspor(sesi: Path) -> bool:
+        fr = sesi / "exports" / "frames"
+        return fr.exists() and any(d.is_dir() for d in fr.iterdir())
 
     # ----- UI -----
     def _gaya(self):
@@ -1872,6 +1879,8 @@ class Studio(tk.Tk):
     def _teks_item_sesi(self, p: Path, ikon: str = "") -> str:
         d = self._catatan_cache(p)
         tanda = ("  📝" if d["catatan"] else "") + (f"  ◆{len(d['scene'])}" if d["scene"] else "")
+        if not self.bag(p).exists():
+            tanda += "  (tanpa video)"
         return f"{ikon}{p.name.replace('TANGGA_NAIK_', '')}{tanda}"
 
     def _warnai_item_sesi(self, i: int, p: Path) -> None:
