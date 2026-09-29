@@ -6,6 +6,11 @@ dan riser adalah ARAH permukaannya (tread menghadap atas, riser menghadap
 kamera), dan itu terbaca dari depth tanpa bergantung pada cahaya.
 
 Mode:
+- ``bidang``: tinggi tiap piksel terhadap arah "atas" (dari normal bidang
+  datar yang dominan). Bidang datar (tread, lantai, bordes) diwarnai menurut
+  tingginya dengan warna berulang tiap 0,5 m, sehingga tiap anak tangga
+  menjadi satu blok warna rata; permukaan tegak (riser) abu-abu berbayang;
+  batas tajam antar-bidang digaris hitam.
 - ``relief``: permukaan disinari cahaya buatan dari atas-depan (normal 3-D
   dari depth + intrinsik). Tread terang, riser lebih gelap, tepi anak tangga
   tegas, seperti foto yang diterangi dari atas.
@@ -20,8 +25,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-MODE = {"relief": "Relief 3-D (bentuk anak tangga)", "normal": "Arah permukaan (warna normal)",
-        "jarak": "Jarak (warna turbo)"}
+MODE = {"bidang": "Bidang (warna per ketinggian anak tangga)", "relief": "Relief 3-D (bentuk anak tangga)",
+        "normal": "Arah permukaan (warna normal)", "jarak": "Jarak (warna turbo)"}
 # "kontras" tetap tersedia untuk eksperimen, tetapi tidak ditawarkan di Studio:
 # pada frame 211803/105840 hasilnya berderau dan tepinya kurang terbaca.
 CAHAYA = np.array([0.25, -0.9, -0.35], np.float32)       # kamera: x kanan, y bawah, z maju -> dari atas-depan
@@ -82,6 +87,10 @@ def gambar(depth: np.ndarray, mode: str, intrinsik: dict | None) -> np.ndarray:
         n = _normal(d, k["fx"], k["fy"], k["cx"], k["cy"], L=5)
         n = cv2.GaussianBlur(n, (0, 0), 3.0)
         n /= np.linalg.norm(n, axis=2, keepdims=True) + 1e-9
+        if mode == "bidang":
+            out = _bidang(d, n, sah, k)
+            out[~sah] = 0
+            return out
         if mode == "normal":
             out = ((n * np.array([1, -1, -1], np.float32) * 0.5 + 0.5) * 255).astype(np.uint8)
         else:
@@ -89,4 +98,35 @@ def gambar(depth: np.ndarray, mode: str, intrinsik: dict | None) -> np.ndarray:
             g = (40 + 215 * terang ** 0.8).astype(np.uint8)
             out = np.dstack([g, g, (g * 0.94).astype(np.uint8)])   # sedikit hangat agar tidak tertukar dengan mask biru
     out[~sah] = 0
+    return out
+
+
+def _bidang(d: np.ndarray, n: np.ndarray, sah: np.ndarray, k: dict, periode: float = 0.5) -> np.ndarray:
+    """Warna per ketinggian untuk bidang datar; lihat docstring modul."""
+    atas = np.array([0, -1, 0], np.float32)
+    for ambang in (0.5, 0.9, 0.95):                        # normal bidang datar dominan, diperketat bertahap
+        c = n[sah & ((n @ atas) > ambang)]
+        if len(c) > 500:
+            atas = c.mean(0)
+            atas /= np.linalg.norm(atas)
+    h, w = d.shape
+    v, u = np.mgrid[0:h, 0:w].astype(np.float32)
+    P = np.dstack([(u - k["cx"]) * d / k["fx"], (v - k["cy"]) * d / k["fy"], d])
+    tinggi = P @ atas
+    tinggi -= np.percentile(tinggi[sah], 2) if sah.any() else 0
+    kos = n @ atas
+    datar, tegak = kos > 0.88, np.abs(kos) < 0.45
+    hue = ((tinggi / periode) % 1.0 * 179).astype(np.uint8)
+    sat = np.where(datar, 200, np.where(tegak, 30, 80)).astype(np.uint8)
+    val = (70 + 185 * np.where(datar, 1.0, np.clip(n @ CAHAYA, 0, 1))).astype(np.uint8)
+    out = cv2.cvtColor(np.dstack([hue, sat, val]), cv2.COLOR_HSV2RGB)
+    # Batas antar-bidang: perubahan normal yang tajam. Potongan pendek (derau)
+    # dibuang agar yang tersisa garis tepi anak tangga, bukan bintik.
+    gx = cv2.Sobel(n, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(n, cv2.CV_32F, 0, 1, ksize=3)
+    tepi = (np.sqrt((gx ** 2 + gy ** 2).sum(2)) > 0.9).astype(np.uint8)
+    nk, lab, stat, _ = cv2.connectedComponentsWithStats(tepi, 8)
+    panjang = np.maximum(stat[:, cv2.CC_STAT_WIDTH], stat[:, cv2.CC_STAT_HEIGHT])
+    simpan = np.zeros(nk, bool); simpan[1:] = panjang[1:] >= 60
+    out[simpan[lab]] = (25, 25, 25)
     return out

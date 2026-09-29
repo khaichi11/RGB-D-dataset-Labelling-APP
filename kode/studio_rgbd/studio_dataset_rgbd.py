@@ -453,7 +453,8 @@ class KanvasLabel(tk.Canvas):
         self.ox = 0.0
         self.oy = 0.0
         self.depth_alpha = 0.0
-        self.depth_mode = "relief"   # lihat visual_depth.MODE
+        self.depth_mode = "bidang"   # lihat visual_depth.MODE
+        self.penyedia_depth_vis = None   # Studio: fungsi(mode) -> citra hasil prefetch atau None
         self._depth_vis = self._depth_vis_key = self._depth_vis_obj = None
         self.kecerahan = 0.0     # 0 = asli, 1 = CLAHE penuh (lihat _cerahkan)
         self.ketajaman = 0.0     # 0 = asli, unsharp mask (lihat _pertajam)
@@ -703,7 +704,8 @@ class KanvasLabel(tk.Canvas):
             # per frame dan per mode.
             kunci = (self.depth_mode, id(self.intrinsik))
             if self._depth_vis_key != kunci or self._depth_vis_obj is not self.depth:
-                self._depth_vis = visual_depth.gambar(self.depth, self.depth_mode, self.intrinsik)
+                vis = self.penyedia_depth_vis(self.depth_mode) if self.penyedia_depth_vis else None
+                self._depth_vis = vis if vis is not None else visual_depth.gambar(self.depth, self.depth_mode, self.intrinsik)
                 self._depth_vis_key, self._depth_vis_obj = kunci, self.depth
             out = cv2.addWeighted(out, 1 - self.depth_alpha, self._depth_vis, self.depth_alpha, 0)
         self._tampil_key, self._tampil_cache = key, out
@@ -1493,7 +1495,7 @@ class Studio(tk.Tk):
         self.kecerahan = DoubleVar(value=float(preferensi.get("kecerahan", 0.0)))
         self.ketajaman = DoubleVar(value=float(preferensi.get("ketajaman", 0.0)))
         self.bantu_arah = DoubleVar(value=float(preferensi.get("bantu_arah", 0.0)))
-        self.depth_mode = StringVar(value=preferensi.get("depth_mode", "relief"))
+        self.depth_mode = StringVar(value=preferensi.get("depth_mode", "bidang"))
         self.magnet_titik = BooleanVar(value=True)
         self.mode_label = StringVar(value="objek")
         self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
@@ -1968,6 +1970,7 @@ class Studio(tk.Tk):
         self.kanvas.lapor_blok = self._lapor_blok
         self.kanvas.touchpad = bool(self.mode_touchpad.get())
         self.kanvas.depth_mode = self.depth_mode.get()
+        self.kanvas.penyedia_depth_vis = self._depth_vis_kini
         # Ctrl+C menyalin nama frame yang sedang dibuka. Berguna saat melaporkan
         # frame bermasalah: namanya cukup panjang untuk salah ketik.
         self.kanvas.bind("<Control-c>", lambda _e: self.salin_nama_frame())
@@ -2068,10 +2071,10 @@ class Studio(tk.Tk):
         tk.Label(baris_depth, text="Tampilan depth", bg=PANEL, fg=MUTED).pack(side="left")
         pilih_depth = ttk.Combobox(baris_depth, state="readonly", width=30,
                                    values=list(visual_depth.MODE.values()))
-        pilih_depth.set(visual_depth.MODE.get(self.depth_mode.get(), visual_depth.MODE["relief"]))
+        pilih_depth.set(visual_depth.MODE.get(self.depth_mode.get(), visual_depth.MODE["bidang"]))
         pilih_depth.pack(side="left", padx=4, fill="x", expand=True)
         pilih_depth.bind("<<ComboboxSelected>>", lambda _e: self.ganti_mode_depth(pilih_depth.get()))
-        tk.Label(edit_i, text="Frame gelap: Relief 3-D + overlay 1,0 menampilkan bentuk anak tangga dari sensor depth.",
+        tk.Label(edit_i, text="Frame gelap: mode Bidang + overlay 1,0 menampilkan tiap anak tangga sebagai blok warna dari sensor depth.",
                  bg=PANEL, fg=MUTED, wraplength=300, justify="left", font=("Segoe UI", 8)).pack(anchor="w")
         tk.Scale(edit_i, from_=0, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
                  command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
@@ -3592,6 +3595,12 @@ class Studio(tk.Tk):
             self._antrean_prefetch = urut
             self._syarat_prefetch.notify()
 
+    def _depth_vis_kini(self, mode: str) -> np.ndarray | None:
+        """Tampilan depth frame aktif dari cache prefetch (None bila belum ada)."""
+        with self._kunci_cache:
+            data = self._cache_frame.get(self.label_path) if self.label_path else None
+        return (data or {}).get("vis", {}).get(mode)
+
     def _peta_model_kini(self) -> np.ndarray | None:
         """Peta kelas model untuk frame aktif (penyedia pemandu kanvas)."""
         p = self.label_path
@@ -3624,6 +3633,13 @@ class Studio(tk.Tk):
                     if data is None:
                         continue
                     self._simpan_cache(p, data)
+                if self.kanvas.depth_alpha > 0:
+                    mode = self.kanvas.depth_mode
+                    vis = data.setdefault("vis", {})
+                    if mode not in vis:
+                        info = baca_json(p / "frame.json", {})
+                        if "intrinsics_rgb_native" in info:
+                            vis[mode] = visual_depth.gambar(data["dep"], mode, self._intrinsics(info))
                 if data.get("peta") is None and model_convnext_siap():
                     info = baca_json(p / "frame.json", {})
                     if info.get("kategori", "tangga_naik") == "tangga_naik" and "intrinsics_rgb_native" in info:
@@ -4164,7 +4180,7 @@ class Studio(tk.Tk):
         self.kanvas.render()
     def ganti_depth(self): self.kanvas.depth_alpha=float(self.depth_alpha.get()); self.kanvas.render()
     def ganti_mode_depth(self, label: str):
-        self.depth_mode.set(next((k for k, v in visual_depth.MODE.items() if v == label), "relief"))
+        self.depth_mode.set(next((k for k, v in visual_depth.MODE.items() if v == label), "bidang"))
         self.kanvas.depth_mode = self.depth_mode.get()
         if self.kanvas.depth_alpha <= 0:                  # memilih tampilan depth berarti ingin melihatnya
             self.depth_alpha.set(0.6); self.kanvas.depth_alpha = 0.6
