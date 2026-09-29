@@ -6,8 +6,8 @@ dipulihkan dengan pencerahan apa pun. Kamera IR kiri D435 tetap melihat
 (rerata ~100) karena diterangi proyektor laser, tetapi (1) tertutup pola titik
 proyektor dan (2) berada di posisi kamera yang berbeda dari RGB.
 
-(1) Pola titik (bintik terang 2-4 px) dibuang dengan opening abu-abu lalu
-    median; struktur yang lebih besar dari titik (tepi anak tangga) tetap.
+(1) Pola titik (bintik terang 2-4 px) dideteksi lewat top-hat dan hanya
+    piksel titik yang ditambal (lihat bersihkan_titik); piksel lain tetap asli.
 (2) Setiap piksel RGB dipetakan ke IR lewat depth selaras-RGB dan kalibrasi:
     X_ir = R (X_rgb - t), dengan R dan t dari ``extrinsics_depth_ke_rgb``
     frame.json apa adanya. Konvensi ini diperiksa terhadap ``depth_raw`` (yang
@@ -26,9 +26,21 @@ import numpy as np
 
 
 def bersihkan_titik(ir: np.ndarray, ukuran: int = 7) -> np.ndarray:
+    """Buang pola titik proyektor tanpa mengaburkan piksel lain.
+
+    Titik laser menutupi 41-47% piksel IR (211803, 105840). Opening abu-abu
+    yang dulu dipakai mengubah SEMUA piksel sehingga detail ikut kabur dan
+    tersisa tekstur belang. Kini titik dideteksi satu per satu lewat top-hat
+    (terang lokal yang lebih kecil dari elemen ``ukuran``), hanya piksel titik
+    yang ditambal dari tetangganya (inpainting), lalu derau halus diredam
+    bilateral yang menjaga tepi.
+    """
     ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ukuran, ukuran))
-    b = cv2.morphologyEx(ir, cv2.MORPH_OPEN, ker)
-    return cv2.medianBlur(b, 5)
+    tophat = cv2.subtract(ir, cv2.morphologyEx(ir, cv2.MORPH_OPEN, ker))
+    ambang = max(12.0, float(np.percentile(tophat, 75)) * 1.5)
+    titik = cv2.dilate((tophat > ambang).astype(np.uint8), np.ones((3, 3), np.uint8))
+    tambal = cv2.inpaint(ir, titik, 3, cv2.INPAINT_TELEA)
+    return cv2.bilateralFilter(tambal, 5, 18, 3)
 
 
 def selaraskan(folder: Path, depth_selaras: np.ndarray | None = None) -> np.ndarray | None:
