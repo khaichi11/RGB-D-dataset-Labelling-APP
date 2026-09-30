@@ -82,3 +82,44 @@ def kecerahan(rgb: np.ndarray) -> tuple[float, str]:
     import cv2
     l = float(cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)[..., 0].mean())
     return l, ("gelap" if l < 30 else "redup" if l < 80 else "terang")
+
+
+# ------------------------------------------------------------------ waktu pengambilan
+HARI = ("Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min")
+BULAN = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
+
+
+def periode(jam: int) -> str:
+    """Pagi 05-10, siang 10-15, sore 15-18, malam 18-24, dini hari 00-05."""
+    return ("dini hari" if jam < 5 else "pagi" if jam < 10 else "siang" if jam < 15
+            else "sore" if jam < 18 else "malam")
+
+
+def format_waktu(t, dengan_detik: bool = True) -> str:
+    """datetime -> 'Sen 14 Sep 2026, 21.19.28 WIB (malam)'."""
+    jam = t.strftime("%H.%M.%S" if dengan_detik else "%H.%M")
+    zona = t.astimezone().tzname() or ""
+    return f"{HARI[t.weekday()]} {t.day} {BULAN[t.month - 1]} {t.year}, {jam} {zona} ({periode(t.hour)})"
+
+
+def waktu_rekaman(sesi: Path) -> tuple | None:
+    """(mulai, selesai) dari source/session.json, datetime lokal; None bila tidak ada."""
+    from datetime import datetime
+    f = Path(sesi) / "source" / "session.json"
+    try:
+        d = json.loads(f.read_text()) if f.exists() else {}
+        mulai = datetime.fromisoformat(d["mulai_iso"])
+        selesai = datetime.fromisoformat(d["selesai_iso"]) if d.get("selesai_iso") else None
+        return mulai, selesai
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def waktu_frame(info: dict):
+    """Waktu pengambilan satu frame dari frame.json (cap waktu kamera, ms sejak epoch), datetime lokal."""
+    from datetime import datetime
+    t = info.get("timestamp_kamera_ms")
+    try:
+        return datetime.fromtimestamp(float(t) / 1000.0) if t else None
+    except (TypeError, ValueError, OSError):
+        return None

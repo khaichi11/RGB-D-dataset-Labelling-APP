@@ -73,6 +73,7 @@ class TabSplit:
         self.frames: dict[str, list[Path]] = {}          # rekaman -> frame siap latih
         self.n_ekspor: dict[str, int] = {}
         self.catatan: dict[str, dict] = {}              # rekaman -> catatan.json (warna, catatan, scene)
+        self.waktu: dict = {}                           # rekaman -> waktu mulai rekam (datetime lokal)
         self.daftar: list[Path] = []                     # frame pada daftar (setelah filter)
         self.kini: Path | None = None
         self._fokus = "rekaman"
@@ -130,12 +131,13 @@ class TabSplit:
         # --- rekaman & scene
         b, i = st.card(kiri, "Rekaman & scene  (Shift/Ctrl+klik memblok)"); b.pack(fill="x", pady=(0, 8))
         f2 = tk.Frame(i, bg=PANEL); f2.pack(fill="both", expand=True)
-        self.tree = ttk.Treeview(f2, columns=("set", "siap", "rincian"), show="tree headings",
+        self.tree = ttk.Treeview(f2, columns=("set", "siap", "rincian", "waktu"), show="tree headings",
                                  selectmode="extended", height=8)
-        self.tree.heading("#0", text="Rekaman"); self.tree.column("#0", width=200)
+        self.tree.heading("#0", text="Rekaman"); self.tree.column("#0", width=170)
         self.tree.heading("set", text="Set"); self.tree.column("set", width=66, anchor="center")
         self.tree.heading("siap", text="Siap latih"); self.tree.column("siap", width=66, anchor="e")
-        self.tree.heading("rincian", text="Per set"); self.tree.column("rincian", width=100)
+        self.tree.heading("rincian", text="Per set"); self.tree.column("rincian", width=80)
+        self.tree.heading("waktu", text="Direkam"); self.tree.column("waktu", width=120)
         for s_, w in WARNA_SET.items():
             self.tree.tag_configure(str(s_), foreground=w)
         for nama, w in CR.WARNA.items():
@@ -175,6 +177,7 @@ class TabSplit:
         self.ringkas.pack(fill="x")
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(6, 0))
         for teks, cmd, w, warna, fg in (("↻ Muat ulang", self.muat_ulang, 100, "#E8DDD5", INK),
+                                        ("📄 Ringkasan CSV", self.ringkasan_csv, 130, "#E8DDD5", INK),
                                         ("📋 Perintah latih", self.salin_latih, 130, "#E8DDD5", INK),
                                         ("📋 Perintah uji (test)", self.salin_uji, 150, "#E8DDD5", INK),
                                         ("⬇ Tarik dari HF", self.tarik_hf, 130, "#E8DDD5", INK),
@@ -226,14 +229,16 @@ class TabSplit:
         def kerja():
             try:
                 rek = sorted(p.name for p in self.akar.iterdir() if p.is_dir()) if self.akar.exists() else []
-                frames, n_ekspor, catatan = {}, {}, {}
+                frames, n_ekspor, catatan, waktu = {}, {}, {}, {}
                 for r in rek:
                     catatan[r] = CR.baca(self.akar / r)
+                    w = CR.waktu_rekaman(self.akar / r)
+                    waktu[r] = w[0] if w else None
                     frames[r] = [d for d in self.frame_bersih(self.akar, [r], hanya_diperiksa=hanya)
                                  if d.parent.parent.parent.name == r]
                     ek = self.akar / r / "exports" / "frames"
                     n_ekspor[r] = sum(1 for d in ek.iterdir() if d.is_dir()) if ek.exists() else 0
-                self._q.put(("muat", (rek, frames, n_ekspor, catatan)))
+                self._q.put(("muat", (rek, frames, n_ekspor, catatan, waktu)))
             except Exception as e:                           # noqa: BLE001
                 self._q.put(("galat", f"Gagal membaca dataset: {e}"))
         threading.Thread(target=kerja, daemon=True).start()
@@ -243,7 +248,7 @@ class TabSplit:
             while True:
                 jenis, isi = self._q.get_nowait()
                 if jenis == "muat":
-                    self.rekaman, self.frames, self.n_ekspor, self.catatan = isi
+                    self.rekaman, self.frames, self.n_ekspor, self.catatan, self.waktu = isi
                     self._sibuk = False
                     self._isi_tree()
                     if not self.tree.selection() and self.rekaman:
@@ -256,6 +261,10 @@ class TabSplit:
                     self._sibuk = False
                     self.ringkas.config(text=isi)
                     messagebox.showerror("Split dataset", isi)
+                elif jenis == "csv_selesai":
+                    self._sibuk = False
+                    self.ringkas.config(text=f"Ringkasan rekaman ditulis: {isi[0]}")
+                    messagebox.showinfo("Ringkasan rekaman", f"Ditulis ke:\n{isi[0]}\n\n{isi[1]}")
                 elif jenis == "tarik_selesai":
                     self._sibuk = False
                     teks = (f"Tarik selesai: {isi['frame_baru']} frame baru, {isi['label_diperbarui']} label "
@@ -310,9 +319,11 @@ class TabSplit:
         rincian = " ".join(f"{LABEL_SET[s][0]}{v}" for s, v in n.items()) if len(n) > 1 else ""
         if "::" in iid:
             s = next(iter(n)) if len(n) == 1 else None
-            return (LABEL_SET[s] if len(n) == 1 else ("campur" if n else "–"), f"{len(frames)}", rincian)
+            return (LABEL_SET[s] if len(n) == 1 else ("campur" if n else "–"), f"{len(frames)}", rincian, "")
         s = self.data["rekaman"].get(iid)
-        return (LABEL_SET[s], f"{len(frames)}/{self.n_ekspor.get(iid, 0)}", rincian)
+        w = self.waktu.get(iid)
+        waktu = f"{w.day} {CR.BULAN[w.month - 1]} {w:%H.%M} {CR.periode(w.hour)}" if w else "?"
+        return (LABEL_SET[s], f"{len(frames)}/{self.n_ekspor.get(iid, 0)}", rincian, waktu)
 
     def _isi_tree(self) -> None:
         pilih = set(self.tree.selection())
@@ -706,6 +717,63 @@ class TabSplit:
                 + (" --hanya-diperiksa" if self.hanya_diperiksa.get() else "")
                 + ' --bobot <folder-hasil-latih>/best.pt --keluar <folder-hasil-latih>/uji_test.json')
         self._salin(teks, "Perintah uji")
+
+    def ringkasan_csv(self) -> None:
+        """Tabel per rekaman untuk naskah: waktu, lokasi, lux, kecerahan gambar, jumlah frame per set."""
+        if self._sibuk or not self.rekaman:
+            return
+        self._sibuk = True
+        rekaman, frames, n_ekspor, catatan = list(self.rekaman), dict(self.frames), dict(self.n_ekspor), dict(self.catatan)
+        tujuan = Path(self.studio.root_data) / "ringkasan_rekaman.csv"
+
+        def kerja():
+            import csv
+            try:
+                baris, waktu_semua, periode_hitung = [], [], {}
+                for no, r in enumerate(rekaman, 1):
+                    self._q.put(("status", f"Menyusun ringkasan: {no}/{len(rekaman)} rekaman"))
+                    sesi = self.akar / r
+                    w = CR.waktu_rekaman(sesi)
+                    mulai, selesai = w if w else (None, None)
+                    fr = frames.get(r, [])
+                    semua_ekspor = sorted(d for d in (sesi / "exports" / "frames").glob("frame_*") if d.is_dir()) \
+                        if (sesi / "exports" / "frames").exists() else []
+                    contoh = semua_ekspor[::max(1, len(semua_ekspor) // 20)][:20]
+                    terang = []
+                    for d in contoh:
+                        g = cv2.imread(str(d / "color_raw.png"))
+                        if g is not None:
+                            terang.append(CR.kecerahan(cv2.cvtColor(g, cv2.COLOR_BGR2RGB))[0])
+                    per = {k: sum(1 for d in fr if self._set_frame(d) == k) for k in ("train", "val", "test")}
+                    c = catatan.get(r) or {}
+                    if mulai:
+                        waktu_semua.append(mulai)
+                        periode_hitung[CR.periode(mulai.hour)] = periode_hitung.get(CR.periode(mulai.hour), 0) + 1
+                    baris.append({
+                        "rekaman": r, "tanggal": f"{mulai:%Y-%m-%d}" if mulai else "",
+                        "jam_mulai": f"{mulai:%H:%M:%S}" if mulai else "", "jam_selesai": f"{selesai:%H:%M:%S}" if selesai else "",
+                        "durasi_detik": int((selesai - mulai).total_seconds()) if mulai and selesai else "",
+                        "periode": CR.periode(mulai.hour) if mulai else "", "lokasi_catatan": c.get("catatan", ""),
+                        "lux_terukur": c.get("lux", ""), "stabilo": c.get("warna") or "",
+                        "kecerahan_gambar_median_0_255": round(float(np.median(terang)), 1) if terang else "",
+                        "frame_ekspor": n_ekspor.get(r, 0), "frame_siap_latih": len(fr),
+                        "train": per["train"], "val": per["val"], "test": per["test"],
+                        "set_rekaman": self.data["rekaman"].get(r, ""), "scene": len(c.get("scene", [])),
+                    })
+                with tujuan.open("w", newline="", encoding="utf-8") as f:
+                    wtr = csv.DictWriter(f, fieldnames=list(baris[0]))
+                    wtr.writeheader(); wtr.writerows(baris)
+                ket = ""
+                if waktu_semua:
+                    a, b = min(waktu_semua), max(waktu_semua)
+                    ket = (f"{len(rekaman)} rekaman, {a:%d-%m-%Y} s.d. {b:%d-%m-%Y}; "
+                           f"jam mulai {min(w.strftime('%H.%M') for w in waktu_semua)}-"
+                           f"{max(w.strftime('%H.%M') for w in waktu_semua)}; "
+                           + ", ".join(f"{k} {v}" for k, v in sorted(periode_hitung.items())))
+                self._q.put(("csv_selesai", (str(tujuan), ket)))
+            except Exception as e:                           # noqa: BLE001
+                self._q.put(("galat", f"Ringkasan gagal: {e}"))
+        threading.Thread(target=kerja, daemon=True).start()
 
     def tarik_hf(self) -> None:
         """Pulihkan frame ekspor + label dari HF agar bisa dilabel ulang tanpa video mentah."""
