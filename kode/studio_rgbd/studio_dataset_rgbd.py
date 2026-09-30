@@ -1830,6 +1830,9 @@ class Studio(tk.Tk):
         b, i = self.card(induk, "Catatan rekaman & scene"); b.pack(side="bottom", fill="x", pady=(10, 0))
         # Kotak warna kecil (Frame, bukan Button yang lebar minimalnya besar) agar
         # tombol hapus warna tidak terdorong keluar kartu seperti sebelumnya.
+        self.info_waktu_rekaman = tk.Label(i, text="", bg=PANEL, fg=ACCENT, justify="left", anchor="w",
+                                           wraplength=270, font=("Segoe UI", 9))
+        self.info_waktu_rekaman.pack(fill="x", pady=(0, 4))
         tk.Label(i, text="Stabilo (klik warna; ✕ menghapus)", bg=PANEL, fg=MUTED).pack(anchor="w")
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(2, 0))
         for nama, w in CR.WARNA.items():
@@ -1901,6 +1904,16 @@ class Studio(tk.Tk):
         self._sesi_catatan = self.sesi
         d = self._catatan_cache(self.sesi) if self.sesi else {"catatan": "", "scene": []}
         self.teks_catatan.delete("1.0", "end"); self.teks_catatan.insert("1.0", d["catatan"])
+        w = CR.waktu_rekaman(self.sesi) if self.sesi else None
+        if w:
+            mulai, selesai = w
+            teks = f"🕒 Direkam {CR.format_waktu(mulai)}"
+            if selesai:
+                dur = int((selesai - mulai).total_seconds())
+                teks += f"\n     sampai {selesai:%H.%M.%S} ({dur // 60} m {dur % 60} d)"
+            self.info_waktu_rekaman.config(text=teks)
+        else:
+            self.info_waktu_rekaman.config(text="🕒 Waktu rekaman tidak tercatat")
         self.lux_var.set(d.get("lux", ""))
         self.teks_catatan.edit_reset()
         self.list_scene.delete(0, "end")
@@ -1996,6 +2009,9 @@ class Studio(tk.Tk):
             baris.append("📍 " + CR.ringkas(d, 140))
         if sc:
             baris.append(f"Scene: {sc['nama']}")
+        wf = CR.waktu_frame(self.label_info or {})
+        if wf:
+            baris.append(f"🕒 Diambil {CR.format_waktu(wf)}")
         cahaya = f"Cahaya lokasi: {d['lux']} lux" if d.get("lux") else "Cahaya lokasi: belum diukur"
         if self.kanvas.rgb is not None:
             l, kat = CR.kecerahan(self.kanvas.rgb)
