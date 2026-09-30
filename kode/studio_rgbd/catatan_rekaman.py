@@ -39,6 +39,7 @@ def baca(sesi: Path) -> dict:
     return {"warna": d.get("warna") if d.get("warna") in WARNA else None,
             "catatan": str(d.get("catatan") or ""),
             "lux": str(d.get("lux") or ""),
+            "lux_sumber": str(d.get("lux_sumber") or ""),
             "scene": sorted(scene, key=lambda s: int(s["awal"]))}
 
 
@@ -123,3 +124,31 @@ def waktu_frame(info: dict):
         return datetime.fromtimestamp(float(t) / 1000.0) if t else None
     except (TypeError, ValueError, OSError):
         return None
+
+
+# ------------------------------------------------------------------ lux dari foto HP
+def lux_dari_foto(path) -> tuple[float, str]:
+    """Perkiraan lux dari EXIF foto HP: E = c * N^2 / (t * ISO), c = 250.
+
+    Rumus fotometri yang sama dengan ``colour_hdri.average_illuminance``
+    (kalibrasi meter cahaya datang, c = 250). Kamera HP mengukur cahaya PANTULAN
+    dan menganggap permukaan abu-abu sedang, jadi hasilnya perkiraan kasar
+    (sekitar +-30-50%). Tidak berlaku untuk frame D435: rekamannya tidak
+    menyimpan waktu pencahayaan dan gain.
+    """
+    from PIL import Image
+    with Image.open(path) as im:
+        exif = im.getexif()
+        ifd = exif.get_ifd(0x8769) if exif else {}
+    ambil = lambda k: ifd.get(k) or (exif.get(k) if exif else None)
+    N, t = ambil(33437), ambil(33434)                      # FNumber, ExposureTime
+    S = ambil(34855) or ambil(34867)                       # ISOSpeedRatings / PhotographicSensitivity
+    if isinstance(S, (tuple, list)):
+        S = S[0]
+    if not (N and t and S):
+        raise ValueError("Foto tidak memuat EXIF bukaan lensa, waktu pencahayaan, dan ISO "
+                         "(pastikan foto asli dari kamera HP, bukan tangkapan layar/hasil kirim WhatsApp).")
+    N, t, S = float(N), float(t), float(S)
+    lux = 250.0 * N * N / (t * S)
+    ket = f"foto HP (f/{N:g}, {('1/' + str(round(1 / t))) if t < 1 else f'{t:g}'} s, ISO {S:g}); perkiraan +-30-50%"
+    return lux, ket

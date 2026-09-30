@@ -1853,7 +1853,10 @@ class Studio(tk.Tk):
         isian.pack(side="left", padx=4)
         isian.bind("<KeyRelease>", lambda _e: self._jadwal_simpan_catatan())
         isian.bind("<FocusOut>", lambda _e: self._simpan_catatan_sekarang())
-        tk.Label(baris, text="dari lux meter di lokasi", bg=PANEL, fg=MUTED, font=("Segoe UI", 8)).pack(side="left")
+        self.tombol_ringkas(baris, "📷 Dari foto HP", self.lux_dari_foto, "#E8DDD5", INK, width=110).pack(side="left", padx=(4, 0))
+        self.lux_sumber_lbl = tk.Label(i, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 8), wraplength=270,
+                                       justify="left", anchor="w")
+        self.lux_sumber_lbl.pack(fill="x")
         self.teks_catatan.bind("<KeyRelease>", lambda _e: self._jadwal_simpan_catatan())
         self.teks_catatan.bind("<FocusOut>", lambda _e: self._simpan_catatan_sekarang())
         tk.Label(i, text="Scene (klik ganda = lompat ke sana)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
@@ -1915,6 +1918,8 @@ class Studio(tk.Tk):
         else:
             self.info_waktu_rekaman.config(text="🕒 Waktu rekaman tidak tercatat")
         self.lux_var.set(d.get("lux", ""))
+        self.lux_sumber_lbl.config(text=("Sumber: " + d["lux_sumber"]) if d.get("lux_sumber")
+                                   else "Isi dari lux meter di lokasi, atau hitung dari foto HP.")
         self.teks_catatan.edit_reset()
         self.list_scene.delete(0, "end")
         for sc in d["scene"]:
@@ -1938,6 +1943,8 @@ class Studio(tk.Tk):
         d = CR.baca(sesi)
         if d["catatan"] == teks and d.get("lux", "") == lux:
             return
+        if d.get("lux", "") != lux and not getattr(self, "_lux_dari_foto", False):
+            d["lux_sumber"] = "lux meter / diisi manual" if lux else ""
         d["catatan"], d["lux"] = teks, lux
         CR.tulis(sesi, d)
         self._segarkan_item_sesi(sesi)
@@ -1951,6 +1958,22 @@ class Studio(tk.Tk):
         CR.tulis(self.sesi, d)
         self._segarkan_item_sesi(self.sesi)
         self._muat_catatan_ui()
+
+    def lux_dari_foto(self) -> None:
+        """Perkiraan lux rekaman dari EXIF foto HP yang diambil di lokasi tangga."""
+        if not self.sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman dahulu.", parent=self); return
+        f = filedialog.askopenfilename(parent=self, title="Foto HP di lokasi tangga (JPG asli)",
+                                       filetypes=[("Foto", "*.jpg *.jpeg *.JPG *.JPEG *.tif *.tiff"), ("Semua", "*")])
+        if not f:
+            return
+        try:
+            lux, ket = CR.lux_dari_foto(f)
+        except Exception as e:                                 # noqa: BLE001
+            messagebox.showerror("Lux dari foto", str(e), parent=self); return
+        self._simpan_catatan_sekarang()
+        self._ubah_catatan(lambda d: d.update(lux=f"{lux:.0f}", lux_sumber=f"{ket}; {Path(f).name}"))
+        self.status.set(f"Perkiraan cahaya lokasi ≈ {lux:.0f} lux dari {Path(f).name} ({ket}).")
 
     def atur_warna_sesi(self, warna: str | None) -> None:
         self._ubah_catatan(lambda d: d.update(warna=warna))
@@ -2012,7 +2035,8 @@ class Studio(tk.Tk):
         wf = CR.waktu_frame(self.label_info or {})
         if wf:
             baris.append(f"🕒 Diambil {CR.format_waktu(wf)}")
-        cahaya = f"Cahaya lokasi: {d['lux']} lux" if d.get("lux") else "Cahaya lokasi: belum diukur"
+        cahaya = (f"Cahaya lokasi: {'≈' if 'foto HP' in d.get('lux_sumber', '') else ''}{d['lux']} lux"
+                  if d.get("lux") else "Cahaya lokasi: belum diukur")
         if self.kanvas.rgb is not None:
             l, kat = CR.kecerahan(self.kanvas.rgb)
             cahaya += f"  •  kecerahan gambar {l:.0f}/255 ({kat})"
