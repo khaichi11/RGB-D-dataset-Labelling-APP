@@ -285,6 +285,8 @@ def bangun(akar: Path, berkas_split: Path, keluar: Path,
             shutil.copy(c, tujuan)
     if Path(berkas_split).exists():
         shutil.copy(berkas_split, keluar / 'split_dataset.json')
+    if (akar_rekaman.parent / 'tangga.json').exists():                # daftar tangga fisik
+        shutil.copy(akar_rekaman.parent / 'tangga.json', keluar / 'tangga.json')
     (keluar / 'README.md').write_text(_kartu(konfigurasi()['repo'], jumlah, len(rekaman), berlabel), encoding='utf-8')
     return jumlah
 
@@ -302,7 +304,7 @@ def push(akar: Path, berkas_split: Path, lapor: Callable[[str], None] = print) -
         api.create_repo(k['repo'], repo_type='dataset', private=k['privat'], exist_ok=True)
         lapor(f'Mengunggah ke {k["repo"]} ({sum(jumlah.values())} frame)…')
         api.upload_folder(folder_path=str(tmp), repo_id=k['repo'], repo_type='dataset',
-                          delete_patterns=['data/**', 'rekaman/**'],
+                          delete_patterns=['data/**', 'rekaman/**', 'tangga.json'],
                           commit_message='Perbarui dataset dari Studio: '
                                          + ', '.join(f'{s} {n}' for s, n in jumlah.items()))
         return f'https://huggingface.co/datasets/{k["repo"]}'
@@ -329,7 +331,7 @@ def tarik(akar: Path, berkas_split: Path, lapor: Callable[[str], None] = print) 
     try:
         lapor(f'Mengunduh dataset {k["repo"]}…')
         snapshot_download(k['repo'], repo_type='dataset', local_dir=str(tmp), token=k['token'],
-                          allow_patterns=['data/**', 'rekaman/**', 'split_dataset.json'])
+                          allow_patterns=['data/**', 'rekaman/**', 'split_dataset.json', 'tangga.json'])
         berkas = sorted(tmp.glob('data/**/*.parquet'))
         total = sum(pq.ParquetFile(f).metadata.num_rows for f in berkas)
         n = 0
@@ -371,6 +373,10 @@ def tarik(akar: Path, berkas_split: Path, lapor: Callable[[str], None] = print) 
             if not tujuan.exists():
                 tujuan.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(c, tujuan)
+        if (tmp / 'tangga.json').exists():                         # ID tangga lokal menang, yang baru ditambahkan
+            lokal_t = akar_rekaman.parent / 'tangga.json'
+            gabung = json.loads((tmp / 'tangga.json').read_text()) | (json.loads(lokal_t.read_text()) if lokal_t.exists() else {})
+            lokal_t.write_text(json.dumps(dict(sorted(gabung.items())), indent=1, ensure_ascii=False) + '\n')
         jauh = tmp / 'split_dataset.json'
         if jauh.exists():
             split_dataset, _ = _pustaka()

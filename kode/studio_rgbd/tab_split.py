@@ -74,6 +74,8 @@ class TabSplit:
         self.n_ekspor: dict[str, int] = {}
         self.catatan: dict[str, dict] = {}              # rekaman -> catatan.json (warna, catatan, scene)
         self.waktu: dict = {}                           # rekaman -> waktu mulai rekam (datetime lokal)
+        self.daftar_tangga: dict = {}                   # tangga.json: ID -> nama/lokasi
+        self.per_tangga = tk.BooleanVar(value=False)
         self.daftar: list[Path] = []                     # frame pada daftar (setelah filter)
         self.kini: Path | None = None
         self._fokus = "rekaman"
@@ -151,7 +153,10 @@ class TabSplit:
         self.info_rek = tk.Label(i, text="", bg=PANEL, fg=INK, justify="left", anchor="w", wraplength=470,
                                  font=("Segoe UI", 9))
         self.info_rek.pack(fill="x", pady=(4, 0))
-        self._baris_tombol(i, "Atur rekaman / scene terpilih", self.atur_rekaman)
+        tk.Checkbutton(i, text="🪜 Kelompokkan per tangga fisik (tangga → rekaman/scene)", variable=self.per_tangga,
+                       bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
+                       command=lambda: (self._isi_tree(), self._isi_daftar())).pack(anchor="w", pady=(4, 0))
+        self._baris_tombol(i, "Atur rekaman / scene / tangga terpilih", self.atur_rekaman)
 
         # --- frame
         b, i = st.card(kiri, "Frame siap latih"); b.pack(fill="x", pady=(0, 8))
@@ -238,6 +243,7 @@ class TabSplit:
                                  if d.parent.parent.parent.name == r]
                     ek = self.akar / r / "exports" / "frames"
                     n_ekspor[r] = sum(1 for d in ek.iterdir() if d.is_dir()) if ek.exists() else 0
+                self.daftar_tangga = CR.baca_tangga(self.studio.root_data)
                 self._q.put(("muat", (rek, frames, n_ekspor, catatan, waktu)))
             except Exception as e:                           # noqa: BLE001
                 self._q.put(("galat", f"Gagal membaca dataset: {e}"))
@@ -301,8 +307,16 @@ class TabSplit:
     def _scene(self, r: str) -> list[dict]:
         return (self.catatan.get(r) or {}).get("scene", [])
 
+    def _tangga_frame(self, d: Path) -> str | None:
+        return CR.tangga_untuk(self.catatan.get(d.parent.parent.parent.name) or {}, CR.indeks_frame(d.name))
+
     def _frames_iid(self, iid: str) -> list[Path]:
-        """Frame siap latih untuk satu baris pohon: rekaman penuh atau satu scene."""
+        """Frame siap latih untuk satu baris pohon: rekaman, scene, tangga, atau rekaman di dalam tangga."""
+        if iid.startswith("tg::"):
+            bag = iid.split("::")
+            tid = None if bag[1] == "-" else bag[1]
+            rek = [bag[2]] if len(bag) > 2 else self.rekaman
+            return [d for r in rek for d in self.frames.get(r, []) if self._tangga_frame(d) == tid]
         if "::" not in iid:
             return self.frames.get(iid, [])
         r, i = iid.split("::")
@@ -317,6 +331,12 @@ class TabSplit:
             s = self._set_frame(d)
             n[s] = n.get(s, 0) + 1
         rincian = " ".join(f"{LABEL_SET[s][0]}{v}" for s, v in n.items()) if len(n) > 1 else ""
+        if iid.startswith("tg::"):
+            s = next(iter(n)) if len(n) == 1 else None
+            r = iid.split("::")[2] if iid.count("::") == 2 else None
+            w = self.waktu.get(r) if r else None
+            waktu = f"{w.day} {CR.BULAN[w.month - 1]} {w:%H.%M} {CR.periode(w.hour)}" if w else ""
+            return (LABEL_SET[s] if len(n) == 1 else ("campur" if n else "–"), f"{len(frames)}", rincian, waktu)
         if "::" in iid:
             s = next(iter(n)) if len(n) == 1 else None
             return (LABEL_SET[s] if len(n) == 1 else ("campur" if n else "–"), f"{len(frames)}", rincian, "")
@@ -326,6 +346,8 @@ class TabSplit:
         return (LABEL_SET[s], f"{len(frames)}/{self.n_ekspor.get(iid, 0)}", rincian, waktu)
 
     def _isi_tree(self) -> None:
+        if self.per_tangga.get():
+            return self._isi_tree_tangga()
         pilih = set(self.tree.selection())
         buka = {r for r in self.rekaman if self.tree.exists(r) and self.tree.item(r, "open")}
         self.tree.delete(*self.tree.get_children())
@@ -344,7 +366,32 @@ class TabSplit:
         if ada:
             self.tree.selection_set(ada)
 
+    def _isi_tree_tangga(self) -> None:
+        """Pohon tangga fisik -> rekaman yang merekamnya (graph tangga)."""
+        pilih = set(self.tree.selection())
+        self.tree.delete(*self.tree.get_children())
+        isi: dict = {}
+        for r in self.rekaman:
+            for d in self.frames.get(r, []):
+                isi.setdefault(self._tangga_frame(d), set()).add(r)
+        urut = sorted(k for k in isi if k) + ([None] if None in isi else [])
+        for tid in urut:
+            iid = f"tg::{tid or '-'}"
+            teks = ("🪜 " + CR.label_tangga(tid, self.daftar_tangga)) if tid else "❔ Belum ada tangga"
+            self.tree.insert("", "end", iid=iid, text=teks, values=self._nilai_baris(iid), open=True)
+            for r in sorted(isi[tid]):
+                c = self.catatan.get(r) or {}
+                anak = f"{iid}::{r}"
+                tag = [f"stabilo_{c['warna']}"] if c.get("warna") else []
+                self.tree.insert(iid, "end", iid=anak, text=r.replace("TANGGA_NAIK_", ""),
+                                 values=self._nilai_baris(anak), tags=tag)
+        ada = [i for i in pilih if self.tree.exists(i)]
+        if ada:
+            self.tree.selection_set(ada)
+
     def _perbarui_tree(self, _rekaman=None) -> None:
+        if self.per_tangga.get():
+            return self._isi_tree_tangga()
         for iid in [r for r in self.rekaman] + [f"{r}::{i}" for r in self.rekaman for i in range(len(self._scene(r)))]:
             if self.tree.exists(iid):
                 self.tree.item(iid, values=self._nilai_baris(iid))
@@ -357,7 +404,15 @@ class TabSplit:
         sel = self.tree.selection()
         if len(sel) != 1:
             self.info_rek.config(text="", bg=BG); return
-        r = sel[0].split("::")[0]
+        if sel[0].startswith("tg::") and sel[0].count("::") == 1:
+            tid = None if sel[0] == "tg::-" else sel[0][4:]
+            info = self.daftar_tangga.get(tid or "", {})
+            rek = self.tree.get_children(sel[0])
+            teks = (f"🪜 {CR.label_tangga(tid, self.daftar_tangga)}" + (f" — {info['lokasi']}" if info.get("lokasi") else "")
+                    + f"\n{len(rek)} rekaman: " + ", ".join(x.split("::")[-1][-15:] for x in rek)) if tid else \
+                "Frame yang belum diberi tangga. Beri ID tangga di tab 2. Tinjau (kartu catatan)."
+            self.info_rek.config(text=teks, bg=BG); return
+        r = sel[0].split("::")[-1] if sel[0].startswith("tg::") else sel[0].split("::")[0]
         c = self.catatan.get(r) or {}
         teks = ("📍 " + c["catatan"]) if c.get("catatan") else "Belum ada catatan (isi di tab 2. Tinjau)."
         if self._scene(r):
@@ -410,6 +465,16 @@ class TabSplit:
             teks += (f"\n⚠ {len(rk['rekaman_terbagi'])} rekaman terbagi ke beberapa set "
                      f"(frame berdekatan hampir identik; angka val/test bisa terlalu optimistis): "
                      + ", ".join(r[-6:] for r in rk["rekaman_terbagi"]))
+        bocor: dict[str, set] = {}
+        for r in self.rekaman:
+            for d in self.frames.get(r, []):
+                t, s_ = self._tangga_frame(d), self._set_frame(d)
+                if t and s_ in self.sd.SET:
+                    bocor.setdefault(t, set()).add(s_)
+        bocor = {t: v for t, v in bocor.items() if len(v) > 1}
+        if bocor:
+            teks += ("\n⚠ Tangga yang sama ada di lebih dari satu set (angka uji terlalu optimistis): "
+                     + "; ".join(f"{t} di {'/'.join(sorted(v))}" for t, v in sorted(bocor.items())))
         if not rk["frame"]["val"]:
             teks += "\n⚠ Set VAL kosong: perintah latih akan memakai --pelatihan-penuh (tanpa validasi)."
         self.ringkas.config(text=teks)
@@ -436,12 +501,26 @@ class TabSplit:
         """Satuan pembagian: scene bila rekaman punya scene (sisa frame menjadi grup
         sendiri), selain itu satu rekaman penuh. Rekaman berset 'abaikan' tidak ikut."""
         grup = []
+        # Frame bertangga dikelompokkan per tangga fisik lintas rekaman: tangga yang
+        # sama tidak boleh tersebar di train dan test.
+        per_tangga: dict[str, list[Path]] = {}
+        for r in self.rekaman:
+            if self.data["rekaman"].get(r) == "abaikan":
+                continue
+            for d in self.frames.get(r, []):
+                t = self._tangga_frame(d)
+                if t:
+                    per_tangga.setdefault(t, []).append(d)
+        grup += [(f"tg::{t}", fr) for t, fr in sorted(per_tangga.items())]
+        bertangga = {d for fr in per_tangga.values() for d in fr}
         for r in self.rekaman:
             if self.data["rekaman"].get(r) == "abaikan" or not self.frames.get(r):
                 continue
-            sisa = list(self.frames[r])
+            sisa = [d for d in self.frames[r] if d not in bertangga]
+            if not sisa:
+                continue
             for i, _sc in enumerate(self._scene(r)):
-                isi = self._frames_iid(f"{r}::{i}")
+                isi = [d for d in self._frames_iid(f"{r}::{i}") if d not in bertangga]
                 if isi:
                     grup.append((f"{r}::{i}", isi))
                     sisa = [d for d in sisa if d not in isi]
@@ -504,11 +583,15 @@ class TabSplit:
         tk.Label(self.tabel, text=f"Total siap latih: {n} frame   •   belum dibagi: {belum}", bg=PANEL, fg=MUTED,
                  font=("Segoe UI", 9)).grid(row=4, column=0, columnspan=6, sticky="w", padx=4, pady=(2, 0))
         g = len(self._grup())
+        n_tangga = len({self._tangga_frame(d) for r in self.rekaman for d in self.frames.get(r, [])} - {None})
         saran = [f"Dari {n} frame dengan rasio ini: train {round(rasio['train'] * n)}, "
                  f"val {round(rasio['val'] * n)}, test {round(rasio['test'] * n)}."]
         if n < 300:
             saran.append("Data masih sedikit (< 300): 80/10/10 memberi train lebih banyak, "
                          "tetapi val/test jadi kecil dan angkanya kurang stabil.")
+        if n_tangga:
+            saran.append(f"{n_tangga} tangga fisik terdaftar: bagi otomatis memakai tangga sebagai satuan, "
+                         "sehingga tangga yang sama tidak muncul di train dan test.")
         if g >= 5:
             saran.append(f"Ada {g} rekaman/scene: disarankan bagi PER REKAMAN/SCENE (tombol hijau), "
                          "idealnya lokasi tangga val/test berbeda dari train.")
@@ -540,21 +623,18 @@ class TabSplit:
                                    "Pembagian sekarang (kecuali rekaman 'abaikan') akan diganti. Lanjut?"):
             return
         if mode == "grup":
-            for gid, fr in self._grup():
-                r = gid.split("::")[0]
-                for d in self.frames.get(r, []):
-                    self.data["frame"].pop(self.sd.kunci_frame(d), None)
+            per_frame = {d: rencana[gid] for gid, fr in self._grup() for d in fr}
             per_rek: dict[str, dict[str, int]] = {}
-            for gid, fr in self._grup():
-                per_rek.setdefault(gid.split("::")[0], {}).setdefault(rencana[gid], 0)
-                per_rek[gid.split("::")[0]][rencana[gid]] += len(fr)
+            for d, k in per_frame.items():
+                r = d.parent.parent.parent.name
+                per_rek.setdefault(r, {}); per_rek[r][k] = per_rek[r].get(k, 0) + 1
             for r, n_set in per_rek.items():
                 self.data["rekaman"][r] = max(n_set, key=n_set.get)       # set mayoritas jadi set rekaman
-            for gid, fr in self._grup():
-                r = gid.split("::")[0]
-                if rencana[gid] != self.data["rekaman"][r]:
-                    for d in fr:
-                        self.data["frame"][self.sd.kunci_frame(d)] = rencana[gid]
+                for d in self.frames.get(r, []):
+                    self.data["frame"].pop(self.sd.kunci_frame(d), None)
+            for d, k in per_frame.items():
+                if k != self.data["rekaman"][d.parent.parent.parent.name]:
+                    self.data["frame"][self.sd.kunci_frame(d)] = k
         else:
             for d, k in rencana_f.items():
                 r = d.parent.parent.parent.name
@@ -576,7 +656,9 @@ class TabSplit:
         if not pilih:
             messagebox.showinfo("Pilih rekaman", "Pilih satu atau beberapa rekaman/scene dahulu."); return
         for iid in pilih:
-            if "::" in iid:
+            if iid.startswith("tg::"):
+                self._terapkan_set(self._frames_iid(iid), s)
+            elif "::" in iid:
                 r = iid.split("::")[0]
                 for d in self._frames_iid(iid):
                     k = self.sd.kunci_frame(d)
@@ -593,6 +675,28 @@ class TabSplit:
         self._isi_daftar(pertahankan=True)
         self._perbarui_ringkas()
         self._gambar()
+
+    def _terapkan_set(self, frames: list[Path], s: str | None) -> None:
+        """Set untuk sekumpulan frame: rekaman yang seluruh framenya terpilih diberi set
+        rekaman; selebihnya pengecualian per frame."""
+        per_rek: dict[str, list[Path]] = {}
+        for d in frames:
+            per_rek.setdefault(d.parent.parent.parent.name, []).append(d)
+        for r, fr in per_rek.items():
+            if len(fr) == len(self.frames.get(r, [])):
+                for d in fr:
+                    self.data["frame"].pop(self.sd.kunci_frame(d), None)
+                if s is None:
+                    self.data["rekaman"].pop(r, None)
+                else:
+                    self.data["rekaman"][r] = s
+            else:
+                for d in fr:
+                    k = self.sd.kunci_frame(d)
+                    if s is None or s == self.data["rekaman"].get(r):
+                        self.data["frame"].pop(k, None)
+                    else:
+                        self.data["frame"][k] = s
 
     def atur_frame(self, s: str | None) -> None:
         pilih = [self.daftar[i] for i in self.lb.curselection()]
@@ -760,6 +864,9 @@ class TabSplit:
                         "frame_ekspor": n_ekspor.get(r, 0), "frame_siap_latih": len(fr),
                         "train": per["train"], "val": per["val"], "test": per["test"],
                         "set_rekaman": self.data["rekaman"].get(r, ""), "scene": len(c.get("scene", [])),
+                        "tangga": c.get("tangga", ""),
+                        "nama_tangga": (self.daftar_tangga.get(c.get("tangga", "")) or {}).get("nama", ""),
+                        "tangga_scene": ";".join(sorted({sc.get("tangga") for sc in c.get("scene", []) if sc.get("tangga")})),
                     })
                 with tujuan.open("w", newline="", encoding="utf-8") as f:
                     wtr = csv.DictWriter(f, fieldnames=list(baris[0]))
