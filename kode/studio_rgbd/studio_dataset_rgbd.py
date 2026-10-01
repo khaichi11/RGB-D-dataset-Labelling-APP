@@ -1842,6 +1842,14 @@ class Studio(tk.Tk):
             kotak.bind("<Button-1>", lambda _e, n=nama: self.atur_warna_sesi(n))
         self.tombol_ringkas(baris, "✕ Hapus warna", lambda: self.atur_warna_sesi(None),
                             "#E8DDD5", INK, width=110).pack(side="left", padx=(8, 0))
+        # Tangga fisik: rekaman yang merekam tangga yang sama diberi ID sama, agar
+        # pembagian train/val/test bisa per tangga (tab Split).
+        tk.Label(i, text="Tangga fisik (rekaman dengan tangga sama = ID sama)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
+        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x")
+        self.pilih_tangga = ttk.Combobox(baris, state="readonly", width=24)
+        self.pilih_tangga.pack(side="left", fill="x", expand=True)
+        self.pilih_tangga.bind("<<ComboboxSelected>>", lambda _e: self.atur_tangga_sesi(self.pilih_tangga.get()))
+        self.tombol_ringkas(baris, "+ Baru", self.tangga_baru, GREEN, width=60).pack(side="left", padx=(3, 0))
         tk.Label(i, text="Catatan / lokasi (tersimpan otomatis)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
         self.teks_catatan = tk.Text(i, height=3, wrap="word", bg="#FFF9F4", fg=INK, relief="flat",
                                     font=("Segoe UI", 9), undo=True)
@@ -1868,6 +1876,7 @@ class Studio(tk.Tk):
         self.tombol_ringkas(baris, "+ Dari awal–akhir potongan", self.tambah_scene, GREEN, width=170).pack(side="left")
         self.tombol_ringkas(baris, "Nama", self.ganti_nama_scene, "#E8DDD5", INK, width=50).pack(side="left", padx=2)
         self.tombol_ringkas(baris, "Hapus", self.hapus_scene, "#F3D8D4", INK, width=50).pack(side="left")
+        self.tombol_ringkas(baris, "Tangga", self.tangga_scene, "#E8DDD5", INK, width=60).pack(side="left", padx=2)
 
     def _catatan_cache(self, sesi: Path) -> dict:
         """catatan.json per rekaman, dibaca ulang hanya bila berkasnya berubah (disk dataset lambat)."""
@@ -1885,6 +1894,8 @@ class Studio(tk.Tk):
     def _teks_item_sesi(self, p: Path, ikon: str = "") -> str:
         d = self._catatan_cache(p)
         tanda = ("  📝" if d["catatan"] else "") + (f"  ◆{len(d['scene'])}" if d["scene"] else "")
+        if d.get("tangga"):
+            tanda += f"  🪜{d['tangga']}"
         if not self.bag(p).exists():
             tanda += "  (tanpa video)"
         return f"{ikon}{p.name.replace('TANGGA_NAIK_', '')}{tanda}"
@@ -1918,12 +1929,14 @@ class Studio(tk.Tk):
         else:
             self.info_waktu_rekaman.config(text="🕒 Waktu rekaman tidak tercatat")
         self.lux_var.set(d.get("lux", ""))
+        self._isi_pilihan_tangga(d.get("tangga") or None)
         self.lux_sumber_lbl.config(text=("Sumber: " + d["lux_sumber"]) if d.get("lux_sumber")
                                    else "Isi dari lux meter di lokasi, atau hitung dari foto HP.")
         self.teks_catatan.edit_reset()
         self.list_scene.delete(0, "end")
         for sc in d["scene"]:
-            self.list_scene.insert("end", f"{sc['nama']}   ({sc['awal']}–{sc['akhir']})")
+            self.list_scene.insert("end", f"{sc['nama']}   ({sc['awal']}–{sc['akhir']})"
+                                          + (f"  · {sc['tangga']}" if sc.get("tangga") else ""))
 
     def _jadwal_simpan_catatan(self) -> None:
         if self._catatan_setelah is not None:
@@ -1974,6 +1987,60 @@ class Studio(tk.Tk):
         self._simpan_catatan_sekarang()
         self._ubah_catatan(lambda d: d.update(lux=f"{lux:.0f}", lux_sumber=f"{ket}; {Path(f).name}"))
         self.status.set(f"Perkiraan cahaya lokasi ≈ {lux:.0f} lux dari {Path(f).name} ({ket}).")
+
+    # ------------------------------------------------ tangga fisik
+    TANPA_TANGGA = "— belum ada tangga —"
+
+    def _isi_pilihan_tangga(self, tid: str | None) -> None:
+        daftar = CR.baca_tangga(self.root_data)
+        self.pilih_tangga.configure(values=[self.TANPA_TANGGA] + [CR.label_tangga(k, daftar) for k in daftar])
+        self.pilih_tangga.set(CR.label_tangga(tid, daftar) if tid else self.TANPA_TANGGA)
+
+    @staticmethod
+    def _id_dari_label(label: str) -> str:
+        return "" if not label or label.startswith("—") else label.split(" · ")[0].strip()
+
+    def atur_tangga_sesi(self, label: str) -> None:
+        self._ubah_catatan(lambda d: d.update(tangga=self._id_dari_label(label)))
+
+    def tangga_baru(self) -> None:
+        """Daftarkan tangga fisik baru lalu pasang ke rekaman terpilih."""
+        if not self.sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman dahulu.", parent=self); return
+        daftar = CR.baca_tangga(self.root_data)
+        tid = CR.id_tangga_baru(daftar)
+        nama = simpledialog.askstring("Tangga baru", f"Nama tangga {tid}\n(mis. Rusunawa tangga 1, Gedung F tangga darurat):",
+                                      parent=self)
+        if not nama or not nama.strip():
+            return
+        lokasi = simpledialog.askstring("Tangga baru", "Lokasi/keterangan (boleh kosong):", parent=self) or ""
+        daftar[tid] = {"nama": nama.strip(), "lokasi": lokasi.strip()}
+        CR.tulis_tangga(self.root_data, daftar)
+        self._ubah_catatan(lambda d: d.update(tangga=tid))
+        self.status.set(f"Tangga {tid} · {nama.strip()} dibuat dan dipasang ke rekaman ini.")
+
+    def tangga_scene(self) -> None:
+        """Tangga untuk scene terpilih (satu rekaman bisa melewati beberapa tangga)."""
+        i = self._scene_terpilih()
+        if i is None or not self.sesi:
+            messagebox.showinfo("Pilih scene", "Pilih scene di daftar dahulu.", parent=self); return
+        daftar = CR.baca_tangga(self.root_data)
+        if not daftar:
+            messagebox.showinfo("Belum ada tangga", "Buat tangga dahulu dengan tombol + Baru.", parent=self); return
+        dlg = tk.Toplevel(self); dlg.title("Tangga scene"); dlg.configure(bg=PANEL); dlg.transient(self); dlg.grab_set()
+        tk.Label(dlg, text="Tangga untuk scene ini:", bg=PANEL, fg=INK).pack(padx=14, pady=(12, 4), anchor="w")
+        pilih = ttk.Combobox(dlg, state="readonly", width=34,
+                             values=["— ikut tangga rekaman —"] + [CR.label_tangga(k, daftar) for k in daftar])
+        sc = CR.baca(self.sesi)["scene"][i]
+        pilih.set(CR.label_tangga(sc.get("tangga"), daftar) if sc.get("tangga") else "— ikut tangga rekaman —")
+        pilih.pack(padx=14, fill="x")
+
+        def simpan():
+            tid = self._id_dari_label(pilih.get())
+            dlg.destroy()
+            self._ubah_catatan(lambda d: d["scene"][i].update(tangga=tid))
+        tk.Button(dlg, text="Simpan", command=simpan).pack(pady=10)
+        dlg.wait_window()
 
     def atur_warna_sesi(self, warna: str | None) -> None:
         self._ubah_catatan(lambda d: d.update(warna=warna))
@@ -2032,6 +2099,9 @@ class Studio(tk.Tk):
             baris.append("📍 " + CR.ringkas(d, 140))
         if sc:
             baris.append(f"Scene: {sc['nama']}")
+        tid = CR.tangga_untuk(d, CR.indeks_frame(p.name))
+        if tid:
+            baris.append("🪜 Tangga " + CR.label_tangga(tid, CR.baca_tangga(self.root_data)))
         wf = CR.waktu_frame(self.label_info or {})
         if wf:
             baris.append(f"🕒 Diambil {CR.format_waktu(wf)}")

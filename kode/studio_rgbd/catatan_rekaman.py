@@ -6,8 +6,9 @@ mentah tetap tidak tersentuh::
     {"warna": "kuning",
      "catatan": "Gedung F lt. 2, tangga darurat; bagian akhir gelap",
      "lux": "12",                # diukur dengan lux meter di lokasi (bukan dari gambar)
+     "tangga": "T01",           # ID tangga fisik (tangga.json); scene boleh punya tangga sendiri
      "scene": [{"nama": "Tangga A", "awal": 0, "akhir": 1450},
-               {"nama": "Bordes + tangga B", "awal": 1451, "akhir": 3000}]}
+               {"nama": "Bordes + tangga B", "awal": 1451, "akhir": 3000, "tangga": "T02"}]}
 
 ``awal``/``akhir`` adalah indeks frame mentah, sama dengan angka pada nama
 folder ekspor ``frame_000123`` dan slider potongan di tab Tinjau.
@@ -40,6 +41,7 @@ def baca(sesi: Path) -> dict:
             "catatan": str(d.get("catatan") or ""),
             "lux": str(d.get("lux") or ""),
             "lux_sumber": str(d.get("lux_sumber") or ""),
+            "tangga": str(d.get("tangga") or ""),
             "scene": sorted(scene, key=lambda s: int(s["awal"]))}
 
 
@@ -152,3 +154,46 @@ def lux_dari_foto(path) -> tuple[float, str]:
     lux = 250.0 * N * N / (t * S)
     ket = f"foto HP (f/{N:g}, {('1/' + str(round(1 / t))) if t < 1 else f'{t:g}'} s, ISO {S:g}); perkiraan +-30-50%"
     return lux, ket
+
+
+# ------------------------------------------------------------------ tangga fisik
+# <dataset>/studio_rgbd/tangga.json: {"T01": {"nama": "Rusunawa tangga 1", "lokasi": ""}, ...}
+# Rekaman (atau scene) yang merekam tangga fisik yang sama diberi ID yang sama,
+# sehingga pembagian train/val/test dapat dilakukan per tangga: tangga yang sama
+# di train dan test membuat angka uji terlalu optimistis.
+BERKAS_TANGGA = "tangga.json"
+
+
+def baca_tangga(akar_data: Path) -> dict[str, dict]:
+    f = Path(akar_data) / BERKAS_TANGGA
+    try:
+        d = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    except (OSError, ValueError):
+        d = {}
+    return {k: {"nama": str(v.get("nama", "")), "lokasi": str(v.get("lokasi", ""))}
+            for k, v in sorted(d.items()) if isinstance(v, dict)}
+
+
+def tulis_tangga(akar_data: Path, data: dict) -> None:
+    f = Path(akar_data) / BERKAS_TANGGA
+    tmp = f.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(dict(sorted(data.items())), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(f)
+
+
+def id_tangga_baru(data: dict) -> str:
+    angka = [int(k[1:]) for k in data if k[:1] == "T" and k[1:].isdigit()]
+    return f"T{(max(angka) + 1) if angka else 1:02d}"
+
+
+def label_tangga(tid: str | None, daftar: dict) -> str:
+    if not tid:
+        return "belum ada tangga"
+    nama = (daftar.get(tid) or {}).get("nama", "")
+    return f"{tid} · {nama}" if nama else tid
+
+
+def tangga_untuk(data: dict, indeks: int | None) -> str | None:
+    """ID tangga sebuah frame: tangga scene-nya bila ada, selain itu tangga rekaman."""
+    sc = scene_untuk(data, indeks)
+    return (sc or {}).get("tangga") or data.get("tangga") or None
