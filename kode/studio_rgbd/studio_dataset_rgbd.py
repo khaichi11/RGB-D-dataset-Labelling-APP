@@ -1511,7 +1511,15 @@ class KanvasLabel(tk.Canvas):
 
 class Studio(tk.Tk):
     def __init__(self, args):
-        super().__init__()
+        # className = StartupWMClass di desktop/studio-rgbd.desktop: dock mengelompokkan
+        # jendela ini dengan ikon peluncurnya, bukan sebagai jendela "Tk" tanpa ikon.
+        super().__init__(className="StudioRGBD")
+        try:
+            # Ikon orisinal (desktop/buat_ikon.py), bukan tangkapan layar aplikasi.
+            self._ikon = tk.PhotoImage(file=str(Path(__file__).with_name("ikon_studio.png")))
+            self.iconphoto(True, self._ikon)
+        except tk.TclError:
+            pass
         self.args = args
         self.root_data = Path(args.keluar).expanduser().resolve()
         self.cam = KameraRGBD(args.lebar, args.tinggi, args.fps, args.preset, args.batas_frame,
