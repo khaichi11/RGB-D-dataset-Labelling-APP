@@ -13,6 +13,7 @@ panah kanan/Space frame berikutnya, panah kiri sebelumnya.
 """
 from __future__ import annotations
 
+import json
 import queue
 import sys
 import threading
@@ -28,11 +29,12 @@ from PIL import Image, ImageTk
 
 try:
     from .segmentasi_convnext_depth import akar_aplikasi
-    from . import catatan_rekaman as CR, unggah_hf
+    from . import catatan_rekaman as CR, qa_label, unggah_hf
     from .ui_bantu import kolom_gulir
 except ImportError:
     from segmentasi_convnext_depth import akar_aplikasi
     import catatan_rekaman as CR
+    import qa_label
     import unggah_hf
     from ui_bantu import kolom_gulir
 
@@ -76,6 +78,12 @@ class TabSplit:
         self.waktu: dict = {}                           # rekaman -> waktu mulai rekam (datetime lokal)
         self.daftar_tangga: dict = {}                   # tangga.json: ID -> nama/lokasi
         self.per_tangga = tk.BooleanVar(value=False)
+        self.qa: dict = {}                              # 'REKAMAN/frame' -> hasil qa_label + waktu label
+        self.berkas_qa = Path(studio.root_data) / "qa_label.json"
+        try:
+            self.qa = json.loads(self.berkas_qa.read_text()) if self.berkas_qa.exists() else {}
+        except (OSError, ValueError):
+            self.qa = {}
         self.daftar: list[Path] = []                     # frame pada daftar (setelah filter)
         self.kini: Path | None = None
         self._fokus = "rekaman"
@@ -163,8 +171,9 @@ class TabSplit:
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x")
         tk.Label(baris, text="Tampilkan", bg=PANEL, fg=MUTED).pack(side="left")
         cb = ttk.Combobox(baris, textvariable=self.filter_set, state="readonly", width=10,
-                          values=("semua", "train", "val", "test", "abaikan", "belum"))
+                          values=("semua", "train", "val", "test", "abaikan", "belum", "perlu dicek"))
         cb.pack(side="left", padx=4); cb.bind("<<ComboboxSelected>>", lambda e: self._isi_daftar())
+        st.tombol_ringkas(baris, "🔎 Periksa label", self.periksa_label, "#E8DDD5", INK, width=120).pack(side="right")
         f2 = tk.Frame(i, bg=PANEL); f2.pack(fill="both", expand=True, pady=(4, 0))
         self.lb = tk.Listbox(f2, height=9, selectmode="extended", exportselection=False, activestyle="none",
                              bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT,
@@ -195,6 +204,9 @@ class TabSplit:
         self.judul.pack(side="left")
         self.lencana = tk.Label(kepala, text="", bg=PANEL, fg="white", font=("Segoe UI", 9, "bold"), padx=8)
         self.lencana.pack(side="left", padx=8)
+        self.info_qa = tk.Label(i, text="", bg=PANEL, fg="#8A5A12", justify="left", anchor="w", wraplength=700,
+                                font=("Segoe UI", 9))
+        self.info_qa.pack(fill="x")
         centang = tk.Frame(i, bg=PANEL); centang.pack(side="bottom", fill="x")
         kontrol = tk.Frame(i, bg=PANEL); kontrol.pack(side="bottom", fill="x", pady=(4, 0))
         self.kanvas = tk.Canvas(i, bg="#27201E", highlightthickness=0, height=200)
@@ -202,6 +214,7 @@ class TabSplit:
         self.kanvas.bind("<Configure>", lambda e: self._gambar())
         st.tombol_ringkas(kontrol, "◀ Sebelumnya", lambda: self.geser(-1), "#E8DDD5", INK, width=110).pack(side="left")
         st.tombol_ringkas(kontrol, "Berikutnya ▶", lambda: self.geser(1), "#E8DDD5", INK, width=110).pack(side="left", padx=4)
+        st.tombol_ringkas(kontrol, "✏ Buka di tab Label", self.buka_di_label, GREEN, width=150).pack(side="left", padx=4)
         tk.Scale(kontrol, from_=0, to=1, resolution=.05, orient="horizontal", variable=self.opasitas,
                  label="Opacity mask", length=170, bg=PANEL, fg=INK, highlightthickness=0,
                  command=lambda _: self._gambar()).pack(side="left", padx=8)
@@ -267,6 +280,17 @@ class TabSplit:
                     self._sibuk = False
                     self.ringkas.config(text=isi)
                     messagebox.showerror("Split dataset", isi)
+                elif jenis == "qa_selesai":
+                    self._sibuk = False
+                    self.qa.update(isi)
+                    try:
+                        self.berkas_qa.write_text(json.dumps(self.qa, ensure_ascii=False))
+                    except OSError:
+                        pass
+                    n = sum(1 for v in isi.values() if v.get("alasan"))
+                    self.ringkas.config(text=f"Pemeriksaan label: {n} dari {len(isi)} frame perlu dicek.")
+                    self.filter_set.set("perlu dicek")
+                    self._isi_daftar()
                 elif jenis == "csv_selesai":
                     self._sibuk = False
                     self.ringkas.config(text=f"Ringkasan rekaman ditulis: {isi[0]}")
@@ -424,20 +448,30 @@ class TabSplit:
         filt = self.filter_set.get()
         self.daftar = []
         dilihat = set()
-        for iid in self.tree.selection():
+        # "perlu dicek" tanpa pilihan rekaman = daftar periksa dari semua rekaman.
+        sumber = self.tree.selection() or (tuple(self.rekaman) if filt == "perlu dicek" else ())
+        for iid in sumber:
             for d in self._frames_iid(iid):
                 if d in dilihat:
                     continue
                 dilihat.add(d)
                 s = self._set_frame(d)
-                if filt == "semua" or (filt == "belum" and s is None) or s == filt:
+                if filt == "perlu dicek":
+                    q = self._qa(d)
+                    if q and q["alasan"]:
+                        self.daftar.append(d)
+                elif filt == "semua" or (filt == "belum" and s is None) or s == filt:
                     self.daftar.append(d)
+        if filt == "perlu dicek":
+            self.daftar.sort(key=lambda d: -self._qa(d)["skor"])
         pos = self.lb.yview()
         self.lb.delete(0, "end")
         for i, d in enumerate(self.daftar):
             s = self._set_frame(d)
             ciri = "*" if self.data["frame"].get(self.sd.kunci_frame(d)) else " "
-            self.lb.insert("end", f"{LABEL_SET[s]:>7}{ciri} {d.parent.parent.parent.name[-6:]} {d.name}")
+            q = self._qa(d)
+            tanda = f" ⚠{q['skor']:.1f}" if q and q["alasan"] else ""
+            self.lb.insert("end", f"{LABEL_SET[s]:>7}{ciri} {d.parent.parent.parent.name[-6:]} {d.name}{tanda}")
             self.lb.itemconfig(i, fg=WARNA_SET[s])
         if pertahankan:
             self.lb.yview_moveto(pos[0])
@@ -760,6 +794,9 @@ class TabSplit:
         self.judul.config(text=f"{d.parent.parent.parent.name} / {d.name}"
                                f"   [{self.daftar.index(d) + 1}/{len(self.daftar)}]" if d in self.daftar else d.name)
         self.lencana.config(text=LABEL_SET[s] + pengecualian, bg=WARNA_SET[s])
+        q = self._qa(d)
+        self.info_qa.config(text=("🔎 Perlu dicek: " + "; ".join(q["alasan"])) if q and q["alasan"] else
+                            ("🔎 Lolos pemeriksaan label" if q else ""))
         bgr = cv2.imread(str(d / "color_raw.png"))
         riser = cv2.imread(str(d / "mask_objek.png"), 0)
         tread = cv2.imread(str(d / "mask_acuan.png"), 0)
@@ -821,6 +858,65 @@ class TabSplit:
                 + (" --hanya-diperiksa" if self.hanya_diperiksa.get() else "")
                 + ' --bobot <folder-hasil-latih>/best.pt --keluar <folder-hasil-latih>/uji_test.json')
         self._salin(teks, "Perintah uji")
+
+    # ------------------------------------------------------------ pemeriksaan label
+    @staticmethod
+    def _kunci_qa(d: Path) -> str:
+        return f"{d.parent.parent.parent.name}/{d.name}"
+
+    def _qa(self, d: Path) -> dict | None:
+        """Hasil pemeriksaan frame, None bila belum diperiksa atau labelnya berubah sejak itu."""
+        q = self.qa.get(self._kunci_qa(d))
+        if not q:
+            return None
+        try:
+            if abs((d / "label_draft.json").stat().st_mtime - q.get("waktu_label", 0)) > 1:
+                return None                                  # label sudah disunting: perlu diperiksa ulang
+        except OSError:
+            return None
+        return q
+
+    def periksa_label(self) -> None:
+        """Periksa kecocokan label dengan geometri depth untuk rekaman/scene/tangga terpilih (semua bila kosong)."""
+        if self._sibuk:
+            return
+        pilih = list(self.tree.selection()) or list(self.rekaman)
+        frames, dilihat = [], set()
+        for iid in pilih:
+            for d in self._frames_iid(iid):
+                if d not in dilihat:
+                    dilihat.add(d); frames.append(d)
+        if not frames:
+            messagebox.showinfo("Periksa label", "Tidak ada frame siap latih pada pilihan ini."); return
+        self._sibuk = True
+
+        def kerja():
+            hasil = {}
+            for n, d in enumerate(frames, 1):
+                try:
+                    q = qa_label.periksa_frame(d)
+                    if q is not None:
+                        q["waktu_label"] = (d / "label_draft.json").stat().st_mtime
+                        hasil[self._kunci_qa(d)] = q
+                except Exception as e:                       # noqa: BLE001
+                    hasil[self._kunci_qa(d)] = {"skor": 0, "alasan": [f"gagal diperiksa: {e}"[:80]], "waktu_label": 0}
+                if n % 10 == 0 or n == len(frames):
+                    self._q.put(("status", f"Memeriksa label: {n}/{len(frames)} frame"))
+            self._q.put(("qa_selesai", hasil))
+        threading.Thread(target=kerja, daemon=True).start()
+
+    def buka_di_label(self) -> None:
+        """Buka frame pratinjau di tab Label untuk diperbaiki."""
+        d = self.kini
+        if d is None:
+            return
+        st = self.studio
+        st.sesi = d.parent.parent.parent
+        st._muat_catatan_ui()
+        st.tabs.select(st.tab_label)
+        st.muat_frame()
+        if d in st.frame_paths:
+            st._pilih_indeks_frame(st.frame_paths.index(d))
 
     def ringkasan_csv(self) -> None:
         """Tabel per rekaman untuk naskah: waktu, lokasi, lux, kecerahan gambar, jumlah frame per set."""
