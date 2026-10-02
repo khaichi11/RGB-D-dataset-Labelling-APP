@@ -378,14 +378,17 @@ class TabSplit:
         for r in self.rekaman:
             c = self.catatan.get(r) or {}
             s = self.data["rekaman"].get(r)
-            tag = [str(s)] + ([f"stabilo_{c['warna']}"] if c.get("warna") else [])
-            teks = r.replace("TANGGA_NAIK_", "") + ("  📝" if c.get("catatan") else "")
+            w = CR.warna_rekaman(c, self.daftar_tangga)
+            tag = [str(s)] + ([f"stabilo_{w}"] if w else [])
+            teks = ("✔ " if c.get("selesai") else "") + r.replace("TANGGA_NAIK_", "") + ("  📝" if c.get("catatan") else "")
             self.tree.insert("", "end", iid=r, text=teks, values=self._nilai_baris(r), tags=tag,
                              open=r in buka)
             for i, sc in enumerate(self._scene(r)):
                 iid = f"{r}::{i}"
-                self.tree.insert(r, "end", iid=iid, text=f"↳ {sc['nama']} ({sc['awal']}–{sc['akhir']})",
-                                 values=self._nilai_baris(iid), tags=("scene",))
+                w_sc = CR.warna_untuk_tangga(sc.get("tangga"), self.daftar_tangga)
+                self.tree.insert(r, "end", iid=iid, text=f"↳ {sc['nama']} ({sc['awal']}–{sc['akhir']})"
+                                 + (f" · {sc['tangga']}" if sc.get("tangga") else ""),
+                                 values=self._nilai_baris(iid), tags=("scene",) + ((f"stabilo_{w_sc}",) if w_sc else ()))
         ada = [r for r in pilih if self.tree.exists(r)]
         if ada:
             self.tree.selection_set(ada)
@@ -402,13 +405,14 @@ class TabSplit:
         for tid in urut:
             iid = f"tg::{tid or '-'}"
             teks = ("🪜 " + CR.label_tangga(tid, self.daftar_tangga)) if tid else "❔ Belum ada tangga"
-            self.tree.insert("", "end", iid=iid, text=teks, values=self._nilai_baris(iid), open=True)
+            w_t = CR.warna_untuk_tangga(tid, self.daftar_tangga)
+            tag_t = [f"stabilo_{w_t}"] if w_t else []
+            self.tree.insert("", "end", iid=iid, text=teks, values=self._nilai_baris(iid), open=True, tags=tag_t)
             for r in sorted(isi[tid]):
                 c = self.catatan.get(r) or {}
                 anak = f"{iid}::{r}"
-                tag = [f"stabilo_{c['warna']}"] if c.get("warna") else []
-                self.tree.insert(iid, "end", iid=anak, text=r.replace("TANGGA_NAIK_", ""),
-                                 values=self._nilai_baris(anak), tags=tag)
+                self.tree.insert(iid, "end", iid=anak, text=("✔ " if c.get("selesai") else "") + r.replace("TANGGA_NAIK_", ""),
+                                 values=self._nilai_baris(anak), tags=tag_t)
         ada = [i for i in pilih if self.tree.exists(i)]
         if ada:
             self.tree.selection_set(ada)
@@ -421,8 +425,8 @@ class TabSplit:
                 self.tree.item(iid, values=self._nilai_baris(iid))
                 if "::" not in iid:
                     s = self.data["rekaman"].get(iid)
-                    c = self.catatan.get(iid) or {}
-                    self.tree.item(iid, tags=[str(s)] + ([f"stabilo_{c['warna']}"] if c.get("warna") else []))
+                    w = CR.warna_rekaman(self.catatan.get(iid) or {}, self.daftar_tangga)
+                    self.tree.item(iid, tags=[str(s)] + ([f"stabilo_{w}"] if w else []))
 
     def _tampil_catatan(self) -> None:
         sel = self.tree.selection()
@@ -441,7 +445,9 @@ class TabSplit:
         teks = ("📍 " + c["catatan"]) if c.get("catatan") else "Belum ada catatan (isi di tab 2. Tinjau)."
         if self._scene(r):
             teks += "\nScene: " + "; ".join(f"{sc['nama']} ({sc['awal']}–{sc['akhir']})" for sc in self._scene(r))
-        self.info_rek.config(text=teks, bg=CR.WARNA.get(c.get("warna")) or BG)
+        if c.get("selesai"):
+            teks = "✔ Rekaman ditandai sudah benar semua.\n" + teks
+        self.info_rek.config(text=teks, bg=CR.WARNA.get(CR.warna_rekaman(c, self.daftar_tangga)) or BG)
 
     def _isi_daftar(self, pertahankan: bool = False) -> None:
         kini = self.kini
@@ -960,7 +966,7 @@ class TabSplit:
                         "frame_ekspor": n_ekspor.get(r, 0), "frame_siap_latih": len(fr),
                         "train": per["train"], "val": per["val"], "test": per["test"],
                         "set_rekaman": self.data["rekaman"].get(r, ""), "scene": len(c.get("scene", [])),
-                        "tangga": c.get("tangga", ""),
+                        "tangga": c.get("tangga", ""), "selesai": "ya" if c.get("selesai") else "",
                         "nama_tangga": (self.daftar_tangga.get(c.get("tangga", "")) or {}).get("nama", ""),
                         "tangga_scene": ";".join(sorted({sc.get("tangga") for sc in c.get("scene", []) if sc.get("tangga")})),
                     })
