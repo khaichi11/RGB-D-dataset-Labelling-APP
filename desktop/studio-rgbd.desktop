@@ -10,3 +10,4 @@ Terminal=false
 Categories=Science;Education;Graphics;
 Keywords=realsense;rgbd;dataset;label;stair;tangga;
 StartupNotify=true
+StartupWMClass=StudioRGBD
