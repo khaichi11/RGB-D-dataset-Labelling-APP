@@ -5,8 +5,9 @@ sesudahnya. Itu penting karena lantai dan tapakan sama-sama bidang mendatar
 bertekstur mirip; yang membedakannya adalah letak dalam ruang, dan informasi itu
 hanya ada pada kedalaman.
 
-Antarmuka `usulkan` sama dengan pengusul lain di Studio, sehingga penghalusan
-SAM 2 dan verifikasi kedalaman yang sudah ada tetap dipakai tanpa perubahan.
+Antarmuka `usulkan` sama dengan pengusul lain di Studio. Poligon diambil
+langsung dari peta kelas; SAM 2 tidak lagi dipakai (lihat
+``_rekomendasi_tangga_data`` di studio_dataset_rgbd.py).
 
 Perubahan 15 September 2026:
 
@@ -77,43 +78,50 @@ def cari_bobot() -> tuple[str, Path]:
                             + '\n  '.join(rel for _, rel in KANDIDAT_BOBOT))
 
 
-# Urutan pencarian checkpoint pengusul label. Model eksperimen seluruh data
-# (dilatih pada 643 frame terperiksa dari sembilan rekaman) dipakai lebih dulu:
-# pada 52 frame terperiksa rekaman 211803 yang tidak ikut dilatih, Dice
-# usulannya 0,887 lawan 0,814 untuk checkpoint rujukan. Rujukan tetap menjadi
-# cadangan karena checkpoint eksperimen tidak masuk Git. Variabel lingkungan
-# STUDIO_BOBOT_USULAN mengalahkan keduanya, untuk membandingkan checkpoint lain.
+# Pengusul label = ENSEMBEL checkpoint (rerata softmax) yang tersedia, berurutan:
+# model eksperimen seluruh data (2026-09-25), model latih ulang 2026-10-03
+# (1.303 frame terperiksa, tanpa rekaman 20261001_* dan 20260927_203*), dan
+# checkpoint rujukan. Diuji pada 115 frame terperiksa dari 8 rekaman yang belum
+# pernah dilihat model mana pun (auto_label/uji_ensembel_pengusul.py): Dice
+# rerata 0,695 (model 2026-09-25 saja) -> 0,708, median 0,915 -> 0,941; lebih
+# baik pada 26% frame, lebih buruk pada 17%; jumlah poligon dan titik per
+# poligon tidak bertambah. Model latih ulang SENDIRIAN memang rerata 0,717,
+# tetapi lebih buruk pada 32% frame, jadi tidak dipakai sendirian. Tangga kecil
+# dan jauh (20261001_054922) tetap gagal di semua varian: masih wajib dikoreksi.
+# Checkpoint di runs/ tidak masuk Git; di laptop lain yang tersedia saja yang
+# dipakai (minimal rujukan). STUDIO_BOBOT_USULAN (satu berkas) mengalahkan semua.
 BOBOT_USULAN = [
-    ('ConvNeXt V2 Atto RGB-D 384 (eksperimen seluruh data 2026-09-25)',
-     'runs/eksperimen_semua_data_20260925/deployment_penuh.pt'),
-    ('ConvNeXt V2 Atto RGB-D 384 (rujukan final_d435)',
-     'bobot/final_d435/cnx_atto_in1k_384.pt'),
+    ('eksperimen seluruh data 2026-09-25', 'runs/eksperimen_semua_data_20260925/deployment_penuh.pt'),
+    ('latih ulang 2026-10-03', 'runs/pengusul_20261003_uji/deployment_penuh.pt'),
+    ('rujukan final_d435', 'bobot/final_d435/cnx_atto_in1k_384.pt'),
 ]
 
 
-def pilih_bobot_usulan() -> tuple[str, Path]:
-    """Nama dan jalur checkpoint pengusul label yang pertama tersedia."""
+def pilih_bobot_usulan() -> tuple[str, list[Path]]:
+    """Nama dan jalur checkpoint pengusul label (satu atau beberapa untuk ensembel)."""
     env = os.environ.get('STUDIO_BOBOT_USULAN', '').strip()
     if env:
         p = Path(env).expanduser()
         if not p.exists():
             raise FileNotFoundError(f'STUDIO_BOBOT_USULAN menunjuk berkas yang tidak ada:\n  {p}')
-        return f'ConvNeXt RGB-D ({p.name}, dari STUDIO_BOBOT_USULAN)', p
-    for nama, rel in BOBOT_USULAN:
-        p = akar_aplikasi() / rel
-        if p.exists():
-            return nama, p
-    raise FileNotFoundError('Checkpoint pengusul label tidak ditemukan. Yang dicari, berurutan:\n  '
-                            + '\n  '.join(str(akar_aplikasi() / rel) for _, rel in BOBOT_USULAN))
+        return f'ConvNeXt RGB-D ({p.name}, dari STUDIO_BOBOT_USULAN)', [p]
+    ada = [(nama, akar_aplikasi() / rel) for nama, rel in BOBOT_USULAN if (akar_aplikasi() / rel).exists()]
+    if not ada:
+        raise FileNotFoundError('Checkpoint pengusul label tidak ditemukan. Yang dicari:\n  '
+                                + '\n  '.join(str(akar_aplikasi() / rel) for _, rel in BOBOT_USULAN))
+    if len(ada) == 1:
+        return f'ConvNeXt V2 Atto RGB-D 384 ({ada[0][0]})', [ada[0][1]]
+    return (f'Ensembel {len(ada)} ConvNeXt V2 Atto RGB-D 384 (' + ', '.join(n for n, _ in ada) + ')',
+            [j for _, j in ada])
 
 
-def bobot_usulan() -> Path:
+def bobot_usulan() -> list[Path]:
     """Checkpoint yang dipakai pengusul label (lihat :data:`BOBOT_USULAN`)."""
     return pilih_bobot_usulan()[1]
 
 
 def _muat():
-    """Muat model sekali lalu simpan; memuat ulang tiap frame terlalu lambat.
+    """Muat model (semua anggota ensembel) sekali lalu simpan; memuat ulang tiap frame terlalu lambat.
 
     Kunci mencegah pemuatan ganda: pemanasan di thread latar dan auto-label
     frame pertama di thread UI bisa memanggil fungsi ini bersamaan.
@@ -126,8 +134,23 @@ def _muat():
             if akar not in sys.path:
                 sys.path.insert(0, akar)
             from rgbd_convnext.konfigurasi_utama import muat_model_utama
-            _MODEL = muat_model_utama(jalur)
+            _MODEL = [muat_model_utama(j) for j in jalur]
     return _MODEL
+
+
+def _prediksi(mus: list, bgr: np.ndarray, meter: np.ndarray) -> np.ndarray:
+    """Peta kelas dari rerata softmax semua anggota (satu anggota = prediksi biasa)."""
+    from rgbd_convnext.konfigurasi_utama import prediksi_kelas, tensor_masukan, peta_kelas_dari_logit
+    if len(mus) == 1:
+        return prediksi_kelas(mus[0], bgr, meter)
+    import torch
+    with torch.inference_mode():
+        prob = None
+        for mu in mus:
+            r, d = tensor_masukan(mu, bgr, meter)
+            p = mu.model(r, d)['semantic'].float().softmax(1)
+            prob = p if prob is None else prob + p
+    return peta_kelas_dari_logit(prob / len(mus), mus[0].ukuran, bgr.shape[1], bgr.shape[0])
 
 
 def hangatkan() -> str:
@@ -146,10 +169,9 @@ def panaskan_utas_ini() -> None:
     memanggil fungsi ini sekali di thread UI begitu model siap, sebelum
     auto-label frame pertama.
     """
-    mu = _muat()
-    from rgbd_convnext.konfigurasi_utama import prediksi_kelas
+    mus = _muat()
     with _KUNCI:
-        prediksi_kelas(mu, np.zeros((480, 848, 3), np.uint8), np.ones((480, 848), np.float32))
+        _prediksi(mus, np.zeros((480, 848, 3), np.uint8), np.ones((480, 848), np.float32))
 
 
 def kedalaman_meter(depth: np.ndarray, k: dict | None = None, skala_depth: float | None = None) -> np.ndarray:
@@ -246,11 +268,10 @@ def _poligon(biner: np.ndarray, luas_min: int = 2500, rasio_min: float = 0.08,
 def peta_kelas(rgb_bgr: np.ndarray, depth: np.ndarray, k: dict | None = None,
                skala_depth: float | None = None) -> np.ndarray:
     """Peta kelas per piksel (0 latar, 1 riser, 2 tread) dari model pengusul."""
-    mu = _muat()
-    from rgbd_convnext.konfigurasi_utama import prediksi_kelas
+    mus = _muat()
     meter = kedalaman_meter(depth, k, skala_depth)
     with _KUNCI:
-        return prediksi_kelas(mu, rgb_bgr, meter)
+        return _prediksi(mus, rgb_bgr, meter)
 
 
 def model_siap() -> bool:
