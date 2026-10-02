@@ -181,4 +181,6 @@ def warnai(latar_rgb: np.ndarray, bidang_rgb: np.ndarray, kekuatan: float) -> np
     # Latar gelap diangkat sedikit agar warna tetap terbaca pada frame gelap.
     v = np.maximum(hl[..., 2], 60).astype(np.uint8)
     warna = cv2.cvtColor(np.dstack([hb[..., 0], s, v]), cv2.COLOR_HSV2RGB)
-    return cv2.addWeighted(latar_rgb, 1 - kekuatan, warna, kekuatan, 0)
+    campur = cv2.addWeighted(latar_rgb, 1 - kekuatan, warna, kekuatan, 0)
+    # Tanpa data depth (tepi hasil geser, lubang): latar apa adanya, bukan pita pucat.
+    return np.where((bidang_rgb.max(2) > 0)[..., None], campur, latar_rgb)
