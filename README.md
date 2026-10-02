@@ -80,9 +80,9 @@ paket_ubuntu_zenexo/            <- repo ini
 | Tab | Isi |
 |---|---|
 | 1. Rekam | Rekam RGB, depth, dan IR D435 ke `.db3` mentah (tidak pernah diubah). |
-| 2. Tinjau & Potong | Putar rekaman, potong non-destruktif, **stabilo warna**, **catatan/lokasi**, dan **scene** (rentang frame bernama) per rekaman. |
+| 2. Tinjau & Potong | Putar rekaman, potong non-destruktif, **stabilo warna**, **catatan/lokasi**, dan **scene** (rentang frame bernama) per rekaman. Kartu rekaman menampilkan **ukuran berkas** (mentah, turunan, ekspor, jumlah berkas) dan **⏱ Cek sinkron RGB–depth–IR**. |
 | 3. Ekspor Frame | Ekspor frame RGB-D berpasangan dari rentang terpilih. |
-| 4. Label & Ukur | Poligon riser (merah) dan tread (biru), auto-label ConvNeXt RGB-D, pemandu riser/tread, **Enter** = tandai sudah diperiksa manual lalu lanjut. |
+| 4. Label & Ukur | Poligon riser (merah) dan tread (biru), auto-label ConvNeXt RGB-D, pemandu riser/tread, **Enter** = tandai sudah diperiksa manual lalu lanjut. Lapisan IR/depth dikoreksi rolling shutter per baris ke RGB; info frame menunjukkan apakah RGB, depth, dan IR satu jepretan; **📐 garis lipatan 3-D** dari depth membedakan ujung/pangkal anak tangga dari bayangan dan noda. |
 | 5. Uji Realtime | Uji model pada kamera langsung. |
 | 6. Uji Model pada Berkas | Uji model pada gambar, video, atau folder frame. |
 | 7. Split Dataset | Bagi rekaman, scene, atau frame ke train/val/test dengan kalkulator rasio dan rekomendasi; pratinjau mask persis seperti yang dilatih; salin perintah latih/uji; **push dataset ke Hugging Face**. |

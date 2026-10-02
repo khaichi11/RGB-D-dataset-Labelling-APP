@@ -3,7 +3,9 @@
 Satu baris Parquet per frame EKSPOR (berlabel maupun belum): RGB, depth selaras
 16-bit, IR kiri, mask semantik (persis seperti yang dilatih), frame.json dan
 label_draft.json lengkap, status sampah, dan set train/val/test. Repo juga
-memuat ``split_dataset.json`` dan ``rekaman/<kategori>/<ID>/catatan.json``.
+memuat ``split_dataset.json``, ``rekaman/<kategori>/<ID>/catatan.json``, dan
+``rekaman/<kategori>/<ID>/sinkron_waktu.json`` (hasil Cek sinkron RGB-depth-IR,
+agar IR yang tidak sejepretan tetap dikenali tanpa video mentah).
 Isinya cukup untuk MELABEL ULANG di laptop lain tanpa video mentah: tombol
 "Tarik dataset dari HF" membangun kembali folder ``exports/frames`` Studio.
 Video mentah hanya diperlukan untuk mengekspor frame baru, jadi tidak diunggah.
@@ -277,12 +279,12 @@ def bangun(akar: Path, berkas_split: Path, keluar: Path,
             lapor(f'Menyusun Parquet: {n}/{len(semua)} frame')
     for nama, buf in penulis.items():
         tulis(nama, buf)
-    for kat, rid in rekaman:                                   # catatan rekaman (warna, lokasi, lux, scene)
-        c = akar_rekaman / kat / rid / 'catatan.json'
-        if c.exists():
-            tujuan = keluar / 'rekaman' / kat / rid / 'catatan.json'
-            tujuan.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(c, tujuan)
+    for kat, rid in rekaman:                                   # catatan rekaman (warna, lokasi, lux, scene) + sinkron
+        for c in (akar_rekaman / kat / rid / 'catatan.json', akar_rekaman / kat / rid / 'exports' / 'sinkron_waktu.json'):
+            if c.exists():
+                tujuan = keluar / 'rekaman' / kat / rid / c.name
+                tujuan.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(c, tujuan)
     if Path(berkas_split).exists():
         shutil.copy(berkas_split, keluar / 'split_dataset.json')
     if (akar_rekaman.parent / 'tangga.json').exists():                # daftar tangga fisik
@@ -368,9 +370,11 @@ def tarik(akar: Path, berkas_split: Path, lapor: Callable[[str], None] = print) 
                             hitung['label_diperbarui'] += 1
                     if n % 50 == 0 or n == total:
                         lapor(f'Memulihkan frame: {n}/{total}')
-        for c in tmp.glob('rekaman/*/*/catatan.json'):
-            tujuan = akar_rekaman / c.parent.parent.name / c.parent.name / 'catatan.json'
-            if not tujuan.exists():
+        for c in tmp.glob('rekaman/*/*/*.json'):
+            tujuan = akar_rekaman / c.parent.parent.name / c.parent.name
+            tujuan = {'catatan.json': tujuan / 'catatan.json',
+                      'sinkron_waktu.json': tujuan / 'exports' / 'sinkron_waktu.json'}.get(c.name)
+            if tujuan is not None and not tujuan.exists():
                 tujuan.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(c, tujuan)
         if (tmp / 'tangga.json').exists():                         # ID tangga lokal menang, yang baru ditambahkan

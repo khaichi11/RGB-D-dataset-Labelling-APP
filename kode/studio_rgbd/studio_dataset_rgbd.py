@@ -59,7 +59,7 @@ if __package__:
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
     from .ui_bantu import kolom_gulir
-    from . import visual_depth, ir_selaras
+    from . import visual_depth, ir_selaras, sinkron
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -74,7 +74,7 @@ else:
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
     from studio_rgbd.ui_bantu import kolom_gulir
-    from studio_rgbd import visual_depth, ir_selaras
+    from studio_rgbd import visual_depth, ir_selaras, sinkron
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -117,6 +117,26 @@ KELAS_MODE = {
 }
 # Semua jenis poligon yang dapat disunting di kanvas, dalam urutan tampilan.
 MODE_MASK = ("objek", "acuan")
+
+
+def baris_label_yolo(poligon: dict, kategori: str, w: int, h: int) -> tuple[list[str], dict]:
+    """Baris label YOLO-seg (satu per poligon >= 3 titik) dan jumlah per kelas, dari poligon kanvas.
+
+    Satu-satunya tempat label YOLO disusun, dipakai saat menyimpan label dan saat
+    membangun folder dataset YOLO, sehingga keduanya selalu sama dengan poligon
+    yang terlihat. Kunci poligon di luar MODE_MASK (mis. "lantai" peninggalan
+    kelas yang sudah ditarik) diabaikan.
+    """
+    peta = KELAS_MODE.get(kategori, KELAS_MODE["tangga_naik"])
+    baris, jumlah = [], {}
+    for mode in ("acuan", "objek"):
+        nama_kelas = peta[mode]
+        cls = KELAS_YOLO[nama_kelas]
+        sah = [poly for poly in (poligon or {}).get(mode, []) if len(poly) >= 3]
+        jumlah[nama_kelas] = len(sah)
+        for poly in sah:
+            baris.append(f"{cls} " + " ".join(f"{v:.6f}" for pt in poly for v in (pt[0] / w, pt[1] / h)))
+    return baris, jumlah
 
 
 def baca_json(path: Path, default: dict | None = None) -> dict:
@@ -489,6 +509,7 @@ class KanvasLabel(tk.Canvas):
         self.depth_mode = "bidang"   # lihat visual_depth.MODE
         self.pakai_ir = False        # latar inframerah selaras, bukan RGB
         self.warna_bidang = 0.0      # 0..1 kekuatan warna ketinggian di atas latar
+        self.garis_3d = False        # garis lipatan ujung/pangkal dari depth (visual_depth.garis_tepi)
         self.penyedia_depth_vis = None   # Studio: fungsi(mode) -> citra hasil prefetch atau None
         self._depth_vis = self._depth_vis_key = self._depth_vis_obj = None
         self.kecerahan = 0.0     # 0 = asli, 1 = CLAHE penuh (lihat _cerahkan)
@@ -704,7 +725,7 @@ class KanvasLabel(tk.Canvas):
     def gambar_tampil(self) -> np.ndarray:
         assert self.rgb is not None
         key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), self.depth_mode, self.pakai_ir,
-               round(self.warna_bidang, 3),
+               round(self.warna_bidang, 3), self.garis_3d,
               round(self.kecerahan, 3), round(self.ketajaman, 3), round(self.bantu_arah, 3))
         if self._tampil_key == key and self._tampil_cache is not None:
             return self._tampil_cache
@@ -770,6 +791,9 @@ class KanvasLabel(tk.Canvas):
                 campur = cv2.addWeighted(out, 1 - self.depth_alpha, self._depth_vis, self.depth_alpha, 0)
                 ada = self._depth_vis.max(2) > 0
                 out = np.where(ada[..., None], campur, out)
+        if self.garis_3d and self.penyedia_depth_vis is not None:
+            # Lapisan teratas: lipatan bentuk 3-D tidak boleh tertutup overlay lain.
+            out = visual_depth.gambar_garis(out, self.penyedia_depth_vis("garis_3d"))
         self._tampil_key, self._tampil_cache = key, out
         return out
 
@@ -787,7 +811,7 @@ class KanvasLabel(tk.Canvas):
         margin = 12
         s = self.scale
         dasar = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), self.depth_mode, self.pakai_ir,
-                 round(self.warna_bidang, 3), round(self.kecerahan, 3),
+                 round(self.warna_bidang, 3), self.garis_3d, round(self.kecerahan, 3),
                  round(self.ketajaman, 3), round(self.bantu_arah, 3), round(s, 5))
         lama = self._photo_key if self._photo is not None else None
         if w * h * s * s <= 2_500_000:
@@ -1563,6 +1587,7 @@ class Studio(tk.Tk):
         self.depth_mode = StringVar(value=preferensi.get("depth_mode", "bidang"))
         self.pakai_ir = BooleanVar(value=bool(preferensi.get("pakai_ir", False)))
         self.warna_bidang = DoubleVar(value=float(preferensi.get("warna_bidang", 0.0)))
+        self.garis_3d = BooleanVar(value=bool(preferensi.get("garis_3d", False)))
         self.magnet_titik = BooleanVar(value=True)
         self.mode_label = StringVar(value="objek")
         self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
@@ -1881,8 +1906,11 @@ class Studio(tk.Tk):
         tk.Checkbutton(i, text="✔ Rekaman ini sudah benar semua", variable=self.selesai_var, bg=PANEL, fg="#1E5B2A",
                        selectcolor=PANEL, activebackground=PANEL, font=("Segoe UI", 9, "bold"),
                        command=self.atur_selesai).pack(anchor="w")
-        self.info_progres = tk.Label(i, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 8), anchor="w", justify="left")
+        self.info_progres = tk.Label(i, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 8), anchor="w", justify="left",
+                                     wraplength=270)
         self.info_progres.pack(fill="x")
+        self.tombol_ringkas(i, "⏱ Cek sinkron RGB–depth–IR", self.cek_sinkron, "#E8DDD5", INK,
+                            width=200).pack(anchor="w", pady=(2, 0))
         # Stabilo = warna TANGGA fisik bila rekaman punya ID tangga (semua rekaman
         # dan scene tangga itu ikut berwarna sama); tanpa tangga, warna rekaman ini.
         self.label_stabilo = tk.Label(i, text="Stabilo", bg=PANEL, fg=MUTED, wraplength=270, justify="left", anchor="w")
@@ -2003,15 +2031,7 @@ class Studio(tk.Tk):
         tid = d.get("tangga")
         self.label_stabilo.config(text=(f"Stabilo tangga {tid} (semua rekaman/scene tangga ini ikut berwarna sama)"
                                         if tid else "Stabilo rekaman ini (beri ID tangga agar warnanya per tangga)"))
-        sesi_kini = self.sesi
-        self.info_progres.config(text="Menghitung frame diperiksa…")
-        def hitung():
-            # Thread latar TIDAK boleh menyentuh Tk; hasil dikirim lewat antrean self.q.
-            t, dp = self._hitung_progres(sesi_kini) if sesi_kini else (0, 0)
-            teks = f"Frame diperiksa: {dp}/{t}" + (f"  ({d['selesai_iso'][:16].replace('T', ' ')} ditandai selesai)"
-                                                   if d.get("selesai") and d.get("selesai_iso") else "")
-            self.q.put(("progres_rekaman", (sesi_kini, teks)))
-        threading.Thread(target=hitung, daemon=True).start()
+        self._segarkan_info_tinjau()
         self._isi_pilihan_tangga(d.get("tangga") or None)
         self.lux_sumber_lbl.config(text=("Sumber: " + d["lux_sumber"]) if d.get("lux_sumber")
                                    else "Isi dari lux meter di lokasi, atau hitung dari foto HP.")
@@ -2159,6 +2179,68 @@ class Studio(tk.Tk):
         self._ubah_catatan(lambda d: d.update(selesai=nilai, selesai_iso=datetime.now().isoformat(timespec="seconds")
                                               if nilai else ""))
 
+    def _segarkan_info_tinjau(self) -> None:
+        """Frame diperiksa, ukuran berkas, dan status sinkron rekaman terpilih (dihitung di thread latar)."""
+        sesi_kini = self.sesi
+        if not sesi_kini:
+            self.info_progres.config(text="")
+            return
+        d = self._catatan_cache(sesi_kini)
+        self.info_progres.config(text="Menghitung frame diperiksa dan ukuran berkas…")
+
+        def hitung():
+            # Thread latar TIDAK boleh menyentuh Tk; hasil dikirim lewat antrean self.q.
+            t, dp = self._hitung_progres(sesi_kini)
+            baris = [f"Frame diperiksa: {dp}/{t}" + (f"  ({d['selesai_iso'][:16].replace('T', ' ')} ditandai selesai)"
+                                                    if d.get("selesai") and d.get("selesai_iso") else "")]
+            baris.append(CR.teks_ukuran(CR.ukuran_rekaman(sesi_kini)))
+            baris.append(sinkron.teks_ringkas(sinkron.baca(sesi_kini).get("ringkasan")))
+            self.q.put(("progres_rekaman", (sesi_kini, "\n".join(baris))))
+        threading.Thread(target=hitung, daemon=True).start()
+
+    def cek_sinkron(self) -> None:
+        """Baca ulang rekaman mentah: apakah RGB, depth, dan IR tiap frame ekspor satu jepretan (sinkron.py)."""
+        sesi = self.sesi
+        if not sesi:
+            return
+        if getattr(self, "_sinkron_jalan", None):
+            self.status.set(f"Pemeriksaan sinkron {self._sinkron_jalan} masih berjalan…")
+            return
+        if not (sesi / "exports" / "frames").is_dir():
+            messagebox.showinfo("Cek sinkron", "Rekaman ini belum punya frame ekspor.", parent=self)
+            return
+        bag = self.bag(sesi)
+        alasan = periksa_rekaman(bag)
+        if alasan:
+            messagebox.showinfo("Cek sinkron", f"Rekaman mentah tidak dapat dibaca: {alasan}.\n\n"
+                                "Kesesuaian waktu hanya bisa diperiksa dari rekaman mentah.", parent=self)
+            return
+        self._sinkron_jalan = sesi.name
+        self.status.set(f"Memeriksa sinkron {sesi.name}: membaca ulang rekaman mentah…")
+
+        def kerja():
+            try:
+                r = sinkron.periksa_sesi(sesi, bag, lambda n: self.q.put(
+                    ("status", f"Memeriksa sinkron {sesi.name}: {n} frame rekaman dibaca…")))
+            except Exception as e:                              # noqa: BLE001
+                r = {"galat": str(e)}
+            self.q.put(("sinkron_selesai", (sesi, r)))
+        threading.Thread(target=kerja, daemon=True).start()
+
+    def _sinkron_frame(self, sesi: Path) -> dict:
+        """Isi exports/sinkron_waktu.json, di-cache per rekaman menurut waktu ubah berkas."""
+        f = sesi / "exports" / sinkron.BERKAS
+        try:
+            mt = f.stat().st_mtime
+        except OSError:
+            return {}
+        cache = getattr(self, "_cache_sinkron", None)
+        if cache is None:
+            cache = self._cache_sinkron = {}
+        if cache.get(sesi, (None,))[0] != mt:
+            cache[sesi] = (mt, sinkron.baca(sesi))
+        return cache[sesi][1]
+
     def _hitung_progres(self, sesi: Path) -> tuple[int, int]:
         """(frame ekspor bukan sampah, frame yang ditandai diperiksa manual)."""
         fr = sesi / "exports" / "frames"
@@ -2231,9 +2313,13 @@ class Studio(tk.Tk):
             baris.append("🪜 Tangga " + CR.label_tangga(tid, CR.baca_tangga(self.root_data)))
         with self._kunci_cache:
             g = (self._cache_frame.get(p) or {}).get("geser")
-        if g and (g[0] or g[1]):
-            baris.append(f"↕ RGB bergeser dari depth/IR {abs(g[0])} px mendatar, {abs(g[1])} px vertikal"
-                         " (kamera bergerak); lapisan depth/IR dan pengukuran sudah digeser ke RGB")
+        teks_g = ir_selaras.teks_geser(g)
+        if teks_g:
+            baris.append(f"↕ Rolling shutter RGB (kamera bergerak): {teks_g}; lapisan depth/IR dan "
+                         "pengukuran sudah dikoreksi per baris ke RGB")
+        sk = sinkron.info_frame(self._sinkron_frame(sesi), p.name) or sinkron.info_dari_frame_json(self.label_info or {})
+        if sk:
+            baris.append(sk)
         wf = CR.waktu_frame(self.label_info or {})
         if wf:
             baris.append(f"🕒 Diambil {CR.format_waktu(wf)}")
@@ -2268,6 +2354,7 @@ class Studio(tk.Tk):
         self.kanvas.penyedia_depth_vis = self._depth_vis_kini
         self.kanvas.pakai_ir = bool(self.pakai_ir.get())
         self.kanvas.warna_bidang = float(self.warna_bidang.get())
+        self.kanvas.garis_3d = bool(self.garis_3d.get())
         # Ctrl+C menyalin nama frame yang sedang dibuka. Berguna saat melaporkan
         # frame bermasalah: namanya cukup panjang untuk salah ketik.
         self.kanvas.bind("<Control-c>", lambda _e: self.salin_nama_frame())
@@ -2373,6 +2460,9 @@ class Studio(tk.Tk):
         tk.Checkbutton(edit_i, text="🌙 Inframerah sebagai latar (frame gelap)", variable=self.pakai_ir,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.ganti_latar_ir).pack(anchor="w", pady=(4, 0))
+        tk.Checkbutton(edit_i, text="📐 Garis lipatan 3-D: kuning = ujung tread, biru = pangkal riser",
+                       variable=self.garis_3d, bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
+                       wraplength=250, justify="left", command=self.ganti_garis_3d).pack(anchor="w")
         tk.Scale(edit_i, from_=0, to=1.0, resolution=.05, orient="horizontal", variable=self.warna_bidang,
                  command=lambda _: self.ganti_warna_bidang(), label="Warna ketinggian (tiap anak tangga satu warna)",
                  bg=PANEL, fg=INK, highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
@@ -2530,7 +2620,8 @@ class Studio(tk.Tk):
                                           "bantu_arah": float(self.bantu_arah.get()),
                                           "depth_mode": self.depth_mode.get(),
                                           "pakai_ir": bool(self.pakai_ir.get()),
-                                          "warna_bidang": float(self.warna_bidang.get())})
+                                          "warna_bidang": float(self.warna_bidang.get()),
+                                          "garis_3d": bool(self.garis_3d.get())})
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
@@ -3748,10 +3839,18 @@ class Studio(tk.Tk):
                                           f"(indeks {i} dari {b})"))
                 rgb=np.asanyarray(color.get_data()); raw=np.asanyarray(depth.get_data()); al=np.asanyarray(aligned.get_data())
                 cv2.imwrite(str(folder/"color_raw.png"),rgb); cv2.imwrite(str(folder/"depth_raw.png"),raw); cv2.imwrite(str(folder/"depth_aligned_to_color.png"),al); np.save(folder/"depth_raw.npy",raw); np.save(folder/"depth_aligned_to_color.npy",al)
-                for j,nm in ((1,"ir_left_raw.png"),(2,"ir_right_raw.png")):
+                ts_ir={}; ir_basi={}
+                for j,nm,sisi in ((1,"ir_left_raw.png","kiri"),(2,"ir_right_raw.png","kanan")):
                     ir=native.get_infrared_frame(j)
-                    if ir: cv2.imwrite(str(folder/nm),np.asanyarray(ir.get_data()))
-                info=self._info_profile(profile,color,depth); fm={"id":folder.name,"kategori":sesi.parent.name,"index_bag":i,"frame_number":int(depth.get_frame_number()),"timestamp_kamera_ms":float(depth.get_timestamp()),"format_depth":"Z16 native; meter=nilai*depth_scale","raw_bag_sumber":str(self.bag(sesi)),**info}
+                    if not ir: continue
+                    # Frameset pertama kadang membawa IR basi (105348: 201 ms lebih awal dari
+                    # depth). IR seperti itu tidak ditulis: menyesatkan saat melabel.
+                    if abs(float(ir.get_timestamp())-float(depth.get_timestamp()))>1.0:
+                        ir_basi[sisi]=round(float(ir.get_timestamp())-float(depth.get_timestamp()),1); continue
+                    cv2.imwrite(str(folder/nm),np.asanyarray(ir.get_data())); ts_ir[sisi]=float(ir.get_timestamp())
+                # Cap waktu tiap sensor ikut dicatat agar kesesuaian RGB-depth-IR
+                # per frame bisa diperiksa tanpa rekaman mentah (lihat sinkron.py).
+                info=self._info_profile(profile,color,depth); fm={"id":folder.name,"kategori":sesi.parent.name,"index_bag":i,"frame_number":int(depth.get_frame_number()),"timestamp_kamera_ms":float(depth.get_timestamp()),"timestamp_rgb_ms":float(color.get_timestamp()),"frame_number_rgb":int(color.get_frame_number()),"timestamp_ir_ms":ts_ir,**({"ir_basi_dilewati_ms":ir_basi} if ir_basi else {}),"format_depth":"Z16 native; meter=nilai*depth_scale","raw_bag_sumber":str(self.bag(sesi)),**info}
                 tulis_json(folder/"frame.json",fm); frame_meta[i] = {"folder":str(folder.relative_to(root)),"index_bag":i,"timestamp_ms":fm["timestamp_kamera_ms"]}
             meta_export["frames"] = sorted(frame_meta.values(), key=lambda x: x["index_bag"])
             meta_export["jumlah_frame"]=len(meta_export["frames"])
@@ -3903,34 +4002,55 @@ class Studio(tk.Tk):
             i = self.frame_paths.index(p)
         except ValueError:
             return
-        # Maju lebih diutamakan: arah label yang biasa adalah Space/next.
-        urut = [self.frame_paths[j] for j in (i + 1, i - 1, i + 2, i + 3)
-                if 0 <= j < len(self.frame_paths)]
+        # Frame aktif dulu (hanya model geser rolling shutter untuk baris info),
+        # lalu tetangga; maju lebih diutamakan: arah label yang biasa adalah Space/next.
+        urut = [p] + [self.frame_paths[j] for j in (i + 1, i - 1, i + 2, i + 3)
+                      if 0 <= j < len(self.frame_paths)]
         with self._syarat_prefetch:
             self._antrean_prefetch = urut
             self._syarat_prefetch.notify()
 
-    def _geser_rgb(self, p: Path, data: dict | None) -> tuple[int, int]:
-        """Geser depth/IR -> RGB untuk frame p (rolling shutter), disimpan di cache frame."""
+    def _ir_mentah(self, p: Path, data: dict | None) -> np.ndarray | None:
+        """IR kiri selaras-RGB lewat depth, belum dikoreksi rolling shutter (disimpan di cache frame)."""
+        if data is not None and "ir0" in data:
+            return data["ir0"]
+        try:
+            ir = ir_selaras.selaraskan(p, data["dep"] if data else self.kanvas.depth, koreksi=False)
+        except (OSError, KeyError, ValueError, cv2.error):
+            ir = None
+        if data is not None:
+            data["ir0"] = ir
+        return ir
+
+    def _geser_rgb(self, p: Path, data: dict | None) -> tuple:
+        """Model geser rolling shutter depth/IR -> RGB untuk frame p (ir_selaras.ukur_geser), di cache frame."""
         if data is not None and "geser" in data:
             return data["geser"]
+        ir = self._ir_mentah(p, data)
         try:
-            g = ir_selaras.geser_frame(p, data["dep"] if data else None)
+            g = ir_selaras.geser_frame(p, ir=ir) if ir is not None else ir_selaras.NOL
         except (OSError, KeyError, ValueError, cv2.error):
-            g = (0, 0)
+            g = ir_selaras.NOL
         if data is not None:
             data["geser"] = g
         return g
 
     def _depth_rgb(self, p: Path, data: dict | None) -> np.ndarray:
-        """Depth selaras yang sudah digeser ke posisi RGB; dipakai tampilan bantu dan pengukuran."""
+        """Depth selaras yang sudah dikoreksi ke posisi RGB, untuk PENGUKURAN (tepi tanpa sumber = 0)."""
         if data is not None and "dep_rgb" in data:
             return data["dep_rgb"]
         dep = data["dep"] if data is not None else self.kanvas.depth
-        hasil = ir_selaras.geser(dep, *self._geser_rgb(p, data), terdekat=True)
+        hasil = ir_selaras.terapkan(dep, self._geser_rgb(p, data), terdekat=True)
         if data is not None:
             data["dep_rgb"] = hasil
         return hasil
+
+    def _vis_frame(self, p: Path, data: dict | None, intrinsik: dict, mode: str) -> np.ndarray | None:
+        """Tampilan bantu satu frame di posisi RGB: dihitung dari depth apa adanya lalu dikoreksi
+        rolling shutter dengan tepi terisi (lihat visual_depth.hitung_dari_folder)."""
+        dep = data["dep"] if data is not None else self.kanvas.depth
+        return visual_depth.hitung_dari_folder(p, dep, intrinsik, mode, geser=self._geser_rgb(p, data),
+                                               ir=self._ir_mentah(p, data))
 
     def _depth_vis_kini(self, mode: str) -> np.ndarray | None:
         """Tampilan bantu frame aktif dari cache prefetch; IR dihitung di sini bila belum ada."""
@@ -3941,9 +4061,8 @@ class Studio(tk.Tk):
         # boleh menghitung ulang bidang (~90 ms) di setiap geseran.
         if vis is None and self.label_path is not None and self.kanvas.intrinsik is not None:
             try:
-                vis = visual_depth.hitung_dari_folder(self.label_path, self._depth_rgb(self.label_path, data),
-                                                      self.kanvas.intrinsik, mode)
-            except (OSError, KeyError, ValueError):
+                vis = self._vis_frame(self.label_path, data, self.kanvas.intrinsik, mode)
+            except (OSError, KeyError, ValueError, cv2.error):
                 vis = None
             if data is not None and vis is not None:
                 data.setdefault("vis", {})[mode] = vis
@@ -3981,6 +4100,12 @@ class Studio(tk.Tk):
                     if data is None:
                         continue
                     self._simpan_cache(p, data)
+                if p == self.label_path:
+                    # Frame aktif: tampilan bantunya dihitung thread UI saat digambar;
+                    # di sini cukup model geser, lalu baris info diperbarui lewat antrean.
+                    self._geser_rgb(p, data)
+                    self.q.put(("info_frame", p))
+                    continue
                 perlu = set()
                 if self.kanvas.depth_alpha > 0:
                     perlu.add(self.kanvas.depth_mode)
@@ -3988,11 +4113,13 @@ class Studio(tk.Tk):
                     perlu.add("ir")
                 if self.kanvas.warna_bidang > 0:
                     perlu.add("bidang")
+                if self.kanvas.garis_3d:
+                    perlu.add("garis_3d")
                 vis = data.setdefault("vis", {})
                 info = baca_json(p / "frame.json", {}) if perlu - set(vis) else {}
                 for mode in perlu - set(vis):
                     if "intrinsics_rgb_native" in info:
-                        v = visual_depth.hitung_dari_folder(p, self._depth_rgb(p, data), self._intrinsics(info), mode)
+                        v = self._vis_frame(p, data, self._intrinsics(info), mode)
                         if v is not None:
                             vis[mode] = v
                 if data.get("peta") is None and model_convnext_siap():
@@ -4546,6 +4673,13 @@ class Studio(tk.Tk):
         self.kanvas.render(); self.simpan_preferensi(); self._fokus_kanvas_label()
         if self.kanvas.pakai_ir and self.label_path and not (self.label_path / "ir_left_raw.png").exists():
             self.status.set("Frame ini tidak punya berkas inframerah; latar tetap RGB.")
+    def ganti_garis_3d(self):
+        self.kanvas.garis_3d = bool(self.garis_3d.get())
+        self.kanvas.render(); self.simpan_preferensi(); self._fokus_kanvas_label()
+        if self.kanvas.garis_3d:
+            self.status.set("Garis lipatan dari BENTUK 3-D (depth): bayangan dan noda tidak memunculkan garis. "
+                            "Kuning = ujung/bibir tread, biru = pangkal riser. Tidak muncul bila depth kosong/jauh.")
+
     def ganti_warna_bidang(self):
         self.kanvas.warna_bidang = float(self.warna_bidang.get())
         self.kanvas.render(); self.simpan_preferensi()
@@ -4596,16 +4730,8 @@ class Studio(tk.Tk):
                 messagebox.showinfo("Pilih frame", "Pilih satu frame ekspor dahulu.", parent=self)
             return
         kategori = (self.label_info or {}).get("kategori", "tangga_naik")
-        peta = KELAS_MODE.get(kategori, KELAS_MODE["tangga_naik"])
         h, w = self.kanvas.rgb.shape[:2]
-        baris, jumlah = [], {}
-        for mode in ("acuan", "objek"):
-            nama_kelas = peta[mode]; cls = KELAS_YOLO[nama_kelas]
-            sah = [poly for poly in self.kanvas.poligon[mode] if len(poly) >= 3]
-            jumlah[nama_kelas] = len(sah)
-            for poly in sah:
-                norm = " ".join(f"{v:.6f}" for pt in poly for v in (pt[0]/w, pt[1]/h))
-                baris.append(f"{cls} {norm}")
+        baris, jumlah = baris_label_yolo(self.kanvas.poligon, kategori, w, h)
         if not baris:
             # Frame tanpa poligon. Mask kosong sah sebagai contoh latar (lantai
             # atau bordes tanpa tangga) hanya bila manusia sudah menandainya
@@ -4700,18 +4826,28 @@ class Studio(tk.Tk):
             label = frame / "label_yolo_seg.txt"
             if not label.exists():
                 continue
-            try:
-                kelas = {int(baris.split(maxsplit=1)[0]) for baris in label.read_text(encoding="utf-8").splitlines()
-                         if baris.strip()}
-            except (OSError, ValueError):
-                dikeluarkan_tidak_lengkap += 1
-                continue
+            # Label disusun ulang dari poligon label_draft.json (yang terlihat di
+            # kanvas), bukan disalin: 15 berkas lama masih memuat baris kelas 4
+            # "lantai" yang sudah ditarik dan tidak ada di dataset_yolo_seg.yaml.
+            draft = baca_json(frame / "label_draft.json", {})
+            img = cv2.imread(str(frame / "color_raw.png"), cv2.IMREAD_GRAYSCALE)
+            if draft.get("poligon") and img is not None:
+                isi, _ = baris_label_yolo(draft["poligon"], info_frame.get("kategori", "tangga_naik"),
+                                          img.shape[1], img.shape[0])
+            else:
+                try:
+                    isi = [b for b in label.read_text(encoding="utf-8").splitlines()
+                           if b.strip() and int(b.split(maxsplit=1)[0]) in KELAS_YOLO.values()]
+                except (OSError, ValueError):
+                    dikeluarkan_tidak_lengkap += 1
+                    continue
+            kelas = {int(b.split(maxsplit=1)[0]) for b in isi}
             if not wajib.issubset(kelas):
                 dikeluarkan_tidak_lengkap += 1
                 continue
             stem = f"{self.sesi.name}_{frame.parent.parent.name}_{frame.name}"
             shutil.copy2(frame / "color_raw.png", root / "images" / split / f"{stem}.png")
-            shutil.copy2(label, root / "labels" / split / f"{stem}.txt")
+            (root / "labels" / split / f"{stem}.txt").write_text("\n".join(isi) + "\n", encoding="utf-8")
             count += 1
         tulis_json(root / "dataset_yolo_seg.yaml", {"path": str(root), "train": "images/train", "val": "images/val", "test": "images/test", "names": {str(v): k for k, v in sorted(KELAS_YOLO.items(), key=lambda x: x[1])}})
         self.status.set(f"Dataset YOLO diperbarui: {count} frame lengkap masuk split {split}; "
@@ -4816,6 +4952,20 @@ class Studio(tk.Tk):
                     self.after(100, panaskan_utas_ini)
                 elif k=="model_gagal":
                     self.status.set(f"Pengusul label belum siap: {v}")
+                elif k=="info_frame":
+                    if v == self.label_path:
+                        self._perbarui_info_rekaman(v)
+                elif k=="sinkron_selesai":
+                    sesi_s, r = v
+                    self._sinkron_jalan = None
+                    if "galat" in r:
+                        self.status.set(f"Cek sinkron {sesi_s.name} gagal: {r['galat']}")
+                    else:
+                        self.status.set(f"{sesi_s.name}: {sinkron.teks_ringkas(r)}")
+                    if sesi_s == self.sesi:
+                        self._segarkan_info_tinjau()
+                    if self.label_path is not None and self.label_path.parent.parent.parent == sesi_s:
+                        self._perbarui_info_rekaman(self.label_path)
                 elif k=="batch_auto_selesai":
                     jadi, gagal = v; self.muat_frame()
                     self.status.set(f"Batch auto-label selesai: {jadi} frame dibuat, {gagal} gagal. Periksa dan rapikan hasilnya.")
