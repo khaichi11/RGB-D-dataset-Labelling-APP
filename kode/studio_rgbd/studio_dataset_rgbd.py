@@ -682,7 +682,13 @@ class KanvasLabel(tk.Canvas):
             # Inframerah selaras sebagai gambar dasar (frame gelap); RGB bila IR tidak ada.
             ir = self.penyedia_depth_vis("ir")
             if ir is not None:
-                latar = cv2.cvtColor(ir, cv2.COLOR_GRAY2RGB) if ir.ndim == 2 else ir
+                ir_rgb = cv2.cvtColor(ir, cv2.COLOR_GRAY2RGB) if ir.ndim == 2 else ir.copy()
+                # Piksel tanpa data IR (tepi hasil geser ke RGB, lubang depth) diisi
+                # RGB asli agar tidak muncul bar/lubang hitam; gambar tetap penuh.
+                kosong = ir_rgb.max(2) == 0
+                if kosong.any():
+                    ir_rgb[kosong] = self.rgb[kosong]
+                latar = ir_rgb
         out = _pertajam(_cerahkan(latar, self.kecerahan), self.ketajaman)
         if self.warna_bidang > 0 and self.depth is not None and self.intrinsik is not None:
             bid = self.penyedia_depth_vis("bidang") if self.penyedia_depth_vis else None
@@ -726,7 +732,11 @@ class KanvasLabel(tk.Canvas):
                 self._depth_vis = vis
                 self._depth_vis_key, self._depth_vis_obj = kunci, self.depth
             if self._depth_vis is not None:                   # IR tidak ada: tampilkan RGB saja
-                out = cv2.addWeighted(out, 1 - self.depth_alpha, self._depth_vis, self.depth_alpha, 0)
+                # Overlay hanya di piksel yang punya data; tepi hasil geser dan lubang
+                # depth menampilkan gambar dasar, bukan bar hitam/transparan.
+                campur = cv2.addWeighted(out, 1 - self.depth_alpha, self._depth_vis, self.depth_alpha, 0)
+                ada = self._depth_vis.max(2) > 0
+                out = np.where(ada[..., None], campur, out)
         self._tampil_key, self._tampil_cache = key, out
         return out
 
