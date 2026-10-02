@@ -15,6 +15,8 @@ proyektor dan (2) berada di posisi kamera yang berbeda dari RGB.
     konvensi transpos hanya 32-40%.
 Piksel RGB tanpa depth tidak punya padanan IR dan diisi dari tetangganya bila
 lubangnya kecil, selain itu hitam.
+(3) Sisa geser akibat rolling shutter RGB saat kamera bergerak dikoreksi per
+    frame (geser_ke_rgb), agar tepi di IR jatuh di tempat yang sama dengan RGB.
 """
 from __future__ import annotations
 
@@ -43,7 +45,7 @@ def bersihkan_titik(ir: np.ndarray, ukuran: int = 7) -> np.ndarray:
     return cv2.bilateralFilter(tambal, 5, 18, 3)
 
 
-def selaraskan(folder: Path, depth_selaras: np.ndarray | None = None) -> np.ndarray | None:
+def selaraskan(folder: Path, depth_selaras: np.ndarray | None = None, koreksi: bool = True) -> np.ndarray | None:
     """IR kiri (tanpa pola titik) dalam koordinat citra RGB, uint8 abu-abu; None bila tidak ada IR."""
     folder = Path(folder)
     f_ir = folder / "ir_left_raw.png"
@@ -77,4 +79,42 @@ def selaraskan(folder: Path, depth_selaras: np.ndarray | None = None) -> np.ndar
         kecil = lubang & (cv2.erode(lubang, np.ones((9, 9), np.uint8)) == 0)
         out[lubang > 0] = 0
         out = cv2.inpaint(out, kecil.astype(np.uint8), 3, cv2.INPAINT_TELEA)
-    return cv2.createCLAHE(2.0, (8, 8)).apply(out)
+    out = cv2.createCLAHE(2.0, (8, 8)).apply(out)
+    if koreksi:
+        rgb = cv2.imread(str(folder / "color_raw.png"), cv2.IMREAD_GRAYSCALE)
+        if rgb is not None:
+            dx, dy = geser_ke_rgb(out, rgb)
+            if dx or dy:
+                out = cv2.warpAffine(out, np.float32([[1, 0, dx], [0, 1, dy]]), (out.shape[1], out.shape[0]),
+                                     flags=cv2.INTER_LINEAR, borderValue=0)
+    return out
+
+
+def _gradien(g: np.ndarray) -> np.ndarray:
+    g = cv2.GaussianBlur(g.astype(np.float32), (0, 0), 1.2)
+    m = cv2.magnitude(cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1))
+    return m / (m.mean() + 1e-6)
+
+
+def geser_ke_rgb(ir: np.ndarray, rgb_abu: np.ndarray, ry: int = 10, rx: int = 4) -> tuple[int, int]:
+    """Geser (dx, dy) piksel yang membuat IR selaras paling cocok dengan RGB.
+
+    Sensor RGB D435 membaca baris demi baris (rolling shutter) sedangkan IR
+    memotret sekaligus; saat kamera naik-turun waktu berjalan, tepi anak tangga
+    di IR bisa bergeser beberapa piksel dari RGB (diukur: 12% frame >= 3 px
+    vertikal, maks. 8 px, selalu ke atas). Pergeseran dicari dengan mencocokkan
+    peta gradien (matchTemplate, setengah resolusi, +-2*ry baris dan +-2*rx kolom)
+    dan hanya dipakai bila RGB cukup terang dan kecocokannya jelas; pada frame
+    gelap RGB tidak punya tepi sehingga IR dibiarkan apa adanya.
+    """
+    if float(rgb_abu.mean()) < 35:
+        return 0, 0
+    a = _gradien(cv2.resize(rgb_abu, None, fx=.5, fy=.5, interpolation=cv2.INTER_AREA))
+    b = _gradien(cv2.resize(ir, None, fx=.5, fy=.5, interpolation=cv2.INTER_AREA))
+    pola = b[ry:-ry, rx:-rx]
+    hasil = cv2.matchTemplate(a, pola, cv2.TM_CCOEFF_NORMED)
+    _, maks, _, (x, y) = cv2.minMaxLoc(hasil)
+    nol = float(hasil[ry, rx])
+    if maks < 0.3 or maks - nol < 0.02:
+        return 0, 0
+    return 2 * (x - rx), 2 * (y - ry)
