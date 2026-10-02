@@ -59,7 +59,7 @@ if __package__:
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
     from .ui_bantu import kolom_gulir
-    from . import visual_depth
+    from . import visual_depth, ir_selaras
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -74,7 +74,7 @@ else:
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
     from studio_rgbd.ui_bantu import kolom_gulir
-    from studio_rgbd import visual_depth
+    from studio_rgbd import visual_depth, ir_selaras
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -2102,6 +2102,11 @@ class Studio(tk.Tk):
         tid = CR.tangga_untuk(d, CR.indeks_frame(p.name))
         if tid:
             baris.append("🪜 Tangga " + CR.label_tangga(tid, CR.baca_tangga(self.root_data)))
+        with self._kunci_cache:
+            g = (self._cache_frame.get(p) or {}).get("geser")
+        if g and (g[0] or g[1]):
+            baris.append(f"↕ RGB bergeser dari depth/IR {abs(g[0])} px mendatar, {abs(g[1])} px vertikal"
+                         " (kamera bergerak); lapisan depth/IR dan pengukuran sudah digeser ke RGB")
         wf = CR.waktu_frame(self.label_info or {})
         if wf:
             baris.append(f"🕒 Diambil {CR.format_waktu(wf)}")
@@ -3773,6 +3778,28 @@ class Studio(tk.Tk):
             self._antrean_prefetch = urut
             self._syarat_prefetch.notify()
 
+    def _geser_rgb(self, p: Path, data: dict | None) -> tuple[int, int]:
+        """Geser depth/IR -> RGB untuk frame p (rolling shutter), disimpan di cache frame."""
+        if data is not None and "geser" in data:
+            return data["geser"]
+        try:
+            g = ir_selaras.geser_frame(p, data["dep"] if data else None)
+        except (OSError, KeyError, ValueError, cv2.error):
+            g = (0, 0)
+        if data is not None:
+            data["geser"] = g
+        return g
+
+    def _depth_rgb(self, p: Path, data: dict | None) -> np.ndarray:
+        """Depth selaras yang sudah digeser ke posisi RGB; dipakai tampilan bantu dan pengukuran."""
+        if data is not None and "dep_rgb" in data:
+            return data["dep_rgb"]
+        dep = data["dep"] if data is not None else self.kanvas.depth
+        hasil = ir_selaras.geser(dep, *self._geser_rgb(p, data), terdekat=True)
+        if data is not None:
+            data["dep_rgb"] = hasil
+        return hasil
+
     def _depth_vis_kini(self, mode: str) -> np.ndarray | None:
         """Tampilan bantu frame aktif dari cache prefetch; IR dihitung di sini bila belum ada."""
         with self._kunci_cache:
@@ -3782,7 +3809,8 @@ class Studio(tk.Tk):
         # boleh menghitung ulang bidang (~90 ms) di setiap geseran.
         if vis is None and self.label_path is not None and self.kanvas.intrinsik is not None:
             try:
-                vis = visual_depth.hitung_dari_folder(self.label_path, self.kanvas.depth, self.kanvas.intrinsik, mode)
+                vis = visual_depth.hitung_dari_folder(self.label_path, self._depth_rgb(self.label_path, data),
+                                                      self.kanvas.intrinsik, mode)
             except (OSError, KeyError, ValueError):
                 vis = None
             if data is not None and vis is not None:
@@ -3832,7 +3860,7 @@ class Studio(tk.Tk):
                 info = baca_json(p / "frame.json", {}) if perlu - set(vis) else {}
                 for mode in perlu - set(vis):
                     if "intrinsics_rgb_native" in info:
-                        v = visual_depth.hitung_dari_folder(p, data["dep"], self._intrinsics(info), mode)
+                        v = visual_depth.hitung_dari_folder(p, self._depth_rgb(p, data), self._intrinsics(info), mode)
                         if v is not None:
                             vis[mode] = v
                 if data.get("peta") is None and model_convnext_siap():
@@ -4558,25 +4586,81 @@ class Studio(tk.Tk):
                         f"{dikeluarkan_tidak_lengkap} label tidak lengkap tidak dipakai. Raw tetap ada di sesi.")
 
     def hitung_ukuran(self):
+        """Tinggi tiap riser terhadap tread tepat di bawahnya (per anak tangga).
+
+        Dulu SEMUA tread digabung menjadi satu bidang; pada tangga, tread berbeda
+        ketinggian sehingga bidang gabungan tidak pernah datar dan pengukuran
+        hampir selalu gagal. Kini tiap riser dipasangkan dengan tread yang
+        menempel di bawahnya. Riser yang tingginya menyimpang > 2 cm dari median
+        anak tangga lain ditandai: biasanya tanda label atau depth bermasalah.
+        """
         self.jadwalkan_autosave()
         if not self.label_path or not self.label_info:return
-        obj,ref=self._mask("objek"),self._mask("acuan")
-        if obj is None or ref is None or obj.sum()<3 or ref.sum()<3:return
         if "intrinsics_rgb_native" not in self.label_info:
             self.ukur_status.set("frame.json frame ini tidak memuat intrinsics kamera. "
                                  "Ekspor ulang frame ini agar metadata kamera ikut tertulis.")
             return
+        bentuk = self.kanvas.rgb.shape[:2] if self.kanvas.rgb is not None else None
+        if bentuk is None:
+            return
+        def masker(poly):
+            m = np.zeros(bentuk, np.uint8)
+            cv2.fillPoly(m, [np.round(poly).astype(np.int32)], 1)
+            return m
+        riser = [masker(p) for p in self.kanvas.poligon["objek"] if len(p) >= 3]
+        tread = [masker(p) for p in self.kanvas.poligon["acuan"] if len(p) >= 3]
+        if not riser or not tread:
+            return
         try:
-            # WAJIB lewat _intrinsics(): frame.json menyimpan intrinsics
-            # bersarang (intrinsics_rgb_native.ppx dst.), sedangkan ukur()
-            # mengharapkan kunci datar cx/cy/fx/fy. Dulu label_info dioper
-            # mentah -> KeyError 'cx' tertelan except -> mode ukur di tab ini
-            # tidak pernah berhasil.
-            hasil=ukur(obj,ref,self.kanvas.depth,self._intrinsics(self.label_info))
-            if hasil.get("ok"):
-                tulis_json(self.label_path/"hasil_ukur_depth.json",hasil)
-                self.ukur_status.set(f"Tinggi: {hasil['tinggi_cm']:.1f} cm\nJarak median objek: {hasil['jarak_median_objek_m']:.2f} m\nRMS bidang: {hasil['rms_bidang_acuan_mm']:.1f} mm")
-            else:self.ukur_status.set(hasil.get("alasan","Depth belum cukup."))
+            # Depth digeser ke posisi RGB (tempat label digambar) sebelum RANSAC.
+            with self._kunci_cache:
+                data_ukur = self._cache_frame.get(self.label_path)
+            depth = self._depth_rgb(self.label_path, data_ukur)
+            k = self._intrinsics(self.label_info)
+            hasil_semua = []
+            for i, mr in enumerate(riser, 1):
+                # Tread di bawah riser: yang paling banyak beririsan dengan pita
+                # 12 px tepat di bawah tepi bawah riser.
+                turun = np.zeros_like(mr); turun[12:] = mr[:-12]
+                pita = (turun > 0) & (mr == 0)
+                irisan = [int((pita & (mt > 0)).sum()) for mt in tread]
+                j = int(np.argmax(irisan))
+                if irisan[j] > 0:
+                    h = ukur(mr, tread[j], depth, k)
+                    hasil_semua.append((i, h, None) if h.get("ok") else (i, None, h.get("alasan", "depth kurang")))
+                    continue
+                # Riser terbawah berdiri di lantai (bukan tread): pita lantai 40 px
+                # tepat di bawahnya, tanpa area berlabel, menjadi bidang acuan
+                # (sama dengan pelacak). Diterima hanya bila tingginya wajar.
+                semua_label = np.zeros_like(mr)
+                for m_ in riser + tread:
+                    semua_label |= m_
+                lantai = np.zeros_like(mr)
+                for dy_ in range(1, 41):
+                    lantai[dy_:] |= mr[:-dy_]
+                lantai = (lantai > 0) & (semua_label == 0)
+                h = ukur(mr, lantai.astype(np.uint8), depth, k) if lantai.sum() > 500 else {"ok": False}
+                if h.get("ok") and 8 <= h["tinggi_cm"] <= 30:
+                    h["acuan"] = "lantai"
+                    hasil_semua.append((i, h, None))
+                else:
+                    hasil_semua.append((i, None, "tidak ada tread di bawahnya, lantai tak terukur"))
+            tinggi = [h["tinggi_cm"] for _, h, _ in hasil_semua if h]
+            median = float(np.median(tinggi)) if tinggi else None
+            baris = []
+            for i, h, alasan in hasil_semua:
+                if h is None:
+                    baris.append(f"Riser {i}: gagal ({alasan})")
+                    continue
+                tanda = "  ⚠ menyimpang" if median is not None and len(tinggi) >= 3 and abs(h["tinggi_cm"] - median) > 2 else ""
+                acuan = ", acuan lantai" if h.get("acuan") == "lantai" else ""
+                baris.append(f"Riser {i}: {h['tinggi_cm']:.1f} cm (jarak {h['jarak_median_objek_m']:.1f} m{acuan}){tanda}")
+            if median is not None:
+                baris.append(f"Median tinggi riser: {median:.1f} cm dari {len(tinggi)} anak tangga")
+            self.ukur_status.set("\n".join(baris))
+            tulis_json(self.label_path / "hasil_ukur_depth.json",
+                       {"per_riser": [{"riser": i, **(h or {"ok": False, "alasan": alasan})} for i, h, alasan in hasil_semua],
+                        "median_tinggi_cm": median})
         except Exception as e:self.ukur_status.set(f"Belum dapat mengukur: {e}")
 
     # ----- util / antrian -----

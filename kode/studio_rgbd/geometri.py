@@ -26,6 +26,11 @@ def titik_dari_masker(masker: np.ndarray, depth: np.ndarray, k: dict, langkah: i
 def pasang_bidang(titik: np.ndarray, rng: np.random.Generator) -> tuple | None:
     if len(titik) < MIN_TITIK:
         return None
+    # Derau depth D435 tumbuh kira-kira dengan kuadrat jarak (~1% jarak): tebal
+    # bidang dan RMS maksimum ikut jarak median, dengan batas bawah nilai lama.
+    z = float(np.median(titik[:, 2]))
+    tebal = max(TEBAL_BIDANG, 0.004 * z * z)
+    rms_maks = max(RMS_MAKS, 0.005 * z * z)
     terbaik, jumlah = None, 0
     for tri in rng.integers(0, len(titik), size=(220, 3)):
         a, b, c = titik[tri]
@@ -34,7 +39,7 @@ def pasang_bidang(titik: np.ndarray, rng: np.random.Generator) -> tuple | None:
         if panjang < 1e-9:
             continue
         normal /= panjang
-        inlier = np.abs(titik @ normal - normal @ a) < TEBAL_BIDANG
+        inlier = np.abs(titik @ normal - normal @ a) < tebal
         if int(inlier.sum()) > jumlah:
             terbaik, jumlah = inlier, int(inlier.sum())
     if terbaik is None or jumlah < MIN_TITIK or jumlah / len(titik) < RASIO_INLIER_MIN:
@@ -44,4 +49,4 @@ def pasang_bidang(titik: np.ndarray, rng: np.random.Generator) -> tuple | None:
     normal = np.linalg.svd(q - pusat, full_matrices=False)[2][-1]
     normal /= np.linalg.norm(normal)
     rms = float(np.sqrt(np.mean(((q - pusat) @ normal) ** 2)))
-    return None if rms > RMS_MAKS else (normal, q, pusat, rms)
+    return None if rms > rms_maks else (normal, q, pusat, rms)
