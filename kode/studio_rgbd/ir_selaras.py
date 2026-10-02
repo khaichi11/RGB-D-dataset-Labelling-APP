@@ -185,8 +185,8 @@ def ukur_geser(ir: np.ndarray, rgb_abu: np.ndarray, ry: int = 10, rx: int = 4,
     Nilai berlaku di baris pertama dan terakhir, linear di antaranya. Satu geser
     untuk seluruh citra (geser_ke_rgb, cara lama) tidak cukup: baris RGB dibaca
     dari atas ke bawah, jadi saat kamera bergerak baris bawah tertinggal lebih
-    jauh dari IR daripada baris atas. Terukur pada 539 frame terang berlabel:
-    geser vertikal pita atas/tengah/bawah rerata 0,7 / 1,9 / 3,8 px; menurut
+    jauh dari IR daripada baris atas. Terukur pada 604 frame terang berlabel:
+    geser vertikal pita atas/tengah/bawah rerata 0,7 / 2,0 / 3,9 px; menurut
     model ini baris bawah median 5 px lebih jauh daripada baris atas (bukti:
     Train-RGB-D-Model/bukti/final_d435/eksperimen_semua_data_20260925/auto_label/
     hasil_uji_geser_per_baris.txt).
@@ -198,8 +198,8 @@ def ukur_geser(ir: np.ndarray, rgb_abu: np.ndarray, ry: int = 10, rx: int = 4,
     dipasang ke pita sisanya (berbobot kecocokan, pencilan > 3 px dibuang).
     Model ditolak (NOL) bila tidak lebih cocok daripada tanpa geser; kemiringan
     yang tidak masuk akal jatuh ke geser rata (satu nilai seluruh citra).
-    Uji pada 1.084 frame berlabel: frame dengan pita yang meleset >= 3 px turun
-    dari 57-59% (tanpa koreksi / cara lama) ke 7-8%.
+    Uji pada 1.083 frame berlabel: frame dengan pita yang meleset >= 3 px turun
+    dari 58-62% (tanpa koreksi / cara lama) ke 6%.
     """
     if ir is None or rgb_abu is None or float(rgb_abu.mean()) < 3:   # hitam total: tak ada yang dicocokkan
         return NOL
