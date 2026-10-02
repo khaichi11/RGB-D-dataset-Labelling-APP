@@ -16,6 +16,7 @@ folder ekspor ``frame_000123`` dan slider potongan di tab Tinjau.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -227,3 +228,73 @@ def warna_rekaman(data: dict, daftar_tangga: dict) -> str | None:
 
 def warna_untuk_tangga(tid: str | None, daftar_tangga: dict) -> str | None:
     return (daftar_tangga.get(tid) or {}).get("warna") if tid else None
+
+
+# ------------------------------------------------------------------ ukuran berkas
+BAGIAN = {"source": "mentah", "derived": "turunan", "exports": "ekspor"}
+
+
+def ukuran_rekaman(sesi: Path) -> dict:
+    """Byte dan jumlah berkas per bagian rekaman.
+
+    mentah = source/ (rekaman .db3/.bag dari kamera), turunan = derived/
+    (pratinjau MP4, cache depth, indeks frame; bisa dibuat ulang dari mentah),
+    ekspor = exports/ (frame dataset + label), lain = edit/, catatan.json, dst.
+    Hasil: {"mentah": [byte, berkas], ..., "total": [byte, berkas], "frame_ekspor": n}.
+    """
+    hasil = {k: [0, 0] for k in ("mentah", "turunan", "ekspor", "lain")}
+
+    def tambah(e, kunci):
+        try:
+            if e.is_dir(follow_symlinks=False):
+                with os.scandir(e.path) as it:
+                    for anak in it:
+                        tambah(anak, kunci)
+            elif e.is_file(follow_symlinks=False):
+                hasil[kunci][0] += e.stat(follow_symlinks=False).st_size
+                hasil[kunci][1] += 1
+        except OSError:
+            pass
+
+    try:
+        with os.scandir(sesi) as it:
+            for e in it:
+                tambah(e, BAGIAN.get(e.name, "lain"))
+    except OSError:
+        pass
+    hasil["total"] = [sum(v[0] for v in hasil.values()), sum(v[1] for v in hasil.values())]
+    fr = Path(sesi) / "exports" / "frames"
+    try:
+        hasil["frame_ekspor"] = sum(1 for d in os.scandir(fr) if d.name.startswith("frame_") and d.is_dir())
+    except OSError:
+        hasil["frame_ekspor"] = 0
+    return hasil
+
+
+def format_ukuran(b: float) -> str:
+    """Byte -> '8,9 GB' / '867 MB' / '94 KB' (satuan desimal, sama dengan pengelola berkas Ubuntu)."""
+    for satuan, f in (("GB", 1e9), ("MB", 1e6), ("KB", 1e3)):
+        if b >= f:
+            v = b / f
+            return (f"{v:.1f}" if v < 100 else f"{v:.0f}").replace(".", ",") + " " + satuan
+    return f"{int(b)} B"
+
+
+def ribuan(n: int) -> str:
+    return f"{int(n):,}".replace(",", ".")
+
+
+def teks_ukuran(u: dict) -> str:
+    """Dua baris untuk kartu rekaman."""
+    t = u["total"]
+    baris = [f"💾 Total {format_ukuran(t[0])} · {ribuan(t[1])} berkas"]
+    rinci = [f"{nama} {format_ukuran(u[k][0])}" for k, nama in (("mentah", "mentah"), ("turunan", "turunan"),
+                                                                ("ekspor", "ekspor")) if u[k][1]]
+    n = u.get("frame_ekspor", 0)
+    if n and u["ekspor"][1]:
+        rinci[-1] += f" ({ribuan(n)} frame, ≈{format_ukuran(u['ekspor'][0] / n)}/frame)"
+    if u["lain"][0] >= 1e6:                       # mis. folder hasil uji lama di dalam rekaman
+        rinci.append(f"lain {format_ukuran(u['lain'][0])}")
+    if rinci:
+        baris.append("     " + " · ".join(rinci))
+    return "\n".join(baris)

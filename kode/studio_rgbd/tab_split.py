@@ -29,12 +29,13 @@ from PIL import Image, ImageTk
 
 try:
     from .segmentasi_convnext_depth import akar_aplikasi
-    from . import catatan_rekaman as CR, qa_label, unggah_hf
+    from . import catatan_rekaman as CR, qa_label, sinkron, unggah_hf
     from .ui_bantu import kolom_gulir
 except ImportError:
     from segmentasi_convnext_depth import akar_aplikasi
     import catatan_rekaman as CR
     import qa_label
+    import sinkron
     import unggah_hf
     from ui_bantu import kolom_gulir
 
@@ -873,8 +874,8 @@ class TabSplit:
     def _qa(self, d: Path) -> dict | None:
         """Hasil pemeriksaan frame, None bila belum diperiksa atau labelnya berubah sejak itu."""
         q = self.qa.get(self._kunci_qa(d))
-        if not q:
-            return None
+        if not q or q.get("versi", 1) != qa_label.VERSI:
+            return None                                      # belum diperiksa, atau dengan aturan lama
         try:
             if abs((d / "label_draft.json").stat().st_mtime - q.get("waktu_label", 0)) > 1:
                 return None                                  # label sudah disunting: perlu diperiksa ulang
@@ -925,7 +926,8 @@ class TabSplit:
             st._pilih_indeks_frame(st.frame_paths.index(d))
 
     def ringkasan_csv(self) -> None:
-        """Tabel per rekaman untuk naskah: waktu, lokasi, lux, kecerahan gambar, jumlah frame per set."""
+        """Tabel per rekaman untuk naskah: waktu, lokasi, lux, kecerahan gambar, jumlah frame per set,
+        ukuran berkas, dan hasil cek sinkron RGB-depth-IR."""
         if self._sibuk or not self.rekaman:
             return
         self._sibuk = True
@@ -952,6 +954,9 @@ class TabSplit:
                             terang.append(CR.kecerahan(cv2.cvtColor(g, cv2.COLOR_BGR2RGB))[0])
                     per = {k: sum(1 for d in fr if self._set_frame(d) == k) for k in ("train", "val", "test")}
                     c = catatan.get(r) or {}
+                    u = CR.ukuran_rekaman(sesi)
+                    sk = sinkron.baca(sesi).get("ringkasan") or {}
+                    mb = lambda b: round(b / 1e6, 1)
                     if mulai:
                         waktu_semua.append(mulai)
                         periode_hitung[CR.periode(mulai.hour)] = periode_hitung.get(CR.periode(mulai.hour), 0) + 1
@@ -969,6 +974,13 @@ class TabSplit:
                         "tangga": c.get("tangga", ""), "selesai": "ya" if c.get("selesai") else "",
                         "nama_tangga": (self.daftar_tangga.get(c.get("tangga", "")) or {}).get("nama", ""),
                         "tangga_scene": ";".join(sorted({sc.get("tangga") for sc in c.get("scene", []) if sc.get("tangga")})),
+                        "ukuran_total_mb": mb(u["total"][0]), "mentah_mb": mb(u["mentah"][0]),
+                        "turunan_mb": mb(u["turunan"][0]), "ekspor_mb": mb(u["ekspor"][0]),
+                        "jumlah_berkas": u["total"][1],
+                        "ekspor_mb_per_frame": mb(u["ekspor"][0] / u["frame_ekspor"]) if u["frame_ekspor"] else "",
+                        "sinkron_frame_diperiksa": sk.get("frame", ""),
+                        "sinkron_satu_jepretan": sk.get("satu_jepretan", ""),
+                        "selisih_rgb_depth_maks_ms": sk.get("selisih_maks_ms", ""),
                     })
                 with tujuan.open("w", newline="", encoding="utf-8") as f:
                     wtr = csv.DictWriter(f, fieldnames=list(baris[0]))

@@ -93,7 +93,7 @@ def gambar(depth: np.ndarray, mode: str, intrinsik: dict | None) -> np.ndarray:
         n /= np.linalg.norm(n, axis=2, keepdims=True) + 1e-9
         if mode == "bidang":
             out = _bidang(d, n, sah, k)
-            out[~sah] = 0
+            out[~_tambal_lubang(sah)] = 0
             return out
         if mode == "normal":
             out = ((n * np.array([1, -1, -1], np.float32) * 0.5 + 0.5) * 255).astype(np.uint8)
@@ -103,6 +103,39 @@ def gambar(depth: np.ndarray, mode: str, intrinsik: dict | None) -> np.ndarray:
             out = np.dstack([g, g, (g * 0.94).astype(np.uint8)])   # sedikit hangat agar tidak tertukar dengan mask biru
     out[~sah] = 0
     return out
+
+
+def _tambal_lubang(mask: np.ndarray, porsi_maks: float = 0.0015) -> np.ndarray:
+    """Isi lubang kecil yang TERTUTUP mask (tidak menyentuh tepi citra, <= porsi_maks luas citra).
+
+    Untuk tampilan Bidang: bercak derau depth di tengah lantai/tread membuat
+    permukaan tampak "bolong" (abu-abu atau tanpa warna). Hanya lubang kecil
+    yang dikelilingi bidang sejenis yang diisi; riser tipis di antara dua tread
+    tidak tertutup satu bidang sehingga tidak ikut terisi.
+    """
+    inv = (~mask).astype(np.uint8)
+    nk, lab, st, _ = cv2.connectedComponentsWithStats(inv, 4)
+    h, w = mask.shape
+    x, y, ww, hh, luas = (st[:, i] for i in range(5))
+    isi = (luas <= porsi_maks * mask.size) & (x > 0) & (y > 0) & (x + ww < w) & (y + hh < h)
+    isi[0] = False
+    return mask | isi[lab]
+
+
+def _histeresis(kuat: np.ndarray, lemah: np.ndarray) -> np.ndarray:
+    """Piksel lemah diterima bila tersambung (8-tetangga) ke komponen yang memuat piksel kuat."""
+    nk, lab = cv2.connectedComponents((kuat | lemah).astype(np.uint8), connectivity=8)
+    ada = np.zeros(nk, bool)
+    ada[np.unique(lab[kuat])] = True
+    ada[0] = False
+    return ada[lab]
+
+
+def _datar_tegak(kos: np.ndarray, d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Topeng bidang datar dan tegak dari kosinus normal terhadap "atas" (lihat _bidang)."""
+    datar = _tambal_lubang(_histeresis(kos > 0.85, (kos > 0.75) & (d < 2.0)))
+    tegak = _tambal_lubang(_histeresis((np.abs(kos) < 0.45) & ~datar, (np.abs(kos) < 0.55) & ~datar)) & ~datar
+    return datar, tegak
 
 
 def _bidang(d: np.ndarray, n: np.ndarray, sah: np.ndarray, k: dict, periode: float = 0.5) -> np.ndarray:
@@ -121,7 +154,14 @@ def _bidang(d: np.ndarray, n: np.ndarray, sah: np.ndarray, k: dict, periode: flo
     # Kemiringan dihaluskan sebelum diberi ambang: tanpa ini derau depth
     # membuat bercak "tidak datar" di tengah lantai/tread (tampak abu-abu).
     kos = cv2.GaussianBlur((n @ atas).astype(np.float32), (0, 0), 4.0)
-    datar, tegak = kos > 0.85, np.abs(kos) < 0.45
+    # Ambang ganda (histeresis): piksel "agak datar" (> 0,75) atau "agak tegak"
+    # (< 0,55) ikut bila tersambung ke bidang yang jelas datar/tegak, sehingga
+    # bercak derau di tengah permukaan tidak lagi tampak bolong. Datar lemah
+    # hanya < 2 m: lebih jauh ia menelan riser tipis (salah warna riser jauh
+    # 6,7% -> 14%). Uji 216 frame terperiksa (auto_label/uji_bidang_bolong.py):
+    # tread/riser dekat terwarnai benar 92->96% / 89->94%, riser jauh 59->70%,
+    # salah warna riser jauh tetap 6,8%.
+    datar, tegak = _datar_tegak(kos, d)
     hue = ((tinggi / periode) % 1.0 * 179).astype(np.uint8)
     sat = np.where(datar, 200, np.where(tegak, 30, 80)).astype(np.uint8)
     val = (70 + 185 * np.where(datar, 1.0, np.clip(n @ CAHAYA, 0, 1))).astype(np.uint8)
@@ -133,8 +173,100 @@ def _bidang(d: np.ndarray, n: np.ndarray, sah: np.ndarray, k: dict, periode: flo
     tepi = (np.sqrt((gx ** 2 + gy ** 2).sum(2)) > 0.9).astype(np.uint8)
     nk, lab, stat, _ = cv2.connectedComponentsWithStats(tepi, 8)
     panjang = np.maximum(stat[:, cv2.CC_STAT_WIDTH], stat[:, cv2.CC_STAT_HEIGHT])
-    simpan = np.zeros(nk, bool); simpan[1:] = panjang[1:] >= 60
+    # Garis yang hanya dikelilingi SATU jenis bidang (lingkar bercak derau di
+    # tengah lantai/tread, yang kini sudah terwarnai lewat _datar_tegak) bukan
+    # batas bidang: dibuang. Batas datar|tegak (tepi anak tangga) tetap.
+    sekitar = np.ones((9, 9), np.uint8)
+    batas = (cv2.dilate(datar.astype(np.uint8), sekitar) > 0) & (cv2.dilate(tegak.astype(np.uint8), sekitar) > 0)
+    porsi_batas = np.bincount(lab.ravel(), weights=batas.ravel().astype(np.float64), minlength=nk) / np.maximum(stat[:, cv2.CC_STAT_AREA], 1)
+    simpan = np.zeros(nk, bool); simpan[1:] = (panjang[1:] >= 60) & (porsi_batas[1:] >= 0.3)
     out[simpan[lab]] = (25, 25, 25)
+    return out
+
+
+UJUNG, PANGKAL = 1, 2
+WARNA_GARIS = {UJUNG: (255, 210, 0), PANGKAL: (0, 225, 255)}     # RGB: kuning = ujung, biru muda = pangkal
+
+
+def garis_tepi(depth: np.ndarray, intrinsik: dict, z_maks: float = 4.0, jangkau: int = 10,
+               beda_tinggi: float = 0.015, panjang_min: int = 40, hadap_min: float = 0.4) -> np.ndarray:
+    """Garis lipatan anak tangga dari BENTUK 3-D: 1 = ujung (bibir tread), 2 = pangkal riser, 0 = bukan.
+
+    Bayangan dan noda hanya mengubah terang-gelap, tidak mengubah depth, jadi
+    tidak pernah memunculkan garis di sini; penajaman (Laplace/unsharp) tidak
+    bisa membedakannya karena menajamkan semua perubahan terang-gelap.
+
+    Tepi tiap bidang datar yang berbatasan dengan bidang tegak MENGHADAP kamera
+    (riser; dinding samping tidak) dinilai dari tinggi titik riser di
+    seberangnya: riser lebih rendah daripada tread = ujung/bibir (lipatan
+    cembung), lebih tinggi = pangkal (sudut dalam). Potongan < ``panjang_min``
+    px dibuang. Uji pada 268 frame terperiksa (auto_label/uji_tepi_depth.py):
+    jenis garis hampir tidak pernah tertukar (0-0,1%), jarak ke tepi label
+    median 2-3 px; 56-64% piksel garis dalam 4 px dari tepi label, 7-18% muncul
+    di tengah permukaan berlabel; garis tidak ada di tempat depth kosong/jauh.
+    """
+    k = intrinsik
+    d, sah = _meter_halus(depth, float(k.get("depth_scale", 0.001)))
+    d = cv2.bilateralFilter(d, 9, 0.03, 7)
+    n = _normal(d, k["fx"], k["fy"], k["cx"], k["cy"], L=5)
+    n = cv2.GaussianBlur(n, (0, 0), 3.0)
+    n /= np.linalg.norm(n, axis=2, keepdims=True) + 1e-9
+    atas = np.array([0, -1, 0], np.float32)
+    for ambang in (0.5, 0.9, 0.95):
+        c = n[sah & ((n @ atas) > ambang)]
+        if len(c) > 500:
+            atas = c.mean(0)
+            atas /= np.linalg.norm(atas)
+    kos = cv2.GaussianBlur((n @ atas).astype(np.float32), (0, 0), 2.0)
+    h, w = d.shape
+    v, u = np.mgrid[0:h, 0:w].astype(np.float32)
+    P = np.dstack([(u - k["cx"]) * d / k["fx"], (v - k["cy"]) * d / k["fy"], d])
+    tinggi = P @ atas
+    dekat = sah & (d < z_maks)
+    lihat = P / (np.linalg.norm(P, axis=2, keepdims=True) + 1e-9)
+    datar = cv2.morphologyEx(((kos > 0.8) & dekat).astype(np.uint8), cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    tegak = (np.abs(kos) < 0.45) & dekat & (np.abs((n * lihat).sum(2)) > hadap_min)
+    tegak = cv2.morphologyEx(tegak.astype(np.uint8), cv2.MORPH_OPEN, np.ones((5, 5), np.uint8)) > 0
+    batas = np.array([w - 1, h - 1])
+    mentah = np.zeros((h, w), np.uint8)
+    kontur, _ = cv2.findContours(datar, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    for kt in kontur:
+        if len(kt) < panjang_min:
+            continue
+        p = kt.reshape(-1, 2).astype(np.float32)
+        t = np.roll(p, -3, 0) - np.roll(p, 3, 0)
+        nn = np.stack([t[:, 1], -t[:, 0]], 1)
+        nn /= np.linalg.norm(nn, axis=1, keepdims=True) + 1e-6
+        uji = np.clip((p + nn * 3).round().astype(int), 0, batas)
+        if datar[uji[:, 1], uji[:, 0]].mean() > 0.5:        # normal kontur harus mengarah ke LUAR bidang datar
+            nn = -nn
+        luar = np.clip((p + nn * jangkau).round().astype(int), 0, batas)
+        dalam = np.clip((p - nn * 4).round().astype(int), 0, batas)
+        dh = tinggi[luar[:, 1], luar[:, 0]] - tinggi[dalam[:, 1], dalam[:, 0]]
+        jenis = np.where(dh < -beda_tinggi, UJUNG, np.where(dh > beda_tinggi, PANGKAL, 0))
+        jenis = jenis * tegak[luar[:, 1], luar[:, 0]]
+        x, y = p[:, 0].astype(int), p[:, 1].astype(int)
+        for j in (UJUNG, PANGKAL):
+            m = jenis == j
+            if m.sum() >= 3:
+                mentah[y[m], x[m]] = j
+    hasil = np.zeros_like(mentah)
+    for j in (UJUNG, PANGKAL):
+        b = cv2.dilate((mentah == j).astype(np.uint8), np.ones((3, 3), np.uint8))
+        nk, lab, st, _ = cv2.connectedComponentsWithStats(b, 8)
+        simpan = np.zeros(nk, bool)
+        simpan[1:] = np.maximum(st[1:, cv2.CC_STAT_WIDTH], st[1:, cv2.CC_STAT_HEIGHT]) >= panjang_min
+        hasil[(mentah == j) & simpan[lab]] = j
+    return hasil
+
+
+def gambar_garis(rgb: np.ndarray, peta: np.ndarray | None) -> np.ndarray:
+    """Gambar garis_tepi di atas citra (tebal 3 px); salinan, citra asli tidak diubah."""
+    if peta is None or not peta.any():
+        return rgb
+    out = rgb.copy()
+    for j, warna in WARNA_GARIS.items():
+        out[cv2.dilate((peta == j).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0] = warna
     return out
 
 
@@ -153,17 +285,31 @@ def gabung_ir(bidang_rgb: np.ndarray, ir: np.ndarray, bobot_ir: float = 0.75) ->
     return out
 
 
-def hitung_dari_folder(folder, depth: np.ndarray, intrinsik: dict, mode: str) -> np.ndarray | None:
-    """Tampilan bantu untuk satu folder frame, termasuk mode yang butuh berkas IR."""
+def hitung_dari_folder(folder, depth: np.ndarray, intrinsik: dict, mode: str,
+                       geser=None, ir: np.ndarray | None = None) -> np.ndarray | None:
+    """Tampilan bantu satu frame, termasuk mode yang butuh berkas IR.
+
+    ``depth`` = depth selaras APA ADANYA (belum dikoreksi rolling shutter); IR
+    diproyeksikan dengan depth yang sama (``ir`` = hasil
+    ir_selaras.selaraskan(koreksi=False) bila sudah ada). Hasilnya baru
+    dipindah ke posisi RGB dengan model ``geser`` (ir_selaras.ukur_geser), dan
+    pita tepi yang tidak punya sumber diisi piksel tepi terdekat. Dulu depth
+    digeser lebih dulu dengan tepi 0, sehingga tampak garis tanpa IR/warna
+    bidang di sisi gambar.
+    """
+    from . import ir_selaras
+    if mode == "garis_3d":
+        return ir_selaras.terapkan(garis_tepi(depth, intrinsik), geser, terdekat=True)
     if mode in BUTUH_BERKAS:
-        from . import ir_selaras
-        # IR diproyeksikan ulang dengan depth berkasnya sendiri (bukan ``depth`` yang
-        # mungkin sudah digeser ke RGB); koreksi geser ke RGB dilakukan di dalamnya.
-        ir = ir_selaras.selaraskan(folder)
-        if mode == "ir" or ir is None:
-            return ir if mode == "ir" else gambar(depth, "bidang", intrinsik)
-        return gabung_ir(gambar(depth, "bidang", intrinsik), ir)
-    return gambar(depth, mode, intrinsik)
+        if ir is None:
+            ir = ir_selaras.selaraskan(folder, depth, koreksi=False)
+        if ir is None:
+            vis = None if mode == "ir" else gambar(depth, "bidang", intrinsik)
+        else:
+            vis = ir if mode == "ir" else gabung_ir(gambar(depth, "bidang", intrinsik), ir)
+    else:
+        vis = gambar(depth, mode, intrinsik)
+    return None if vis is None else ir_selaras.terapkan(vis, geser, isi_tepi=True)
 
 
 def warnai(latar_rgb: np.ndarray, bidang_rgb: np.ndarray, kekuatan: float) -> np.ndarray:
