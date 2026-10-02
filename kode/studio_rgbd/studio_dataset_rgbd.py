@@ -136,11 +136,44 @@ def _shade(hexwarna: str, faktor: float) -> str:
     return f"#{min(255, int(r * faktor)):02x}{min(255, int(g * faktor)):02x}{min(255, int(b * faktor)):02x}"
 
 
+def periksa_rekaman(bag: Path) -> str | None:
+    """Alasan rekaman tidak bisa dibuka, atau None bila tampak utuh.
+
+    librealsense MENGGANTUNG SELAMANYA di pipeline.start() bila .db3 tidak berisi
+    frame (perekaman terputus; mis. 20260926_234424: hanya 16 KB, 1 pesan,
+    status 'merekam'), dan itu terjadi di kode C sehingga Python tidak dapat
+    menghentikannya. Karena itu isi .db3 diperiksa lebih dulu lewat SQLite
+    (baca-saja, berhenti pada pesan pertama yang cocok, jadi cepat juga untuk
+    rekaman 9 GB).
+    """
+    bag = Path(bag)
+    if not bag.exists():
+        return "berkas rekaman mentah tidak ada"
+    if bag.stat().st_size < 1_000_000:
+        return f"berkas rekaman hanya {bag.stat().st_size // 1024} KB (perekaman tidak selesai)"
+    if bag.suffix == ".db3":
+        import sqlite3
+        try:
+            c = sqlite3.connect(f"file:{bag}?mode=ro", uri=True, timeout=2)
+            topik = {nama: tid for tid, nama in c.execute("select id, name from topics")}
+            for jenis in ("Color", "Depth"):
+                tid = next((t for n, t in topik.items() if f"/{jenis}_" in n and n.endswith("/image/data")), None)
+                if tid is None or c.execute("select 1 from messages where topic_id=? limit 1", (tid,)).fetchone() is None:
+                    return f"rekaman tidak berisi frame {jenis} (perekaman tidak selesai)"
+        except sqlite3.Error as e:
+            return f"berkas rekaman rusak ({e})"
+    return None
+
+
 class PembacaBag:
     """Membaca .bag secara offline; tidak menyentuh rekaman asli."""
 
     def __init__(self, bag: Path):
         self.bag = bag
+        alasan = periksa_rekaman(bag)
+        if alasan:
+            # Jangan pernah serahkan rekaman rusak ke librealsense: start() menggantung.
+            raise RuntimeError(f"Rekaman tidak dapat dibuka: {alasan}")
 
     def iter_frame(self):
         pipe = rs.pipeline()
@@ -1921,6 +1954,8 @@ class Studio(tk.Tk):
             tanda += f"  🪜{d['tangga']}"
         if not self.bag(p).exists():
             tanda += "  (tanpa video)"
+        elif self.bag(p).stat().st_size < 1_000_000:
+            tanda += "  ⚠(rusak/kosong)"
         cek = "✔ " if d.get("selesai") else ""
         return f"{ikon}{cek}{p.name.replace('TANGGA_NAIK_', '')}{tanda}"
 
@@ -2962,6 +2997,10 @@ class Studio(tk.Tk):
             messagebox.showinfo("Sedang berjalan",
                                 "Preview untuk rekaman lain masih dibuat. Tunggu sampai selesai.",
                                 parent=self); return
+        alasan = periksa_rekaman(self.bag(self.sesi))
+        if alasan:
+            messagebox.showerror("Rekaman rusak", f"Preview tidak dapat dibuat: {alasan}.\n\n"
+                                 "Rekaman ini sebaiknya dipindah ke tempat sampah.", parent=self); return
         self._hentikan_pemutar()
         self._preview_thread = threading.Thread(target=self._preview_worker, args=(self.sesi,), daemon=True)
         self._preview_thread.start()
@@ -4834,8 +4873,34 @@ class Studio(tk.Tk):
 
     def tutup(self):
         if self.sedang_rekam and not messagebox.askyesno("Rekaman masih berlangsung","Selesaikan rekaman dahulu agar raw.bag ditutup dengan benar. Tetap keluar?",parent=self):return
+        sibuk = [nama for nama, atr in (("ekspor frame", "_ekspor_thread"), ("batch auto-label", "_batch_thread"))
+                 if getattr(self, atr, None) is not None and self._ekspor_aktif(atr)]
+        if sibuk and not messagebox.askyesno("Proses masih berjalan", f"{', '.join(sibuk)} masih berjalan dan akan "
+                                             "terhenti di tengah. Tetap tutup?", parent=self):
+            return
+        # Simpan semua yang tertunda dulu, karena proses diakhiri paksa di bawah.
+        try:
+            if self._autosave_setelah is not None:
+                self.after_cancel(self._autosave_setelah); self._autosave_setelah = None
+                self.simpan_draft_label()
+            self._simpan_catatan_sekarang()
+        except Exception:                                       # noqa: BLE001
+            pass
         self.simpan_preferensi()
-        self._tutup_video();self._hentikan_render();self.cam.hentikan();self.destroy()
+        for langkah in (self._tutup_video, self._hentikan_render, self.cam.hentikan):
+            try:
+                langkah()
+            except Exception:                                   # noqa: BLE001
+                pass
+        self.destroy()
+        # Thread latar yang tersangkut di librealsense (kode C) tidak dapat
+        # dihentikan dan dulu membuat aplikasi tidak bisa ditutup. Data sudah
+        # tersimpan di atas, jadi proses diakhiri langsung.
+        os._exit(0)
+
+    def _ekspor_aktif(self, atr: str) -> bool:
+        t = getattr(self, atr, None)
+        return bool(t is not None and t.is_alive())
 
 
 def main():
