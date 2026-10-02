@@ -26,6 +26,11 @@ WARNA = {                     # nama -> latar daftar (pastel, teks tetap terbaca
     "biru": "#C9DDF2",
     "merah": "#F6C4BF",
     "ungu": "#E2D2F2",
+    "oranye": "#FFD9B0",
+    "toska": "#BFEDE6",
+    "pink": "#FAD2E6",
+    "zaitun": "#E2E8B8",
+    "abu": "#DDDAD6",
 }
 NAMA_BERKAS = "catatan.json"
 
@@ -42,6 +47,8 @@ def baca(sesi: Path) -> dict:
             "lux": str(d.get("lux") or ""),
             "lux_sumber": str(d.get("lux_sumber") or ""),
             "tangga": str(d.get("tangga") or ""),
+            "selesai": bool(d.get("selesai", False)),
+            "selesai_iso": str(d.get("selesai_iso") or ""),
             "scene": sorted(scene, key=lambda s: int(s["awal"]))}
 
 
@@ -170,7 +177,8 @@ def baca_tangga(akar_data: Path) -> dict[str, dict]:
         d = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
     except (OSError, ValueError):
         d = {}
-    return {k: {"nama": str(v.get("nama", "")), "lokasi": str(v.get("lokasi", ""))}
+    return {k: {"nama": str(v.get("nama", "")), "lokasi": str(v.get("lokasi", "")),
+                "warna": v.get("warna") if v.get("warna") in WARNA else None}
             for k, v in sorted(d.items()) if isinstance(v, dict)}
 
 
@@ -197,3 +205,25 @@ def tangga_untuk(data: dict, indeks: int | None) -> str | None:
     """ID tangga sebuah frame: tangga scene-nya bila ada, selain itu tangga rekaman."""
     sc = scene_untuk(data, indeks)
     return (sc or {}).get("tangga") or data.get("tangga") or None
+
+
+
+def warna_tangga_baru(daftar: dict) -> str:
+    """Warna palet pertama yang belum dipakai tangga lain (berulang bila palet habis)."""
+    dipakai = [v.get("warna") for v in daftar.values()]
+    for nama in WARNA:
+        if nama not in dipakai:
+            return nama
+    return list(WARNA)[len(daftar) % len(WARNA)]
+
+
+def warna_rekaman(data: dict, daftar_tangga: dict) -> str | None:
+    """Warna stabilo rekaman: warna TANGGA-nya bila ada, selain itu stabilo rekaman sendiri."""
+    t = data.get("tangga")
+    if t and (daftar_tangga.get(t) or {}).get("warna"):
+        return daftar_tangga[t]["warna"]
+    return data.get("warna")
+
+
+def warna_untuk_tangga(tid: str | None, daftar_tangga: dict) -> str | None:
+    return (daftar_tangga.get(tid) or {}).get("warna") if tid else None

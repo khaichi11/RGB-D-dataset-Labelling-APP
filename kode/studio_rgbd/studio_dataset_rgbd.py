@@ -1833,15 +1833,28 @@ class Studio(tk.Tk):
         self.info_waktu_rekaman = tk.Label(i, text="", bg=PANEL, fg=ACCENT, justify="left", anchor="w",
                                            wraplength=270, font=("Segoe UI", 9))
         self.info_waktu_rekaman.pack(fill="x", pady=(0, 4))
-        tk.Label(i, text="Stabilo (klik warna; ✕ menghapus)", bg=PANEL, fg=MUTED).pack(anchor="w")
-        baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(2, 0))
-        for nama, w in CR.WARNA.items():
-            kotak = tk.Frame(baris, bg=w, width=26, height=22, cursor="hand2",
-                             highlightbackground="#CFC4BC", highlightthickness=1)
-            kotak.pack(side="left", padx=2)
-            kotak.bind("<Button-1>", lambda _e, n=nama: self.atur_warna_sesi(n))
-        self.tombol_ringkas(baris, "✕ Hapus warna", lambda: self.atur_warna_sesi(None),
-                            "#E8DDD5", INK, width=110).pack(side="left", padx=(8, 0))
+        # Ceklis rekaman selesai: semua frame sudah dilabel dan dicek.
+        self.selesai_var = BooleanVar(value=False)
+        tk.Checkbutton(i, text="✔ Rekaman ini sudah benar semua", variable=self.selesai_var, bg=PANEL, fg="#1E5B2A",
+                       selectcolor=PANEL, activebackground=PANEL, font=("Segoe UI", 9, "bold"),
+                       command=self.atur_selesai).pack(anchor="w")
+        self.info_progres = tk.Label(i, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 8), anchor="w", justify="left")
+        self.info_progres.pack(fill="x")
+        # Stabilo = warna TANGGA fisik bila rekaman punya ID tangga (semua rekaman
+        # dan scene tangga itu ikut berwarna sama); tanpa tangga, warna rekaman ini.
+        self.label_stabilo = tk.Label(i, text="Stabilo", bg=PANEL, fg=MUTED, wraplength=270, justify="left", anchor="w")
+        self.label_stabilo.pack(fill="x", pady=(4, 0))
+        nama_warna = list(CR.WARNA.items())
+        for awal in (0, 5):
+            baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(2, 0))
+            for nama, w in nama_warna[awal:awal + 5]:
+                kotak = tk.Frame(baris, bg=w, width=26, height=20, cursor="hand2",
+                                 highlightbackground="#CFC4BC", highlightthickness=1)
+                kotak.pack(side="left", padx=2)
+                kotak.bind("<Button-1>", lambda _e, n=nama: self.atur_warna_sesi(n))
+            if awal == 5:
+                self.tombol_ringkas(baris, "✕ Hapus warna", lambda: self.atur_warna_sesi(None),
+                                    "#E8DDD5", INK, width=100).pack(side="left", padx=(6, 0))
         # Tangga fisik: rekaman yang merekam tangga yang sama diberi ID sama, agar
         # pembagian train/val/test bisa per tangga (tab Split).
         tk.Label(i, text="Tangga fisik (rekaman dengan tangga sama = ID sama)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
@@ -1898,11 +1911,23 @@ class Studio(tk.Tk):
             tanda += f"  🪜{d['tangga']}"
         if not self.bag(p).exists():
             tanda += "  (tanpa video)"
-        return f"{ikon}{p.name.replace('TANGGA_NAIK_', '')}{tanda}"
+        cek = "✔ " if d.get("selesai") else ""
+        return f"{ikon}{cek}{p.name.replace('TANGGA_NAIK_', '')}{tanda}"
 
     def _warnai_item_sesi(self, i: int, p: Path) -> None:
-        w = CR.WARNA.get(self._catatan_cache(p)["warna"])
+        w = CR.WARNA.get(CR.warna_rekaman(self._catatan_cache(p), self._daftar_tangga()))
         self.list_sesi.itemconfig(i, bg=w or "#FFF9F4", selectbackground=w or ACCENT_SOFT)
+
+    def _daftar_tangga(self) -> dict:
+        """tangga.json, dibaca ulang hanya bila berubah."""
+        f = self.root_data / CR.BERKAS_TANGGA
+        try:
+            kunci = f.stat().st_mtime_ns
+        except OSError:
+            kunci = None
+        if getattr(self, "_cache_tangga", (None, None))[0] != kunci or not hasattr(self, "_cache_tangga"):
+            self._cache_tangga = (kunci, CR.baca_tangga(self.root_data))
+        return self._cache_tangga[1]
 
     def _segarkan_item_sesi(self, sesi: Path) -> None:
         if sesi in getattr(self, "_map_sesi", []):
@@ -1929,6 +1954,19 @@ class Studio(tk.Tk):
         else:
             self.info_waktu_rekaman.config(text="🕒 Waktu rekaman tidak tercatat")
         self.lux_var.set(d.get("lux", ""))
+        self.selesai_var.set(bool(d.get("selesai")))
+        tid = d.get("tangga")
+        self.label_stabilo.config(text=(f"Stabilo tangga {tid} (semua rekaman/scene tangga ini ikut berwarna sama)"
+                                        if tid else "Stabilo rekaman ini (beri ID tangga agar warnanya per tangga)"))
+        sesi_kini = self.sesi
+        self.info_progres.config(text="Menghitung frame diperiksa…")
+        def hitung():
+            # Thread latar TIDAK boleh menyentuh Tk; hasil dikirim lewat antrean self.q.
+            t, dp = self._hitung_progres(sesi_kini) if sesi_kini else (0, 0)
+            teks = f"Frame diperiksa: {dp}/{t}" + (f"  ({d['selesai_iso'][:16].replace('T', ' ')} ditandai selesai)"
+                                                   if d.get("selesai") and d.get("selesai_iso") else "")
+            self.q.put(("progres_rekaman", (sesi_kini, teks)))
+        threading.Thread(target=hitung, daemon=True).start()
         self._isi_pilihan_tangga(d.get("tangga") or None)
         self.lux_sumber_lbl.config(text=("Sumber: " + d["lux_sumber"]) if d.get("lux_sumber")
                                    else "Isi dari lux meter di lokasi, atau hitung dari foto HP.")
@@ -1937,6 +1975,9 @@ class Studio(tk.Tk):
         for sc in d["scene"]:
             self.list_scene.insert("end", f"{sc['nama']}   ({sc['awal']}–{sc['akhir']})"
                                           + (f"  · {sc['tangga']}" if sc.get("tangga") else ""))
+            w_ = CR.WARNA.get(CR.warna_untuk_tangga(sc.get("tangga"), self._daftar_tangga()))
+            if w_:
+                self.list_scene.itemconfig("end", bg=w_)
 
     def _jadwal_simpan_catatan(self) -> None:
         if self._catatan_setelah is not None:
@@ -2014,7 +2055,7 @@ class Studio(tk.Tk):
         if not nama or not nama.strip():
             return
         lokasi = simpledialog.askstring("Tangga baru", "Lokasi/keterangan (boleh kosong):", parent=self) or ""
-        daftar[tid] = {"nama": nama.strip(), "lokasi": lokasi.strip()}
+        daftar[tid] = {"nama": nama.strip(), "lokasi": lokasi.strip(), "warna": CR.warna_tangga_baru(daftar)}
         CR.tulis_tangga(self.root_data, daftar)
         self._ubah_catatan(lambda d: d.update(tangga=tid))
         self.status.set(f"Tangga {tid} · {nama.strip()} dibuat dan dipasang ke rekaman ini.")
@@ -2043,7 +2084,48 @@ class Studio(tk.Tk):
         dlg.wait_window()
 
     def atur_warna_sesi(self, warna: str | None) -> None:
+        """Stabilo: warna tangga fisik bila rekaman punya tangga, selain itu warna rekaman ini."""
+        if not self.sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman dahulu.", parent=self); return
+        tid = CR.baca(self.sesi).get("tangga")
+        if tid:
+            daftar = CR.baca_tangga(self.root_data)
+            if tid in daftar:
+                daftar[tid]["warna"] = warna
+                CR.tulis_tangga(self.root_data, daftar)
+                for p_ in list(getattr(self, "_map_sesi", [])):
+                    self._segarkan_item_sesi(p_)
+                self._muat_catatan_ui()
+                self.status.set(f"Warna tangga {CR.label_tangga(tid, daftar)} diganti; semua rekaman/scene tangga ini ikut.")
+                return
         self._ubah_catatan(lambda d: d.update(warna=warna))
+
+    def atur_selesai(self) -> None:
+        """Ceklis rekaman selesai; diperingatkan bila masih ada frame yang belum diperiksa."""
+        if not self.sesi:
+            self.selesai_var.set(False); return
+        nilai = bool(self.selesai_var.get())
+        if nilai:
+            total, diperiksa = self._hitung_progres(self.sesi)
+            if total and diperiksa < total and not messagebox.askyesno(
+                    "Tandai selesai", f"Baru {diperiksa} dari {total} frame ekspor yang ditandai diperiksa.\n"
+                    "Tetap tandai rekaman ini sudah benar semua?", parent=self):
+                self.selesai_var.set(False); return
+        self._ubah_catatan(lambda d: d.update(selesai=nilai, selesai_iso=datetime.now().isoformat(timespec="seconds")
+                                              if nilai else ""))
+
+    def _hitung_progres(self, sesi: Path) -> tuple[int, int]:
+        """(frame ekspor bukan sampah, frame yang ditandai diperiksa manual)."""
+        fr = sesi / "exports" / "frames"
+        total = diperiksa = 0
+        if fr.exists():
+            for d in fr.iterdir():
+                if not d.is_dir() or baca_json(d / "frame_state.json", {}).get("di_sampah"):
+                    continue
+                total += 1
+                j = baca_json(d / "label_draft.json", {})
+                diperiksa += bool(j.get("diperiksa_manual", False))
+        return total, diperiksa
 
     def tambah_scene(self) -> None:
         awal, akhir = int(self.awal.get()), int(self.akhir.get())
@@ -2116,7 +2198,8 @@ class Studio(tk.Tk):
             l, kat = CR.kecerahan(self.kanvas.rgb)
             cahaya += f"  •  kecerahan gambar {l:.0f}/255 ({kat})"
         baris.append(cahaya)
-        self.info_rekaman.config(text="\n".join(baris), bg=CR.WARNA.get(d["warna"]) or PANEL)
+        w_ = CR.warna_untuk_tangga(tid, self._daftar_tangga()) if tid else CR.warna_rekaman(d, self._daftar_tangga())
+        self.info_rekaman.config(text="\n".join(baris), bg=CR.WARNA.get(w_) or PANEL)
 
     def ui_ekspor(self):
         f = tk.Frame(self.tab_ekspor, bg=BG); f.pack(fill="both", expand=True, padx=30, pady=28)
@@ -4674,6 +4757,9 @@ class Studio(tk.Tk):
             while True:
                 k,v=self.q.get_nowait()
                 if k=="status":self.status.set(str(v))
+                elif k=="progres_rekaman":
+                    if v[0] == self.sesi:
+                        self.info_progres.config(text=v[1])
                 elif k=="model_siap":
                     self.status.set(f"Pengusul label siap di GPU: {v}")
                     # Handle cuDNN milik thread; panaskan juga thread UI sekarang
