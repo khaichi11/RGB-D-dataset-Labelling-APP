@@ -83,11 +83,29 @@ def selaraskan(folder: Path, depth_selaras: np.ndarray | None = None, koreksi: b
     if koreksi:
         rgb = cv2.imread(str(folder / "color_raw.png"), cv2.IMREAD_GRAYSCALE)
         if rgb is not None:
-            dx, dy = geser_ke_rgb(out, rgb)
-            if dx or dy:
-                out = cv2.warpAffine(out, np.float32([[1, 0, dx], [0, 1, dy]]), (out.shape[1], out.shape[0]),
-                                     flags=cv2.INTER_LINEAR, borderValue=0)
+            out = geser(out, *geser_ke_rgb(out, rgb))
     return out
+
+
+def geser(citra: np.ndarray, dx: int, dy: int, terdekat: bool = False) -> np.ndarray:
+    """Geser citra/depth sejauh (dx, dy) piksel; tepi yang kosong diisi 0."""
+    if not dx and not dy:
+        return citra
+    return cv2.warpAffine(citra, np.float32([[1, 0, dx], [0, 1, dy]]), (citra.shape[1], citra.shape[0]),
+                          flags=cv2.INTER_NEAREST if terdekat else cv2.INTER_LINEAR, borderValue=0)
+
+
+def geser_frame(folder: Path, depth_selaras: np.ndarray | None = None) -> tuple[int, int]:
+    """Geser (dx, dy) dari koordinat depth/IR ke posisi RGB untuk satu frame; (0, 0) bila tak dapat diukur.
+
+    Depth D435 dihitung dari kamera IR pada saat yang sama dengan IR, jadi geser
+    yang sama berlaku untuk depth selaras: semua lapisan dari depth (Bidang,
+    relief, RANSAC/ukur) harus digeser dengan nilai ini agar jatuh di tempat
+    yang sama dengan RGB dan label.
+    """
+    ir = selaraskan(folder, depth_selaras, koreksi=False)
+    rgb = cv2.imread(str(Path(folder) / "color_raw.png"), cv2.IMREAD_GRAYSCALE)
+    return geser_ke_rgb(ir, rgb) if ir is not None and rgb is not None else (0, 0)
 
 
 def _gradien(g: np.ndarray) -> np.ndarray:
@@ -104,11 +122,19 @@ def geser_ke_rgb(ir: np.ndarray, rgb_abu: np.ndarray, ry: int = 10, rx: int = 4)
     di IR bisa bergeser beberapa piksel dari RGB (diukur: 12% frame >= 3 px
     vertikal, maks. 8 px, selalu ke atas). Pergeseran dicari dengan mencocokkan
     peta gradien (matchTemplate, setengah resolusi, +-2*ry baris dan +-2*rx kolom)
-    dan hanya dipakai bila RGB cukup terang dan kecocokannya jelas; pada frame
-    gelap RGB tidak punya tepi sehingga IR dibiarkan apa adanya.
+    dan hanya dipakai bila kecocokannya jelas. Frame gelap dicerahkan dulu;
+    frame hitam total tidak dikoreksi.
     """
-    if float(rgb_abu.mean()) < 35:
+    terang = float(rgb_abu.mean())
+    if terang < 3:                                   # hitam total: tidak ada yang bisa dicocokkan
         return 0, 0
+    if terang < 35:
+        # Frame gelap: rentangkan kecerahan, CLAHE, lalu haluskan derau sensor
+        # sebelum mencari tepi; tepi anak tangga tetap terbaca (diaudit: 25%
+        # frame gelap juga bergeser >= 3 px).
+        lo, hi = np.percentile(rgb_abu, (1, 99.5))
+        g = np.clip((rgb_abu.astype(np.float32) - lo) / max(float(hi - lo), 4.0), 0, 1) ** 0.5
+        rgb_abu = cv2.GaussianBlur(cv2.createCLAHE(3.0, (8, 8)).apply((g * 255).astype(np.uint8)), (0, 0), 2.0)
     a = _gradien(cv2.resize(rgb_abu, None, fx=.5, fy=.5, interpolation=cv2.INTER_AREA))
     b = _gradien(cv2.resize(ir, None, fx=.5, fy=.5, interpolation=cv2.INTER_AREA))
     pola = b[ry:-ry, rx:-rx]
@@ -117,4 +143,8 @@ def geser_ke_rgb(ir: np.ndarray, rgb_abu: np.ndarray, ry: int = 10, rx: int = 4)
     nol = float(hasil[ry, rx])
     if maks < 0.3 or maks - nol < 0.02:
         return 0, 0
-    return 2 * (x - rx), 2 * (y - ry)
+    dx, dy = 2 * (x - rx), 2 * (y - ry)
+    # Geser 2 px (satu langkah di setengah resolusi) sebagian besar derau
+    # pengukuran: terhadap label, frame terang membaik 58% (>=2 px) lawan 63%
+    # (>=4 px); frame gelap 100% pada keduanya. Hanya geser >= 4 px yang dipakai.
+    return (dx, dy) if max(abs(dx), abs(dy)) >= 4 else (0, 0)

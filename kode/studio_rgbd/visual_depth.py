@@ -157,7 +157,9 @@ def hitung_dari_folder(folder, depth: np.ndarray, intrinsik: dict, mode: str) ->
     """Tampilan bantu untuk satu folder frame, termasuk mode yang butuh berkas IR."""
     if mode in BUTUH_BERKAS:
         from . import ir_selaras
-        ir = ir_selaras.selaraskan(folder, depth)
+        # IR diproyeksikan ulang dengan depth berkasnya sendiri (bukan ``depth`` yang
+        # mungkin sudah digeser ke RGB); koreksi geser ke RGB dilakukan di dalamnya.
+        ir = ir_selaras.selaraskan(folder)
         if mode == "ir" or ir is None:
             return ir if mode == "ir" else gambar(depth, "bidang", intrinsik)
         return gabung_ir(gambar(depth, "bidang", intrinsik), ir)
