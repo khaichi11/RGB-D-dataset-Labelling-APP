@@ -510,6 +510,7 @@ class KanvasLabel(tk.Canvas):
         self.pakai_ir = False        # latar inframerah selaras, bukan RGB
         self.warna_bidang = 0.0      # 0..1 kekuatan warna ketinggian di atas latar
         self.garis_3d = False        # garis lipatan ujung/pangkal dari depth (visual_depth.garis_tepi)
+        self.nomor_anak_tangga = []  # (x, y, teks, warna) koordinat citra; diisi panel_ukuran dari pelacakan video
         self.penyedia_depth_vis = None   # Studio: fungsi(mode) -> citra hasil prefetch atau None
         self._depth_vis = self._depth_vis_key = self._depth_vis_obj = None
         self.kecerahan = 0.0     # 0 = asli, 1 = CLAHE penuh (lihat _cerahkan)
@@ -915,6 +916,14 @@ class KanvasLabel(tk.Canvas):
                                      x + (6 if dipilih else 4), y + (6 if dipilih else 4),
                                      fill=titik, outline="#FFD400" if dipilih else garis,
                                      width=2 if dipilih else 1, tags=("overlay",))
+        for x, y, teks, warna in self.nomor_anak_tangga:
+            # Nomor anak tangga dari pelacakan video utuh (panel_ukuran): teks
+            # berhalo gelap agar terbaca di atas mask dan citra terang/gelap.
+            cx, cy = x * self.scale + self.ox, y * self.scale + self.oy
+            for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1), (0, 2)):
+                self.create_text(cx + dx, cy + dy, text=teks, fill="#000000",
+                                 font=("Segoe UI", 12, "bold"), tags=("overlay",))
+            self.create_text(cx, cy, text=teks, fill=warna, font=("Segoe UI", 12, "bold"), tags=("overlay",))
         if self._drag_titik is not None:
             self._gambar_lup(*self._drag_titik["layar"])
 
@@ -2554,6 +2563,19 @@ class Studio(tk.Tk):
                  font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(6, 1))
         tk.Label(edit_i, text="Klik kanan lepas/hapus titik • Ctrl+Z undo • Ctrl+Shift+Z redo", bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(2, 0))
         tk.Label(edit_i, textvariable=self.ukur_status, bg=PANEL, fg=INK, wraplength=300, justify="left", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(3, 0))
+        # Ukuran meteran per anak tangga, dengan nomor dari pelacakan video utuh:
+        # pada frame ekspor saja anak tangga ke-1, 2, 3 sulit dibedakan.
+        b, i = self.card(right, "Ukuran tangga (meteran)") ; b.pack(fill="x", pady=(0, 7))
+        try:
+            try:
+                from .panel_ukuran import PanelUkuran
+            except ImportError:
+                from panel_ukuran import PanelUkuran
+            self.panel_ukuran = PanelUkuran(i, self)
+        except Exception as e:                                   # noqa: BLE001 -- tab Label tetap dapat dipakai
+            self.panel_ukuran = None
+            tk.Label(i, text=f"Panel ukuran tidak dapat dimuat: {e}", bg=PANEL, fg=MUTED, wraplength=300,
+                     justify="left").pack(anchor="w")
         self.perbarui_konteks_label()
 
     # ----- rekam -----
@@ -3972,6 +3994,11 @@ class Studio(tk.Tk):
             self.after(180, lambda target=p: self._auto_segmentasi(target))
         self.perbarui_lencana_periksa()
         self._perbarui_info_rekaman(p)
+        if getattr(self, "panel_ukuran", None) is not None:
+            try:
+                self.panel_ukuran.frame_dibuka(p)
+            except Exception as e:                               # noqa: BLE001 -- jangan ganggu pelabelan
+                self.status.set(f"Nomor anak tangga tidak dapat ditampilkan: {e}")
         self.perbarui_konteks_label(self.label_info.get("kategori"))
         self.ukur_status.set(("Tekan A (merah) atau S (biru), lalu klik/tarik titik. Space berpindah frame."
                               if self.kontrol_label.get() == "mudah" else

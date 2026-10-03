@@ -178,8 +178,11 @@ def baca_tangga(akar_data: Path) -> dict[str, dict]:
         d = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
     except (OSError, ValueError):
         d = {}
+    # ukuran_meteran (ukuran_meteran.py) ikut dibawa agar tidak hilang saat
+    # nama/warna tangga disunting lalu ditulis ulang lewat tulis_tangga().
     return {k: {"nama": str(v.get("nama", "")), "lokasi": str(v.get("lokasi", "")),
-                "warna": v.get("warna") if v.get("warna") in WARNA else None}
+                "warna": v.get("warna") if v.get("warna") in WARNA else None,
+                **({"ukuran_meteran": v["ukuran_meteran"]} if isinstance(v.get("ukuran_meteran"), dict) else {})}
             for k, v in sorted(d.items()) if isinstance(v, dict)}
 
 
