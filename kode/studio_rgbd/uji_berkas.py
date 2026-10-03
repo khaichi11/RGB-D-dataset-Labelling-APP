@@ -15,6 +15,12 @@ yaitu sebagian batch sengaja dijalankan tanpa kedalaman sama sekali. Model
 karena itu tidak runtuh ketika kedalaman hilang, hanya kehilangan sebagian
 ketepatan. Keadaan itu ditandai jelas pada tampilan agar hasilnya tidak
 disalahartikan sebagai kinerja penuh.
+
+Sejak 3 Oktober 2026 bobot bawaan ("Muat model akhir") adalah model akhir
+ConvNeXt V2 Atto RGB-D 384 dari ``Train-RGB-D-Model/aplikasi_tangga``, dengan
+praproses dan peta kelas yang sama dengan perintah ``tangga``
+(``rgbd_convnext.konfigurasi_utama.prediksi_kelas``). Checkpoint StairFusion
+lama masih bisa dipilih manual untuk pembanding.
 """
 from __future__ import annotations
 
@@ -26,6 +32,11 @@ from tkinter import filedialog, messagebox, ttk
 
 import cv2
 import numpy as np
+
+try:
+    from .ui_bantu import kolom_gulir
+except ImportError:
+    from ui_bantu import kolom_gulir
 
 BG, PANEL, INK, MUTED, ACCENT, LINE = "#F7F3F0", "#FFFFFF", "#2B2622", "#7A6E66", "#C1613C", "#E4DAD3"
 HIJAU, MERAH = (60, 200, 60), (70, 70, 235)          # BGR: tapakan, bidang tegak
@@ -66,14 +77,15 @@ class UjiBerkas:
         return b
 
     def _bangun(self) -> None:
-        kiri = tk.Frame(self.induk, bg=BG, width=340); kiri.pack(side="left", fill="y", padx=(16, 8), pady=12)
-        kiri.pack_propagate(False)
+        # Kolom kontrol bisa digulir: di layar 1366x768 tombol simpan dan
+        # penggeser opasitas dulu tidak kebagian tempat.
+        kiri = kolom_gulir(self.induk, 340, BG, padx=(16, 8), pady=12)
         kanan = tk.Frame(self.induk, bg=BG); kanan.pack(side="left", fill="both", expand=True, padx=(8, 16), pady=12)
 
         k = self._kartu(kiri, "1. Bobot model")
         tk.Label(k, textvariable=self.nama_bobot, bg=PANEL, fg=MUTED, wraplength=300,
                  justify="left").pack(anchor="w", pady=(0, 6))
-        self._tombol(k, "Muat bobot terbaik otomatis", self.muat_otomatis).pack(fill="x", pady=(0, 4))
+        self._tombol(k, "Muat model akhir (sama dengan tangga)", self.muat_otomatis).pack(fill="x", pady=(0, 4))
         self._tombol(k, "Pilih berkas bobot…", self.pilih_bobot, "#6E8CA8").pack(fill="x")
 
         k = self._kartu(kiri, "2. Berkas yang diuji")
@@ -102,14 +114,13 @@ class UjiBerkas:
     # --------------------------------------------------------------- bobot
     def muat_otomatis(self) -> None:
         try:
-            from .segmentasi_convnext_depth import cari_bobot
+            from .uji_realtime import BOBOT_BAWAAN
         except ImportError:
-            from studio_rgbd.segmentasi_convnext_depth import cari_bobot
-        try:
-            nama, jalur = cari_bobot()
-        except FileNotFoundError as e:
-            messagebox.showinfo("Bobot belum ada", str(e), parent=self.induk); return
-        self._muat(jalur, nama)
+            from uji_realtime import BOBOT_BAWAAN
+        if not BOBOT_BAWAAN.exists():
+            messagebox.showinfo("Bobot belum ada", f"Model akhir tidak ditemukan:\n{BOBOT_BAWAAN}", parent=self.induk)
+            return
+        self._muat(BOBOT_BAWAAN, "ConvNeXt V2 Atto RGB-D 384 (model akhir)")
 
     def pilih_bobot(self) -> None:
         f = filedialog.askopenfilename(title="Pilih bobot .pt",
@@ -118,6 +129,22 @@ class UjiBerkas:
             self._muat(Path(f), Path(f).stem)
 
     def _muat(self, jalur: Path, nama: str) -> None:
+        try:
+            import torch
+            from .uji_realtime import _impor_tangga
+        except ImportError:
+            from uji_realtime import _impor_tangga
+        try:
+            _impor_tangga()                                       # rgbd_convnext ke sys.path
+            from rgbd_convnext.konfigurasi_utama import muat_model_utama
+            mu = muat_model_utama(jalur)
+            self.model, self.jalur_bobot, self.dev, self._utama = mu, jalur, mu.device, True
+            n = sum(p.numel() for p in mu.model.parameters()) / 1e6
+            self.nama_bobot.set(f"{nama}\n{n:.2f} juta parameter · masukan {mu.ukuran} · {mu.device.type}")
+            self.info.set("Bobot dimuat. Pilih berkas yang akan diuji.")
+            return
+        except Exception as e:                                    # noqa: BLE001 -- mungkin checkpoint StairFusion lama
+            galat_utama = f"{type(e).__name__}: {e}"
         try:
             import sys, torch
             akar = Path(__file__).resolve().parents[1]
@@ -133,12 +160,13 @@ class UjiBerkas:
                                         semantic_stride=stride_dari_checkpoint(ckpt),
                                         timm_pretrained=False).to(self.dev).eval()
             m.load_state_dict(ckpt['model'])
-            self.model, self.jalur_bobot = m, jalur
+            self.model, self.jalur_bobot, self._utama = m, jalur, False
             n = sum(p.numel() for p in m.parameters()) / 1e6
             self.nama_bobot.set(f"{nama}\n{n:.2f} juta parameter · {self.dev.type}")
             self.info.set("Bobot dimuat. Pilih berkas yang akan diuji.")
         except Exception as e:                                    # noqa: BLE001
-            messagebox.showerror("Gagal memuat bobot", str(e), parent=self.induk)
+            messagebox.showerror("Gagal memuat bobot", f"Sebagai model akhir: {galat_utama}\n"
+                                 f"Sebagai StairFusion lama: {e}", parent=self.induk)
 
     # -------------------------------------------------------------- sumber
     def _cari_depth(self, gambar: Path):
@@ -266,6 +294,11 @@ class UjiBerkas:
 
     def _prediksi(self, bgr: np.ndarray, dm: np.ndarray | None) -> np.ndarray:
         import torch
+        if getattr(self, "_utama", False):
+            from rgbd_convnext.konfigurasi_utama import prediksi_kelas
+            # Tanpa kedalaman: depth nol = peta validitas nol (keadaan depth dropout).
+            depth = dm if dm is not None else np.zeros(bgr.shape[:2], np.float32)
+            return prediksi_kelas(self.model, bgr, depth)
         h, w = bgr.shape[:2]
         s = UKURAN / max(h, w)
         nw, nh = int(round(w * s)), int(round(h * s))
