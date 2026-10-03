@@ -145,7 +145,7 @@ class PanelUkuran:
     def _muat_meteran(self) -> None:
         if self.sesi is None:
             return
-        met = UM.baca(self.sesi, self.studio.root_data, self.tid)
+        met = UM.baca(self.sesi, self.studio.root_data, self.tid, self._ke)
         self._isian = {}                            # isian sesi/tangga lain tidak boleh terbawa
         self.geser.set(met["geser"].get(self._ke, 0) + 1)
         self.lebar.set("" if met["lebar_cm"] in (None, "") else str(met["lebar_cm"]))
@@ -213,10 +213,10 @@ class PanelUkuran:
         except ValueError:
             self.status.set("Lebar tangga tidak terbaca.")
             return
-        met = UM.baca(self.sesi, self.studio.root_data, self.tid)
+        met = UM.baca(self.sesi, self.studio.root_data, self.tid, self._ke)
         geser = dict(met["geser"])
         geser[self._ke] = int(self.geser.get()) - 1
-        tempat = UM.tulis(self.sesi, self.studio.root_data, self.tid, anak, lebar_cm, geser)
+        tempat = UM.tulis(self.sesi, self.studio.root_data, self.tid, anak, lebar_cm, geser, self._ke)
         self._meteran = UM._bersihkan({str(k): v for k, v in anak.items()})
         beda = []
         if self.sistem is not None:
