@@ -1714,7 +1714,7 @@ class Studio(tk.Tk):
         # Tab 5 berbeda tujuan dari tab 1-4: bukan membuat dataset, melainkan
         # MENGUJI model terlatih pada aliran kamera langsung. Dipisah supaya
         # alur dataset tidak tercampur dengan alur pengujian.
-        self.tabs.add(self.tab_uji, text="  5. Uji Realtime  ")
+        self.tabs.add(self.tab_uji, text="  5. Uji Sistem Tangga  ")
         # Tab 6 menguji model pada BERKAS, bukan aliran kamera. Dipisah dari
         # tab 5 karena hasilnya dapat diulang persis dan karena itu dipakai
         # membandingkan antar-model, sedangkan aliran kamera tidak pernah sama
