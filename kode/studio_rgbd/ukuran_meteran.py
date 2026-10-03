@@ -19,11 +19,11 @@ terlihat), nomor sistem #1 = fisik #2, jadi geser = 1.
     python -m studio_rgbd.ukuran_meteran [akar_data]     # CSV sistem lawan meteran + ringkasan galat
     python -m studio_rgbd.ukuran_meteran --impor ekspor_ukur_tangga.json [akar_data]
 
-``--impor`` membaca berkas ekspor aplikasi iPad "Ukur Tangga" (repo khaichi11/ukur-tangga,
-format ``ukur-tangga`` versi 1): setiap tangga yang kolom "ID tangga di Studio"-nya
-diisi (mis. T01) ditulis ke ``tangga.json`` -> ``<ID>.ukuran_meteran``; ID yang belum
-ada dibuat dengan nama "<gedung> · <tangga>". Tangga yang diukur turun dinomori ulang
-dari bawah, sama dengan nomor pelacak.
+``--impor`` membaca berkas cadangan aplikasi iPad "Ukur Tangga" (repo khaichi11/ukur-tangga,
+format ``ukur-tangga`` versi 1 atau 2): lokasi (v2) atau tangga (v1) yang "ID tangga di
+Studio"-nya diisi (mis. T01) ditulis ke ``tangga.json`` -> ``<ID>.ukuran_meteran``; ID yang
+belum ada dibuat. Tangga ke-1, 2, ... yang dipisah bordes menjadi penomoran 1, 2, ...
+(nomor mulai dari 1 lagi, sama dengan pelacak).
 """
 from __future__ import annotations
 
@@ -76,8 +76,19 @@ def _bersihkan(anak: dict) -> dict:
     return hasil
 
 
-def baca(sesi: Path, akar_data: Path, tid: str | None) -> dict:
-    """{'tempat': 'tangga'|'sesi', 'anak_tangga': {nomor fisik: {...}}, 'lebar_cm', 'geser': {ke: n}}."""
+def _anak_penomoran(isi: dict, ke: int) -> dict:
+    """Anak tangga penomoran ke-``ke`` (tangga ke-n sesudah bordes); penomoran 1 juga di ``anak_tangga`` lama."""
+    pen = isi.get("penomoran") or {}
+    if str(ke) in pen:
+        return pen[str(ke)]
+    return isi.get("anak_tangga") if ke == 1 else {}
+
+
+def baca(sesi: Path, akar_data: Path, tid: str | None, ke: int = 1) -> dict:
+    """{'tempat': 'tangga'|'sesi', 'anak_tangga': {nomor fisik: {...}}, 'lebar_cm', 'geser': {ke: n}}.
+
+    ``ke``: penomoran ke berapa (nomor anak tangga mulai dari 1 lagi sesudah setiap bordes).
+    """
     sesi_d = _baca_json(Path(sesi) / BERKAS_SESI)
     if tid:
         isi = (_baca_json(Path(akar_data) / CR.BERKAS_TANGGA).get(tid) or {}).get(KUNCI) or {}
@@ -90,26 +101,35 @@ def baca(sesi: Path, akar_data: Path, tid: str | None) -> dict:
             geser[int(k)] = int(v)
         except (TypeError, ValueError):
             pass
-    return {"tempat": tempat, "anak_tangga": _bersihkan(isi.get("anak_tangga")),
+    return {"tempat": tempat, "anak_tangga": _bersihkan(_anak_penomoran(isi, ke)),
             "lebar_cm": isi.get("lebar_cm"), "geser": geser}
 
 
-def tulis(sesi: Path, akar_data: Path, tid: str | None, anak_tangga: dict, lebar_cm, geser: dict) -> str:
-    """Simpan ukuran meteran (ke tangga fisik bila ada) dan geser penomoran sesi. Mengembalikan tempatnya."""
+def _isi_baru(lama: dict, ke: int, anak_tangga: dict, lebar_cm, waktu: str) -> dict:
+    anak = {str(k): v for k, v in sorted(_bersihkan(anak_tangga).items())}
+    isi = {k: v for k, v in (lama or {}).items() if k in ("anak_tangga", "penomoran", "bordes", "sumber")}
+    isi.setdefault("penomoran", {})[str(ke)] = anak
+    if ke == 1:
+        isi["anak_tangga"] = anak
+    isi.update(lebar_cm=lebar_cm, diperbarui=waktu)
+    return isi
+
+
+def tulis(sesi: Path, akar_data: Path, tid: str | None, anak_tangga: dict, lebar_cm, geser: dict, ke: int = 1) -> str:
+    """Simpan ukuran meteran penomoran ``ke`` (ke tangga fisik bila ada) dan geser penomoran sesi."""
     waktu = dt.datetime.now().isoformat(timespec="seconds")
-    isi = {"anak_tangga": {str(k): v for k, v in sorted(_bersihkan(anak_tangga).items())},
-           "lebar_cm": lebar_cm, "diperbarui": waktu}
     p_sesi = Path(sesi) / BERKAS_SESI
     sesi_d = _baca_json(p_sesi)
     sesi_d["geser"] = {str(k): int(v) for k, v in geser.items()}
     if tid:
         p = Path(akar_data) / CR.BERKAS_TANGGA
         semua = _baca_json(p)
-        semua.setdefault(tid, {})[KUNCI] = isi
+        entri = semua.setdefault(tid, {})
+        entri[KUNCI] = _isi_baru(entri.get(KUNCI), ke, anak_tangga, lebar_cm, waktu)
         _tulis_json(p, semua)
         tempat = f"tangga {tid}"
     else:
-        sesi_d.update(isi)
+        sesi_d.update(_isi_baru(sesi_d, ke, anak_tangga, lebar_cm, waktu))
         tempat = f"sesi {Path(sesi).name}"
     sesi_d["diperbarui"] = waktu
     _tulis_json(p_sesi, sesi_d)
@@ -152,7 +172,7 @@ def banding(akar_data: Path) -> list[dict]:
         per_ke = tangga_segmen(sesi, sistem, catatan)
         for t in sistem.get("tangga", []):
             tid = per_ke.get(t["ke"]) or catatan.get("tangga")
-            met = baca(sesi, akar_data, tid)
+            met = baca(sesi, akar_data, tid, t["ke"])
             geser = met["geser"].get(t["ke"], 0)
             for a in t["anak_tangga"]:
                 fisik = a["nomor"] + geser
@@ -172,29 +192,48 @@ def banding(akar_data: Path) -> list[dict]:
 
 
 def impor_ukur_tangga(berkas: Path, akar_data: Path) -> list[str]:
-    """Ukuran dari ekspor aplikasi Ukur Tangga ke tangga.json; mengembalikan ringkasan per tangga."""
+    """Ukuran dari ekspor aplikasi Ukur Tangga ke tangga.json; mengembalikan ringkasan per tangga fisik.
+
+    Versi 2: satu lokasi = satu tangga fisik (``id_studio`` lokasi); tangga ke-1, 2, ... di dalamnya
+    (dipisah bordes) menjadi penomoran 1, 2, ... yang nomornya mulai dari 1 lagi, sama dengan pelacak.
+    Versi 1: setiap tangga ber-``id_studio`` menjadi satu tangga fisik (penomoran 1).
+    """
     data = json.loads(Path(berkas).read_text(encoding="utf-8"))
     if data.get("format") != "ukur-tangga":
         raise ValueError("bukan berkas ekspor Ukur Tangga")
     p = Path(akar_data) / CR.BERKAS_TANGGA
     semua = _baca_json(p)
     laporan = []
+
+    def isi_anak(daftar, turun=False):
+        n, hasil = len(daftar), {}
+        for i, b in enumerate(daftar, start=1):
+            v = {k: b.get(k) for k in ("tinggi_riser_cm", "panjang_tread_cm") if isinstance(b.get(k), (int, float))}
+            if v:
+                hasil[str(n + 1 - i if turun else i)] = v
+        return hasil
+
     for lok in data.get("lokasi", []):
+        if data.get("versi", 1) >= 2:
+            tid = (lok.get("id_studio") or "").strip().upper()
+            if not tid:
+                continue
+            pen = {str(t.get("ke", i + 1)): isi_anak(t.get("anak_tangga", [])) for i, t in enumerate(lok.get("tangga", []))}
+            bordes = [t["bordes_sesudah"].get("panjang_cm") for t in lok.get("tangga", []) if t.get("bordes_sesudah")]
+            entri = semua.setdefault(tid, {"nama": lok.get("nama", ""), "lokasi": lok.get("nama", "")})
+            entri[KUNCI] = {"anak_tangga": pen.get("1", {}), "penomoran": pen, "bordes": bordes,
+                            "diperbarui": data.get("diekspor"), "sumber": f"ukur-tangga: {lok.get('nama', '')}"}
+            laporan.append(f"{tid}: {sum(len(v) for v in pen.values())} anak tangga dalam {len(pen)} tangga ({lok.get('nama', '')})")
+            continue
         for t in lok.get("tangga", []):
             tid = (t.get("id_studio") or "").strip().upper()
             if not tid:
                 continue
-            anak = [b for b in t.get("bagian", []) if b.get("jenis") == "anak_tangga"]
-            n = len(anak)
-            isi = {}
-            for i, b in enumerate(anak, start=1):
-                nomor = n + 1 - i if t.get("arah") == "turun" else i
-                isi[str(nomor)] = {k: b.get(k) for k in ("tinggi_riser_cm", "panjang_tread_cm")
-                                   if isinstance(b.get(k), (int, float))}
+            anak = isi_anak([b for b in t.get("bagian", []) if b.get("jenis") == "anak_tangga"], t.get("arah") == "turun")
             entri = semua.setdefault(tid, {"nama": f"{lok.get('nama', '')} · {t.get('nama', '')}", "lokasi": lok.get("nama", "")})
-            entri[KUNCI] = {"anak_tangga": {k: v for k, v in isi.items() if v}, "lebar_cm": t.get("lebar_cm"),
+            entri[KUNCI] = {"anak_tangga": anak, "penomoran": {"1": anak}, "lebar_cm": t.get("lebar_cm"),
                             "diperbarui": data.get("diekspor"), "sumber": f"ukur-tangga: {lok.get('nama', '')} / {t.get('nama', '')}"}
-            laporan.append(f"{tid}: {len(entri[KUNCI]['anak_tangga'])} anak tangga ({lok.get('nama', '')} / {t.get('nama', '')})")
+            laporan.append(f"{tid}: {len(anak)} anak tangga ({lok.get('nama', '')} / {t.get('nama', '')})")
     _tulis_json(p, semua)
     return laporan
 
