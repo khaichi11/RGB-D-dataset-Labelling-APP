@@ -2488,6 +2488,19 @@ class Studio(tk.Tk):
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
         tk.Label(i, text=KETERANGAN_LABEL, bg=PANEL, fg=MUTED, justify="left", anchor="w",
                  font=("Segoe UI", 8)).pack(fill="x", pady=(2, 0))
+        # Status dan tombol periksa tepat di bawah daftar frame, selalu terlihat:
+        # dulu berada di kartu bawah sehingga harus menggulir panel setiap frame.
+        self.lencana_periksa = tk.Label(i, text="—  belum ada frame dipilih", bg=PANEL, fg=MUTED,
+                                        font=("Segoe UI", 9, "bold"), pady=4, anchor="w", justify="left",
+                                        wraplength=250, height=3)
+        self.lencana_periksa.pack(fill="x", pady=(4, 2))
+        periksa = tk.Frame(i, bg=PANEL); periksa.pack(fill="x")
+        self.tombol_ringkas(periksa, "\u25c0", lambda: self.pindah_frame_label(-1), "#E8DDD5", INK, width=34).pack(side="left")
+        self.tombol_ringkas(periksa, "\u2714 Diperiksa & lanjut \u25b6 (Enter)", self._periksa_lalu_lanjut, "#7FA96B", "#FFFFFF",
+                             width=150).pack(side="left", fill="x", expand=True, padx=3)
+        self.tombol_ringkas(periksa, "\u25b6", lambda: self.pindah_frame_label(1), "#E8DDD5", INK, width=34).pack(side="left")
+        self.tombol_ringkas(i, "\u2714 / \u2716 Tandai atau cabut diperiksa (tanpa pindah)", self.toggle_periksa,
+                             "#E8DDD5", INK, width=250).pack(fill="x", pady=(3, 0))
         # Klik kanan pada daftar menyalin nama frame yang ditunjuk KURSOR,
         # bukan yang sedang terpilih; keduanya sering berbeda saat menelusuri.
         self.list_frame.bind("<Button-3>", self._salin_dari_kursor)
@@ -2588,12 +2601,6 @@ class Studio(tk.Tk):
                              "#E8DDD5", INK, width=138).pack(side="right")
         self.tombol(otomatis_i, "✨ Rekomendasi tangga: ConvNeXt RGB-D", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(8, 2))
         self.tombol(otomatis_i, "⚡ Batch auto-label frame baru", self.batch_auto_label, BLUE).pack(fill="x", pady=(4, 2))
-        # Penanda status berada tepat di atas tombolnya supaya keadaan frame
-        # terbaca sebelum tombol ditekan, bukan sesudahnya.
-        self.lencana_periksa = tk.Label(otomatis_i, text="—  belum ada frame dipilih", bg=PANEL,
-                                        fg=MUTED, font=("Segoe UI", 9, "bold"), pady=5)
-        self.lencana_periksa.pack(fill="x", pady=(8, 2))
-        self.tombol(otomatis_i, "✔ Tandai sudah diperiksa manual (Enter)", self.toggle_periksa, "#7FA96B").pack(fill="x", pady=(0, 2))
         tk.Label(otomatis_i, text="X lalu tarik = blok hapus (atau Ctrl+tarik) • G lalu tarik = geser "
                                   "(atau Alt+tarik / tombol tengah) • Esc kembali ke titik • "
                                   "Shift+tarik pilih titik • Ctrl+C nama frame • Ctrl+Shift+C jalur lengkap",
@@ -4588,6 +4595,15 @@ class Studio(tk.Tk):
         if not senyap:
             self.status.set("Frame ditandai SUDAH DIPERIKSA manual." if nilai
                             else "Penanda periksa manual dicabut; frame kembali berstatus usulan otomatis.")
+
+    def _periksa_lalu_lanjut(self) -> None:
+        """Sama dengan Enter di kanvas: tandai frame ini diperiksa lalu buka frame berikutnya."""
+        if not self.label_path:
+            return
+        nama = self.label_path.name
+        self.tandai_diperiksa(True, senyap=True)
+        self.pindah_frame_label(1)
+        self.status.set(f"\u2714 {nama} ditandai diperiksa manual, lanjut ke frame berikutnya.")
 
     def toggle_periksa(self) -> None:
         self.tandai_diperiksa(not self.status_periksa())
