@@ -151,19 +151,25 @@ def baca_json(path: Path, default: dict | None = None) -> dict:
 # Train) bertanda "oleh_claude"; "perlu_dicek" = keyakinan model rendah atau
 # usulan lama yang tidak dikenali pengusul baru. Begitu disunting atau ditandai
 # diperiksa, frame berstatus "diperiksa" seperti biasa.
-IKON_LABEL = {"diperiksa": "\u2714 ", "claude_cek": "\U0001f916\u26a0 ", "claude": "\U0001f916 "}
-WARNA_LABEL = {"diperiksa": "#1E8E3E", "claude_cek": "#D93025", "claude": "#7C3AED", "usulan": "#B0A8A0"}
+IKON_LABEL = {"diperiksa": "\u2714 ", "claude_cek": "\U0001f916\u26a0 ", "claude": "\U0001f916 ",
+              "claude_kosong": "\U0001f916\u2205 ", "usulan": "\u25cc ", "": "\u25cb "}
+WARNA_LABEL = {"diperiksa": "#1E8E3E", "claude_cek": "#D93025", "claude": "#7C3AED", "claude_kosong": "#64748B",
+               "usulan": "#B0A8A0"}
+KETERANGAN_LABEL = ("\u2714 diperiksa   \U0001f916 Claude   \U0001f916\u26a0 perlu dicek\n"
+                    "\U0001f916\u2205 Claude: tanpa tangga   \u25cc usulan lama   \u25cb belum ada label")
 
 
 def status_label(frame: Path) -> str:
-    """'diperiksa' | 'claude_cek' | 'claude' | 'usulan' | '' (tanpa draf) untuk satu folder frame."""
+    """'diperiksa' | 'claude_cek' | 'claude' | 'claude_kosong' | 'usulan' | '' (tanpa draf) untuk satu folder frame."""
     j = baca_json(frame / "label_draft.json", {})
     if not j:
         return ""
     if j.get("diperiksa_manual", not j.get("otomatis", False)):
         return "diperiksa"
     if j.get("oleh_claude"):
-        return "claude_cek" if j.get("perlu_dicek") else "claude"
+        if j.get("perlu_dicek"):
+            return "claude_cek"
+        return "claude" if any(j.get("poligon", {}).values()) else "claude_kosong"
     return "usulan"
 
 
@@ -2480,6 +2486,8 @@ class Studio(tk.Tk):
         self.list_frame = tk.Listbox(i, height=8, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT,
                                      selectmode="extended", exportselection=False)
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
+        tk.Label(i, text=KETERANGAN_LABEL, bg=PANEL, fg=MUTED, justify="left", anchor="w",
+                 font=("Segoe UI", 8)).pack(fill="x", pady=(2, 0))
         # Klik kanan pada daftar menyalin nama frame yang ditunjuk KURSOR,
         # bukan yang sedang terpilih; keduanya sering berbeda saat menelusuri.
         self.list_frame.bind("<Button-3>", self._salin_dari_kursor)
@@ -4601,6 +4609,8 @@ class Studio(tk.Tk):
             if draf.get("oleh_claude") and draf.get("perlu_dicek"):
                 lbl.config(text="\U0001f916\u26a0  dilabel Claude, PERLU DICEK: " + str(draf.get("catatan_claude", ""))[:70],
                            bg="#FDE7E5", fg="#B42318")
+            elif draf.get("oleh_claude") and not any(draf.get("poligon", {}).values()):
+                lbl.config(text="\U0001f916\u2205  Claude: tidak ada tangga di frame ini, belum diperiksa", bg="#EEF1F5", fg="#475569")
             elif draf.get("oleh_claude"):
                 lbl.config(text="\U0001f916  dilabel Claude, belum diperiksa", bg="#EFE7FD", fg="#5B21B6")
             else:
