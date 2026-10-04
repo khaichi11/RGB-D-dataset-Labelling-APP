@@ -32,6 +32,7 @@ from pathlib import Path
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import font as tkfont
 
 try:
     import cv2
@@ -2371,8 +2372,7 @@ class Studio(tk.Tk):
             g = (self._cache_frame.get(p) or {}).get("geser")
         teks_g = ir_selaras.teks_geser(g)
         if teks_g:
-            baris.append(f"↕ Rolling shutter RGB (kamera bergerak): {teks_g}; lapisan depth/IR dan "
-                         "pengukuran sudah dikoreksi per baris ke RGB")
+            baris.append(f"↕ Rolling shutter: {teks_g} (sudah dikoreksi)")
         sk = sinkron.info_frame(self._sinkron_frame(sesi), p.name) or sinkron.info_dari_frame_json(self.label_info or {})
         if sk:
             baris.append(sk)
@@ -2386,7 +2386,11 @@ class Studio(tk.Tk):
             cahaya += f"  •  kecerahan gambar {l:.0f}/255 ({kat})"
         baris.append(cahaya)
         w_ = CR.warna_untuk_tangga(tid, self._daftar_tangga()) if tid else CR.warna_rekaman(d, self._daftar_tangga())
-        self.info_rekaman.config(text="\n".join(baris), bg=CR.WARNA.get(w_) or PANEL)
+        teks, latar = "\n".join(baris), CR.WARNA.get(w_) or PANEL
+        if self.info_rekaman.cget("text") == teks and self.info_rekaman.cget("bg") == latar:
+            return                                      # tidak berubah: jangan gambar ulang
+        self.info_rekaman.config(text=teks, bg=latar)
+        self.kotak_info_rekaman.config(bg=latar)
 
     def ui_ekspor(self):
         f = tk.Frame(self.tab_ekspor, bg=BG); f.pack(fill="both", expand=True, padx=30, pady=28)
@@ -2459,9 +2463,17 @@ class Studio(tk.Tk):
         b, i = self.card(right, "Pilih frame ekspor") ; b.pack(fill="x", pady=(0, 7))
         # Catatan rekaman dan scene frame aktif, supaya tahu "rekaman ini di
         # mana" sebelum mulai melabel. Disunting di tab Tinjau.
-        self.info_rekaman = tk.Label(i, text="", bg=PANEL, fg=ACCENT, justify="left", anchor="w",
+        # Tinggi TETAP: isi info berganti per frame (4-12 baris) dan diisi dua kali
+        # (sesudah geser rolling shutter selesai diukur di thread latar). Dulu
+        # tingginya ikut berubah sehingga daftar frame dan tombol di bawahnya
+        # melompat naik-turun setiap next/prev.
+        baris_px = tkfont.Font(font=("Segoe UI", 9)).metrics("linespace")
+        self.kotak_info_rekaman = tk.Frame(i, bg=PANEL, height=baris_px * 10 + 6)
+        self.kotak_info_rekaman.pack(fill="x", pady=(0, 4))
+        self.kotak_info_rekaman.pack_propagate(False)
+        self.info_rekaman = tk.Label(self.kotak_info_rekaman, text="", bg=PANEL, fg=ACCENT, justify="left", anchor="nw",
                                      wraplength=250, font=("Segoe UI", 9))
-        self.info_rekaman.pack(fill="x", pady=(0, 4))
+        self.info_rekaman.pack(fill="both", expand=True)
         # extended: Shift+klik / seret memblok rentang, Ctrl+klik menambah satu,
         # supaya banyak frame bisa dibuang ke sampah sekaligus. exportselection
         # dimatikan agar pilihan tidak lenyap saat teks lain dipilih.
