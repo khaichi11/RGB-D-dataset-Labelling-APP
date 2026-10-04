@@ -638,7 +638,16 @@ class KanvasLabel(tk.Canvas):
         self._photo = self._photo_key = self._tampil_cache = self._tampil_key = None
         self._canvas_background_key = None
         self.reset_riwayat()
-        self.after(20, self.fit)
+        # Digambar sekali, sesudah pemanggil selesai memulihkan poligon draft.
+        # Dulu fit dijadwalkan 20 ms lalu dan pemulihan draft menjadwalkan fit
+        # lagi 25 ms lalu, sehingga di antara keduanya layar sempat menampilkan
+        # frame baru tanpa mask lalu dengan mask: berkedip saat next/prev.
+        self._fit_tertunda = True
+        self.after_idle(self._fit_bila_tertunda)
+
+    def _fit_bila_tertunda(self):
+        if getattr(self, "_fit_tertunda", False):
+            self.fit()
 
     def _salin_poligon(self):
         return {nama: [[tuple(titik) for titik in poly] for poly in daftar]
@@ -736,6 +745,7 @@ class KanvasLabel(tk.Canvas):
             self.fit()
 
     def fit(self):
+        self._fit_tertunda = False
         if self.rgb is None:
             return
         h, w = self.rgb.shape[:2]
@@ -4022,9 +4032,15 @@ class Studio(tk.Tk):
         i = self.frame_paths.index(self.label_path)
         state = baca_json(self.label_path / "frame_state.json", {"di_sampah": False})
         ikon = "\U0001f5d1 " if state.get("di_sampah") else ""
+        teks = self._teks_item_frame(self.label_path, ikon)
+        warna = WARNA_LABEL.get(status_label(self.label_path), "")
+        # Hanya bila berubah: menghapus-menyisipkan baris terpilih setiap kali
+        # frame dibuka membuat sorotan daftar berkedip saat next/prev.
+        if self.list_frame.get(i) == teks and (self.list_frame.itemcget(i, "fg") or "") == warna:
+            return
         terpilih = i in self.list_frame.curselection()
         self.list_frame.delete(i)
-        self.list_frame.insert(i, self._teks_item_frame(self.label_path, ikon))
+        self.list_frame.insert(i, teks)
         self._warnai_item_frame(i, self.label_path)
         if terpilih:
             self.list_frame.selection_set(i)
@@ -4072,7 +4088,7 @@ class Studio(tk.Tk):
             self.kanvas.aktif_indeks = {nama: (len(daftar) - 1 if daftar else None)
                                         for nama, daftar in self.kanvas.poligon.items()}
             self.kanvas.reset_riwayat()
-            self.kanvas.after(25, self.kanvas.fit)
+            self.kanvas.fit()                           # sekali, sudah dengan mask (lihat set_frame)
             self.status.set(f"Draft mask {p.name} dipulihkan otomatis.")
         elif not self._punya_label(p):
             # Frame baru selalu mendapat usulan terlebih dahulu. Pengguna lalu
