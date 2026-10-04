@@ -145,6 +145,27 @@ def baca_json(path: Path, default: dict | None = None) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# Penanda status label di daftar frame dan pita di bawah klip video. Label buatan
+# Claude (auto-label massal, lihat runs/label_claude/tulis_final.py di repo
+# Train) bertanda "oleh_claude"; "perlu_dicek" = keyakinan model rendah atau
+# usulan lama yang tidak dikenali pengusul baru. Begitu disunting atau ditandai
+# diperiksa, frame berstatus "diperiksa" seperti biasa.
+IKON_LABEL = {"diperiksa": "\u2714 ", "claude_cek": "\U0001f916\u26a0 ", "claude": "\U0001f916 "}
+WARNA_LABEL = {"diperiksa": "#1E8E3E", "claude_cek": "#D93025", "claude": "#7C3AED", "usulan": "#B0A8A0"}
+
+
+def status_label(frame: Path) -> str:
+    """'diperiksa' | 'claude_cek' | 'claude' | 'usulan' | '' (tanpa draf) untuk satu folder frame."""
+    j = baca_json(frame / "label_draft.json", {})
+    if not j:
+        return ""
+    if j.get("diperiksa_manual", not j.get("otomatis", False)):
+        return "diperiksa"
+    if j.get("oleh_claude"):
+        return "claude_cek" if j.get("perlu_dicek") else "claude"
+    return "usulan"
+
+
 def stamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -1876,6 +1897,14 @@ class Studio(tk.Tk):
                                   label="Posisi frame", bg=PANEL, fg=INK, highlightthickness=0,
                                   command=self._geser_posisi)
         self.scale_pos.pack(fill="x", pady=(6, 0))
+        # Pita penanda status label frame ekspor di sepanjang klip: hijau = diperiksa,
+        # ungu = dilabel Claude, merah = dilabel Claude dan perlu dicek. Klik = lompat
+        # ke frame bertanda terdekat.
+        self.pita_label = tk.Canvas(bawah, height=12, bg=PANEL, highlightthickness=0, cursor="hand2")
+        self.pita_label.pack(fill="x")
+        self.pita_label.bind("<Configure>", lambda e: self._gambar_pita_label())
+        self.pita_label.bind("<Button-1>", self._klik_pita_label)
+        self._pita_frame: list[tuple[int, str]] = []
 
         ukur = tk.Frame(bawah, bg=PANEL); ukur.pack(fill="x", pady=(6, 0))
         tk.Checkbutton(ukur, text="Ukur 2 titik (preview lengkap)", variable=self.mode_ukur,
@@ -3328,7 +3357,39 @@ class Studio(tk.Tk):
         self._n_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self._fps_video = cap.get(cv2.CAP_PROP_FPS) or float(self.args.fps)
         self.scale_pos.configure(to=max(0, self._n_frame - 1))
+        self._gambar_pita_label()
         return True
+
+    def _x_pita(self, i: int) -> float:
+        """Posisi x indeks frame i pada pita, selaras dengan jalur slider scale_pos."""
+        lebar = max(self.pita_label.winfo_width(), 1)
+        n = max(int(float(self.scale_pos.cget("to"))), 1)
+        tepi = int(self.scale_pos.cget("sliderlength")) / 2 + 2
+        return tepi + (lebar - 2 * tepi) * min(max(i / n, 0.0), 1.0)
+
+    def _gambar_pita_label(self) -> None:
+        if not hasattr(self, "pita_label"):
+            return
+        self.pita_label.delete("all")
+        self._pita_frame = []
+        if not self.sesi or float(self.scale_pos.cget("to")) <= 0:
+            return
+        for p in sorted((self.sesi / "exports" / "frames").glob("frame_*")):
+            i = CR.indeks_frame(p.name)
+            st = status_label(p)
+            if i is None or st not in WARNA_LABEL or baca_json(p / "frame_state.json", {}).get("di_sampah"):
+                continue
+            self._pita_frame.append((i, st))
+            x = self._x_pita(i)
+            tinggi = 12 if st in ("claude_cek", "diperiksa") else 9
+            self.pita_label.create_rectangle(x - 1, 12 - tinggi, x + 1, 12, fill=WARNA_LABEL[st], outline="")
+
+    def _klik_pita_label(self, e) -> None:
+        if not self._pita_frame:
+            return
+        i, _ = min(self._pita_frame, key=lambda f: abs(self._x_pita(f[0]) - e.x))
+        self.posisi.set(i)
+        self._tampilkan(i)
 
     def _tutup_video(self):
         self._hentikan_pemutar()
@@ -3937,11 +3998,36 @@ class Studio(tk.Tk):
             if state.get("di_sampah", False) != self.tampil_sampah_frame.get(): continue
             ikon = "\U0001f5d1 " if state.get("di_sampah") else ""
             self.frame_paths.append(p)
-            sc = CR.scene_untuk(catatan_sesi, CR.indeks_frame(p.name))
-            self.list_frame.insert("end", f"{ikon}{p.name}" + (f"  · {sc['nama']}" if sc else ""))
+            self.list_frame.insert("end", self._teks_item_frame(p, ikon, catatan_sesi))
+            self._warnai_item_frame(len(self.frame_paths) - 1, p)
         self.status.set(f"{len(self.frame_paths)} frame ekspor dimuat.")
         if lanjut_ke is not None:
             self._pilih_indeks_frame(lanjut_ke)
+
+    def _teks_item_frame(self, p: Path, ikon: str = "", catatan_sesi: dict | None = None) -> str:
+        if catatan_sesi is None:
+            catatan_sesi = self._catatan_cache(self.sesi)
+        sc = CR.scene_untuk(catatan_sesi, CR.indeks_frame(p.name))
+        return f"{ikon}{IKON_LABEL.get(status_label(p), '')}{p.name}" + (f"  · {sc['nama']}" if sc else "")
+
+    def _warnai_item_frame(self, i: int, p: Path) -> None:
+        warna = WARNA_LABEL.get(status_label(p))
+        if warna:
+            self.list_frame.itemconfig(i, fg=warna)
+
+    def _segarkan_item_frame(self) -> None:
+        """Perbarui ikon/warna frame aktif di daftar setelah statusnya berubah (simpan, tandai diperiksa)."""
+        if not self.label_path or self.label_path not in getattr(self, "frame_paths", []):
+            return
+        i = self.frame_paths.index(self.label_path)
+        state = baca_json(self.label_path / "frame_state.json", {"di_sampah": False})
+        ikon = "\U0001f5d1 " if state.get("di_sampah") else ""
+        terpilih = i in self.list_frame.curselection()
+        self.list_frame.delete(i)
+        self.list_frame.insert(i, self._teks_item_frame(self.label_path, ikon))
+        self._warnai_item_frame(i, self.label_path)
+        if terpilih:
+            self.list_frame.selection_set(i)
 
     def pilih_frame(self):
         s=self.list_frame.curselection()
@@ -4483,7 +4569,15 @@ class Studio(tk.Tk):
                 teks = "✔  SUDAH DIPERIKSA MANUAL"
             lbl.config(text=teks, bg="#DCEFD8", fg="#1E5B2A")
         else:
-            lbl.config(text="⚠  masih usulan otomatis", bg="#FBEEDA", fg="#8A5A12")
+            draf = baca_json(self.label_path / "label_draft.json", {})
+            if draf.get("oleh_claude") and draf.get("perlu_dicek"):
+                lbl.config(text="\U0001f916\u26a0  dilabel Claude, PERLU DICEK: " + str(draf.get("catatan_claude", ""))[:70],
+                           bg="#FDE7E5", fg="#B42318")
+            elif draf.get("oleh_claude"):
+                lbl.config(text="\U0001f916  dilabel Claude, belum diperiksa", bg="#EFE7FD", fg="#5B21B6")
+            else:
+                lbl.config(text="⚠  masih usulan otomatis", bg="#FBEEDA", fg="#8A5A12")
+        self._segarkan_item_frame()
 
     def simpan_draft_label(self):
         self._autosave_setelah = None
