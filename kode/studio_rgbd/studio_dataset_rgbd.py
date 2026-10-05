@@ -60,7 +60,7 @@ if __package__:
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
     from .ui_bantu import kolom_gulir
-    from . import visual_depth, ir_selaras, sinkron
+    from . import visual_depth, ir_selaras, sinkron, tema
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -75,7 +75,7 @@ else:
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
     from studio_rgbd.ui_bantu import kolom_gulir
-    from studio_rgbd import visual_depth, ir_selaras, sinkron
+    from studio_rgbd import visual_depth, ir_selaras, sinkron, tema
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -364,10 +364,10 @@ class TombolRounded(tk.Canvas):
         # spline dapat memakai lebar lama dan menyisakan bagian putih di kanan.
         w, h = self._ukuran
         w, h, r = max(1, w), max(1, h), 7
-        warna = self.color if self.enabled else "#D8D0CB"
+        warna = tema.latar(self.color if self.enabled else "#D8D0CB")
         if self._hover and self.enabled:
-            warna = _shade(warna, 0.88)
-        garis = "#D8CAC1" if self.enabled and self.color == "#E8DDD5" else warna
+            warna = _shade(warna, 1.18 if tema.GELAP else 0.88)
+        garis = tema.latar("#D8CAC1") if self.enabled and self.color == "#E8DDD5" else warna
         self.create_rectangle(r, 0, w-r, h, fill=warna, outline="")
         self.create_rectangle(0, r, w, h-r, fill=warna, outline="")
         for x, y, mulai in ((0, 0, 90), (w-2*r, 0, 0), (w-2*r, h-2*r, 270), (0, h-2*r, 180)):
@@ -376,7 +376,7 @@ class TombolRounded(tk.Canvas):
         # Garis sangat tipis hanya pada tombol sekunder agar tetap terpisah
         # dari panel tanpa memberi kesan kotak berat.
         self.create_rectangle(r, 0, w-r, h-1, outline=garis)
-        self.create_text(w / 2, h / 2, text=self.text, fill=self.fg if self.enabled else MUTED,
+        self.create_text(w / 2, h / 2, text=self.text, fill=tema.tinta(self.fg if self.enabled else MUTED),
                          font=("Segoe UI", 9, "bold"))
 
     def _klik(self, _event):
@@ -1602,6 +1602,7 @@ class Studio(tk.Tk):
         self.label_info: dict | None = None
         self.preview_photo = None
         self._preview_w = 480               # lebar render preview; mengikuti widget
+        tema.pasang(self)                       # tema gelap: terjemahkan warna sebelum widget dibuat
         self.title("RGB-D Labelling Studio — Rekam, Tinjau, Ekspor, Label")
         self.geometry("1500x940"); self.minsize(1180, 760); self.configure(bg=BG)
         self.protocol("WM_DELETE_WINDOW", self.tutup)
@@ -1712,12 +1713,29 @@ class Studio(tk.Tk):
             s.theme_use("clam")
         except tk.TclError:
             pass
-        s.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(2, 0, 2, 0))
-        s.configure("TNotebook.Tab", background="#EEE7E2", foreground=MUTED,
+        L, T = tema.latar, tema.tinta
+        s.configure("TNotebook", background=L(BG), borderwidth=0, tabmargins=(2, 0, 2, 0))
+        s.configure("TNotebook.Tab", background=L("#EEE7E2"), foreground=T(MUTED),
                     padding=(22, 11), font=("Segoe UI", 10, "bold"), borderwidth=0)
-        s.map("TNotebook.Tab", background=[("selected", PANEL)], foreground=[("selected", ACCENT)])
-        s.configure("TCombobox", fieldbackground="#FFFDFC", background="#FFFDFC",
-                    foreground=INK, padding=5, bordercolor="#DED7D2", lightcolor="#DED7D2", darkcolor="#DED7D2")
+        s.map("TNotebook.Tab", background=[("selected", L(PANEL))], foreground=[("selected", T(ACCENT))])
+        s.configure("TCombobox", fieldbackground=L("#FFFDFC"), background=L("#FFFDFC"),
+                    foreground=T(INK), padding=5, bordercolor=L("#DED7D2"), lightcolor=L("#DED7D2"), darkcolor=L("#DED7D2"),
+                    arrowcolor=T(INK))
+        s.map("TCombobox", fieldbackground=[("readonly", L("#FFFDFC"))], foreground=[("readonly", T(INK))],
+              selectbackground=[("readonly", L("#FFFDFC"))], selectforeground=[("readonly", T(INK))])
+        if tema.GELAP:
+            garis = "#3A332F"
+            s.configure("TNotebook", bordercolor=garis, lightcolor=garis, darkcolor=garis)
+            s.configure("TNotebook.Tab", bordercolor=garis, lightcolor=garis, darkcolor=garis)
+            s.map("TNotebook.Tab", lightcolor=[("selected", L(PANEL))], bordercolor=[("selected", garis)])
+            for gaya in ("TScrollbar", "Vertical.TScrollbar", "Horizontal.TScrollbar"):
+                s.configure(gaya, background="#37302C", troughcolor="#1D1A18", bordercolor="#1D1A18",
+                            arrowcolor=T(INK), lightcolor="#37302C", darkcolor="#37302C")
+            s.configure("Treeview", background="#1D1A18", fieldbackground="#1D1A18", foreground=T(INK))
+            s.configure("Treeview.Heading", background="#2C2724", foreground=T(INK))
+            s.map("Treeview", background=[("selected", "#4A3A31")])
+            for gaya in ("TCheckbutton", "TRadiobutton", "TLabel", "TFrame"):
+                s.configure(gaya, background=L(PANEL), foreground=T(INK))
 
     def card(self, parent, judul):
         b = tk.Frame(parent, bg=PANEL, highlightbackground="#E6DED8", highlightthickness=1, bd=0)
@@ -1744,6 +1762,8 @@ class Studio(tk.Tk):
         badge = tk.Label(top, text="D435  •  RGB + DEPTH", bg=ACCENT_SOFT, fg=ACCENT,
                          font=("Segoe UI", 9, "bold"), padx=12, pady=7)
         badge.pack(side="right", padx=(12, 0))
+        self.tombol_ringkas(top, "\u2600  Tema terang" if tema.GELAP else "\U0001f319  Tema gelap", self.ganti_tema,
+                             "#E8DDD5", INK, width=118).pack(side="right")
         # Baris status pindah ke kaki jendela: pesan progres yang panjang
         # (ekspor/preview) tidak lagi berjejal di kanan atas.
         footer = tk.Frame(self, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
@@ -2496,6 +2516,7 @@ class Studio(tk.Tk):
         # supaya banyak frame bisa dibuang ke sampah sekaligus. exportselection
         # dimatikan agar pilihan tidak lenyap saat teks lain dipilih.
         self.list_frame = tk.Listbox(i, height=8, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT,
+                                     selectforeground=INK,
                                      selectmode="extended", exportselection=False)
         self.list_frame.pack(fill="x"); self.list_frame.bind("<<ListboxSelect>>", lambda e: self.pilih_frame())
         tk.Label(i, text=KETERANGAN_LABEL, bg=PANEL, fg=MUTED, justify="left", anchor="w",
@@ -2719,6 +2740,15 @@ class Studio(tk.Tk):
         self.status.set("Mode touchpad: gulir dua jari menggeser, Ctrl+gulir memperbesar."
                         if self.kanvas.touchpad else
                         "Mode tetikus: gulir memperbesar, Shift+gulir menggeser mendatar.")
+
+    def ganti_tema(self):
+        """Simpan tema lawan lalu tawarkan membuka ulang Studio (warna dipasang saat mulai)."""
+        baru = "terang" if tema.GELAP else "gelap"
+        tema.simpan_tema(baru)
+        if messagebox.askyesno("Tema tampilan", f"Tema {baru} disimpan.\n\nBuka ulang Studio sekarang untuk menerapkannya?\n"
+                               "(Draft label dan catatan disimpan dulu seperti saat menutup biasa.)", parent=self):
+            self._buka_ulang = True
+            self.tutup()
 
     def simpan_preferensi(self):
         tulis_json(self.path_preferensi, {"kategori": self.kategori.get(), "split": self.split.get(),
@@ -5266,6 +5296,12 @@ class Studio(tk.Tk):
         # Thread latar yang tersangkut di librealsense (kode C) tidak dapat
         # dihentikan dan dulu membuat aplikasi tidak bisa ditutup. Data sudah
         # tersimpan di atas, jadi proses diakhiri langsung.
+        if getattr(self, "_buka_ulang", False):
+            # Ganti tema: Studio baru dengan perintah yang sama; jeda agar kamera
+            # sempat dilepas proses ini dulu.
+            import subprocess
+            subprocess.Popen(["/bin/sh", "-c", 'sleep 1.5; exec "$@"', "studio", *sys.orig_argv],
+                             cwd=os.getcwd(), start_new_session=True)
         os._exit(0)
 
     def _ekspor_aktif(self, atr: str) -> bool:
