@@ -1867,6 +1867,10 @@ class Studio(tk.Tk):
         self.list_sesi = tk.Listbox(i, bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT,
                                     selectforeground=INK, activestyle="none", height=8, exportselection=False)
         self.list_sesi.pack(fill="both", expand=True); self.list_sesi.bind("<<ListboxSelect>>", lambda e: self.pilih_sesi())
+        # Nama rekaman bisa disalin: Ctrl+C / klik kanan = nama folder, Ctrl+Shift+C = jalur lengkap.
+        self.list_sesi.bind("<Control-c>", lambda e: self._salin_rekaman())
+        self.list_sesi.bind("<Control-C>", lambda e: self._salin_rekaman(penuh=bool(e.state & 0x1)))
+        self.list_sesi.bind("<Button-3>", self._salin_rekaman_kursor)
         # Tombol dipadatkan menjadi dua baris agar kartu catatan di bawahnya
         # tidak mendorong tombol keluar layar pada jendela pendek.
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(6, 0))
@@ -2429,6 +2433,14 @@ class Studio(tk.Tk):
         # Fokus dapat berpindah ke spinbox/panel; shortcut tetap harus hidup
         # selama pengguna berada di tab Label.
         self.bind_all("<KeyPress>", self._shortcut_label, add="+")
+        # Salin/tempel di kotak isian tetap jalan saat Caps Lock menyala (Tk hanya
+        # memetakan Control-c/v/x huruf kecil ke <<Copy>>/<<Paste>>/<<Cut>>).
+        for kelas in ("Entry", "Text", "Spinbox", "TEntry", "TCombobox", "TSpinbox"):
+            for huruf, peristiwa in (("C", "<<Copy>>"), ("V", "<<Paste>>"), ("X", "<<Cut>>")):
+                self.bind_class(kelas, f"<Control-{huruf}>", lambda e, p=peristiwa: e.widget.event_generate(p) or "break")
+        for kelas in ("Entry", "TEntry", "TCombobox", "Spinbox", "TSpinbox"):
+            for huruf in ("a", "A"):
+                self.bind_class(kelas, f"<Control-{huruf}>", lambda e: (e.widget.select_range(0, "end"), e.widget.icursor("end"), "break")[-1])
         # Kotak pilihan dan slider menahan fokus keyboard setelah dipakai, sehingga
         # Space/panah tidak lagi berpindah frame (panah malah mengganti pilihan
         # atau menggeser slider). Di tab Label fokus dikembalikan ke kanvas.
@@ -2504,6 +2516,8 @@ class Studio(tk.Tk):
         # Klik kanan pada daftar menyalin nama frame yang ditunjuk KURSOR,
         # bukan yang sedang terpilih; keduanya sering berbeda saat menelusuri.
         self.list_frame.bind("<Button-3>", self._salin_dari_kursor)
+        self.list_frame.bind("<Control-c>", lambda e: self._salin_frame_terpilih())
+        self.list_frame.bind("<Control-C>", lambda e: self._salin_frame_terpilih(penuh=bool(e.state & 0x1)))
         self.tombol_ringkas(i, "Ekspor frame saat ini ke Label", self.ekspor_frame_kini_ke_label, GREEN, width=220).pack(fill="x", pady=(4, 0))
         nav = tk.Frame(i, bg=PANEL); nav.pack(fill="x", pady=(4, 0))
         self.tombol_ringkas(nav, "↻ Muat ulang gambar", self.kanvas.muat_ulang_gambar, "#E8DDD5", INK,
@@ -4396,7 +4410,7 @@ class Studio(tk.Tk):
             return None
         # Saat mengetik di kotak isian, huruf dan angka adalah isi, bukan pintasan.
         fokus = self.focus_get()
-        if isinstance(fokus, (tk.Entry, tk.Spinbox, ttk.Entry, ttk.Combobox, ttk.Spinbox)):
+        if isinstance(fokus, (tk.Entry, tk.Spinbox, tk.Text, ttk.Entry, ttk.Combobox, ttk.Spinbox)):
             return None
         ctrl = bool(event.state & 0x4)
         shift = bool(event.state & 0x1)
@@ -4685,12 +4699,35 @@ class Studio(tk.Tk):
         self.clipboard_clear(); self.clipboard_append(teks); self.update_idletasks()
         self.status.set(f"Disalin ke papan klip: {teks}")
 
-    def _salin_dari_kursor(self, e) -> str:
-        """Salin nama frame yang berada tepat di bawah kursor pada daftar."""
-        i = self.list_frame.nearest(e.y)
-        if i < 0 or i >= self.list_frame.size():
+    def _salin_teks(self, teks: str) -> str:
+        self.clipboard_clear(); self.clipboard_append(teks); self.update_idletasks()
+        self.status.set(f"Disalin ke papan klip: {teks}")
+        return "break"
+
+    def _salin_rekaman(self, penuh: bool = False) -> str:
+        pilih = [self._map_sesi[i] for i in self.list_sesi.curselection() if i < len(self._map_sesi)]
+        if not pilih:
             return "break"
-        nama = self.list_frame.get(i)
+        return self._salin_teks("\n".join(str(p) if penuh else p.name for p in pilih))
+
+    def _salin_rekaman_kursor(self, e) -> str:
+        i = self.list_sesi.nearest(e.y)
+        if 0 <= i < len(self._map_sesi):
+            return self._salin_teks(self._map_sesi[i].name)
+        return "break"
+
+    def _salin_frame_terpilih(self, penuh: bool = False) -> str:
+        pilih = [self.frame_paths[i] for i in self.list_frame.curselection() if i < len(self.frame_paths)]
+        if not pilih:
+            return "break"
+        return self._salin_teks("\n".join(str(p) if penuh else p.name for p in pilih))
+
+    def _salin_dari_kursor(self, e) -> str:
+        """Salin nama frame yang berada tepat di bawah kursor pada daftar (tanpa ikon status)."""
+        i = self.list_frame.nearest(e.y)
+        if i < 0 or i >= len(self.frame_paths):
+            return "break"
+        nama = self.frame_paths[i].name
         self.clipboard_clear(); self.clipboard_append(nama); self.update_idletasks()
         self.status.set(f"Disalin ke papan klip: {nama}")
         return "break"
