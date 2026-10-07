@@ -309,6 +309,38 @@ def _segi_empat(p: np.ndarray, bentuk, ambang: float = 0.96) -> list[tuple[int, 
     return [(int(round(x)), int(round(y))) for x, y in terbaik.reshape(-1, 2)]
 
 
+def _potong_ke_citra(p, w: int, h: int) -> list[tuple[int, int]]:
+    """Potong poligon dengan bingkai citra (Sutherland-Hodgman).
+
+    approxPolyN dan penyatuan sudut dapat menaruh sudut di perpotongan garis di LUAR
+    gambar (terukur sampai 470 px), sehingga titik tampak melayang di luar citra saat
+    disunting. Titik itu diganti titik potong di tepi; area di dalam gambar tetap.
+    """
+    P = [tuple(map(float, q)) for q in p]
+    for a, b, c in ((1, 0, 0.0), (-1, 0, -(w - 1.0)), (0, 1, 0.0), (0, -1, -(h - 1.0))):
+        keluar = []
+        for i in range(len(P)):
+            s_, e = P[i - 1], P[i]
+            ds, de = a * s_[0] + b * s_[1] - c, a * e[0] + b * e[1] - c
+            if de >= 0:
+                if ds < 0:
+                    t = ds / (ds - de); keluar.append((s_[0] + t * (e[0] - s_[0]), s_[1] + t * (e[1] - s_[1])))
+                keluar.append(e)
+            elif ds >= 0:
+                t = ds / (ds - de); keluar.append((s_[0] + t * (e[0] - s_[0]), s_[1] + t * (e[1] - s_[1])))
+        P = keluar
+        if not P:
+            return []
+    hasil: list[tuple[int, int]] = []
+    for x, y in P:
+        q = (int(round(x)), int(round(y)))
+        if not hasil or q != hasil[-1]:
+            hasil.append(q)
+    if len(hasil) > 1 and hasil[0] == hasil[-1]:
+        hasil.pop()
+    return hasil if len(hasil) >= 3 else []
+
+
 def satukan_sudut(tapakan: list, tegak: list, jarak: float = 10.0) -> tuple[list, list]:
     """Sudut riser dan tread yang berdekatan (< jarak px) disatukan ke titik tengahnya.
 
@@ -332,7 +364,8 @@ def satukan_sudut(tapakan: list, tegak: list, jarak: float = 10.0) -> tuple[list
         m = (R[i][a] + T[j][b]) / 2
         R[i][a] = m; T[j][b] = m
         pakai_r.add((i, a)); pakai_t.add((j, b))
-    bulat = lambda L: [[(int(round(x)), int(round(y))) for x, y in p] for p in L]
+    def bulat(L):
+        return [q for q in (_potong_ke_citra(p, 848, 480) for p in L) if q]
     return bulat(T), bulat(R)
 
 
