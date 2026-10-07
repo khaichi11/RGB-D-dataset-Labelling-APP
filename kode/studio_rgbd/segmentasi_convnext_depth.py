@@ -383,6 +383,28 @@ def model_siap() -> bool:
     return _MODEL is not None
 
 
+def lepas() -> bool:
+    """Lepaskan model dari memori GPU; dimuat ulang otomatis saat dipakai lagi. -> ada yang dilepas?
+
+    Konteks CUDA proses (beberapa ratus MB) tetap ada sampai Studio ditutup;
+    yang dikembalikan adalah bobot dan cache alokator torch.
+    """
+    global _MODEL
+    with _KUNCI:                                 # tunggu inferensi yang sedang berjalan selesai
+        if _MODEL is None:
+            return False
+        _MODEL = None
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+    return True
+
+
 def usulkan(rgb_bgr: np.ndarray, depth: np.ndarray, k: dict | None = None,
             skala_depth: float | None = None) -> dict:
     """Usulkan poligon tapakan dan bidang tegak dari citra dan kedalaman.

@@ -64,7 +64,7 @@ if __package__:
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
-                                         usulkan as usulkan_convnext_depth)
+                                         usulkan as usulkan_convnext_depth, lepas as lepas_convnext)
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from studio_rgbd.kamera_rgbd import (KameraRGBD, cari_rekaman, nama_aman, nama_rekaman,
@@ -79,7 +79,7 @@ else:
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
-                                         usulkan as usulkan_convnext_depth)
+                                         usulkan as usulkan_convnext_depth, lepas as lepas_convnext)
 
 
 BG = "#F3EEE7"
@@ -1645,6 +1645,10 @@ class Studio(tk.Tk):
         self.warna_bidang = DoubleVar(value=float(preferensi.get("warna_bidang", 0.0)))
         self.garis_3d = BooleanVar(value=bool(preferensi.get("garis_3d", False)))
         self.magnet_titik = BooleanVar(value=True)
+        # Model pengusul di GPU: auto-usulan frame tanpa label, peta model Bantu arah,
+        # tombol Rekomendasi/Batch. Mati = model tidak dimuat (dan dilepas bila sudah).
+        self.model_gpu = BooleanVar(value=bool(preferensi.get("model_gpu", True)))
+        self._model_gpu_aktif = bool(self.model_gpu.get())   # salinan untuk thread prefetch
         self.mode_label = StringVar(value="objek")
         self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
         # Navigasi frame dikunci sampai operator sengaja memilih warna mask.
@@ -1659,8 +1663,10 @@ class Studio(tk.Tk):
         self.tabs.bind("<<NotebookTabChanged>>", self.ganti_tab)
         self.after(30, self._poll)
         self.after(120, self.muat_daftar)   # daftar tangga langsung terlihat saat aplikasi dibuka
-        self.after(500, self._hangatkan_model_async)
-        self.status.set("Siap untuk labeling. Kamera dinyalakan hanya saat Preview Kamera atau Mulai rekam ditekan.")
+        if self._model_gpu_aktif:
+            self.after(500, self._hangatkan_model_async)
+        self.status.set("Siap untuk labeling. Kamera dinyalakan hanya saat Preview Kamera atau Mulai rekam ditekan."
+                        + ("" if self._model_gpu_aktif else " Auto-label/model GPU mati (tab Otomatis)."))
 
     # ----- struktur data -----
     def _siapkan_root(self):
@@ -2556,6 +2562,15 @@ class Studio(tk.Tk):
         edit_i = tk.Frame(panel_label, bg=PANEL); otomatis_i = tk.Frame(panel_label, bg=PANEL)
         panel_label.add(edit_i, text="Edit mask")
         panel_label.add(otomatis_i, text="Otomatis")
+        gpu = tk.Frame(otomatis_i, bg=PANEL, highlightthickness=1, highlightbackground=LINE, padx=6, pady=4)
+        gpu.pack(fill="x", pady=(6, 2))
+        tk.Checkbutton(gpu, text="Auto-label & model GPU", variable=self.model_gpu, command=self.ganti_model_gpu,
+                       bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
+                       font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self.info_model_gpu = tk.Label(gpu, text="", bg=PANEL, fg=MUTED, wraplength=290, justify="left",
+                                       font=("Segoe UI", 8))
+        self.info_model_gpu.pack(anchor="w")
+        self._perbarui_info_model_gpu()
         kontrol = tk.Frame(otomatis_i, bg=PANEL); kontrol.pack(fill="x", pady=(6, 2))
         tk.Label(kontrol, text="PILIH KONTROL", bg=PANEL, fg=ACCENT, font=("Segoe UI", 8, "bold")).pack(anchor="w")
         tk.Radiobutton(kontrol, text="Mudah: A/S/Space", variable=self.kontrol_label, value="mudah",
@@ -2763,7 +2778,8 @@ class Studio(tk.Tk):
                                           "depth_mode": self.depth_mode.get(),
                                           "pakai_ir": bool(self.pakai_ir.get()),
                                           "warna_bidang": float(self.warna_bidang.get()),
-                                          "garis_3d": bool(self.garis_3d.get())})
+                                          "garis_3d": bool(self.garis_3d.get()),
+                                          "model_gpu": bool(self.model_gpu.get())})
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
@@ -4293,8 +4309,8 @@ class Studio(tk.Tk):
     def _peta_model_kini(self) -> np.ndarray | None:
         """Peta kelas model untuk frame aktif (penyedia pemandu kanvas)."""
         p = self.label_path
-        if p is None or self.kanvas.rgb is None:
-            return None
+        if p is None or self.kanvas.rgb is None or not self._model_gpu_aktif:
+            return None                              # kanvas memakai arah normal depth (CPU)
         if (self.label_info or {}).get("kategori", "tangga_naik") != "tangga_naik":
             return None
         with self._kunci_cache:
@@ -4347,7 +4363,8 @@ class Studio(tk.Tk):
                 # Peta model hanya untuk lapisan Bantu arah; saat lapisan itu mati
                 # menghitungnya membuang ~30 ms per tetangga dan membuat frame
                 # berikutnya belum siap ketika next ditekan (thread UI lalu menghitung sendiri).
-                if data.get("peta") is None and self.kanvas.bantu_arah > 0 and model_convnext_siap():
+                if (data.get("peta") is None and self.kanvas.bantu_arah > 0 and self._model_gpu_aktif
+                        and model_convnext_siap()):
                     info = baca_json(p / "frame.json", {})
                     if info.get("kategori", "tangga_naik") == "tangga_naik" and "intrinsics_rgb_native" in info:
                         data["peta"] = peta_kelas_convnext(data["bgr"], data["dep"], self._intrinsics(info))
@@ -4355,10 +4372,55 @@ class Studio(tk.Tk):
                 continue                                    # prefetch hanya percepatan; jalur utama tetap membaca sendiri
 
     def _auto_segmentasi(self, target: Path):
-        if target != self.label_path or self._punya_label(target):
+        if target != self.label_path or self._punya_label(target) or not self._model_gpu_aktif:
             return
         self.status.set(f"Auto-segmentasi ConvNeXt RGB-D untuk {target.name}…")
         self.usulkan_segmentasi()
+
+    def _perbarui_info_model_gpu(self) -> None:
+        if not hasattr(self, "info_model_gpu"):
+            return
+        if self._model_gpu_aktif:
+            teks = ("Nyala: frame tanpa label langsung diberi usulan, Bantu arah memakai peta model. "
+                    + ("Model sudah di GPU." if model_convnext_siap() else "Model dimuat saat diperlukan."))
+        else:
+            teks = ("Mati: tidak ada auto-label saat membuka frame, Rekomendasi/Batch menunggu dinyalakan, "
+                    "Bantu arah memakai depth (CPU). Model tidak di GPU.")
+        self.info_model_gpu.configure(text=teks)
+
+    def ganti_model_gpu(self) -> None:
+        """Sakelar Auto-label & model GPU: mati melepas model dari GPU, nyala memuatnya lagi."""
+        if not self.model_gpu.get() and getattr(self, "_batch_thread", None) and self._batch_thread.is_alive():
+            self.model_gpu.set(True)
+            messagebox.showinfo("Batch berjalan", "Tunggu auto-label batch selesai sebelum mematikan model GPU.",
+                                parent=self)
+            return
+        self._model_gpu_aktif = bool(self.model_gpu.get())
+        self.simpan_preferensi()
+        self.kanvas._peta_arah_key = None            # pemandu dihitung ulang dari sumber yang berlaku
+        self.kanvas.render()
+        if self._model_gpu_aktif:
+            self.status.set("Auto-label & model GPU dinyalakan; memuat model…")
+            self._hangatkan_model_async()
+            if self.label_path is not None and not self._punya_label(self.label_path):
+                self.after(180, lambda target=self.label_path: self._auto_segmentasi(target))
+        else:
+            # Thread terpisah: lepas() menunggu inferensi prefetch yang sedang berjalan.
+            threading.Thread(target=lambda: (lepas_convnext(), self.q.put(("model_dilepas", None))),
+                             daemon=True).start()
+        self._perbarui_info_model_gpu()
+
+    def _pastikan_model_gpu(self) -> bool:
+        """Untuk tombol yang memakai model: tawarkan menyalakan bila sakelar mati."""
+        if self._model_gpu_aktif:
+            return True
+        if not messagebox.askyesno("Model GPU mati",
+                                   "Auto-label & model GPU sedang dimatikan (tab Otomatis).\n\n"
+                                   "Nyalakan sekarang untuk menjalankan model?", parent=self):
+            return False
+        self.model_gpu.set(True)
+        self.ganti_model_gpu()
+        return True
 
     def _hangatkan_model_async(self):
         def kerja():
@@ -4388,6 +4450,8 @@ class Studio(tk.Tk):
             messagebox.showinfo("Pilih sesi", "Pilih sesi pada tab Tinjau dahulu.", parent=self); return
         if getattr(self, "_batch_thread", None) and self._batch_thread.is_alive():
             messagebox.showinfo("Batch berjalan", "Tunggu auto-label batch selesai.", parent=self); return
+        if not self._pastikan_model_gpu():
+            return
         if getattr(self, "_model_warm_thread", None) and self._model_warm_thread.is_alive():
             self.status.set("Model ConvNeXt sedang dimuat ke GPU; batch akan tersedia sesaat lagi."); return
         target = [p for p in self.daftar_frame_ekspor() if not self._punya_label(p)]
@@ -4872,6 +4936,8 @@ class Studio(tk.Tk):
         """
         if self.kanvas.rgb is None or self.kanvas.depth is None:
             messagebox.showinfo("Pilih frame", "Pilih satu frame ekspor dahulu.", parent=self); return
+        if not self._pastikan_model_gpu():
+            return
         info = self.label_info or {}
         if "intrinsics_rgb_native" not in info:
             messagebox.showinfo("Intrinsics tidak ada",
@@ -5222,10 +5288,18 @@ class Studio(tk.Tk):
                     if v[0] == self.sesi:
                         self.info_progres.config(text=v[1])
                 elif k=="model_siap":
-                    self.status.set(f"Pengusul label siap di GPU: {v}")
-                    # Handle cuDNN milik thread; panaskan juga thread UI sekarang
-                    # agar auto-label frame pertama tidak membeku ~0,35 s.
-                    self.after(100, panaskan_utas_ini)
+                    if not self._model_gpu_aktif:          # dimatikan selagi pemanasan berjalan
+                        threading.Thread(target=lepas_convnext, daemon=True).start()
+                    else:
+                        self.status.set(f"Pengusul label siap di GPU: {v}")
+                        # Handle cuDNN milik thread; panaskan juga thread UI sekarang
+                        # agar auto-label frame pertama tidak membeku ~0,35 s.
+                        self.after(100, lambda: self._model_gpu_aktif and panaskan_utas_ini())
+                    self._perbarui_info_model_gpu()
+                elif k=="model_dilepas":
+                    self._perbarui_info_model_gpu()
+                    self.status.set("Model GPU dilepas. Auto-label, Rekomendasi, dan peta model Bantu arah mati; "
+                                    "Bantu arah memakai arah normal depth (CPU).")
                 elif k=="model_gagal":
                     self.status.set(f"Pengusul label belum siap: {v}")
                 elif k=="info_frame":
