@@ -4330,7 +4330,10 @@ class Studio(tk.Tk):
                         v = self._vis_frame(p, data, self._intrinsics(info), mode)
                         if v is not None:
                             vis[mode] = v
-                if data.get("peta") is None and model_convnext_siap():
+                # Peta model hanya untuk lapisan Bantu arah; saat lapisan itu mati
+                # menghitungnya membuang ~30 ms per tetangga dan membuat frame
+                # berikutnya belum siap ketika next ditekan (thread UI lalu menghitung sendiri).
+                if data.get("peta") is None and self.kanvas.bantu_arah > 0 and model_convnext_siap():
                     info = baca_json(p / "frame.json", {})
                     if info.get("kategori", "tangga_naik") == "tangga_naik" and "intrinsics_rgb_native" in info:
                         data["peta"] = peta_kelas_convnext(data["bgr"], data["dep"], self._intrinsics(info))
