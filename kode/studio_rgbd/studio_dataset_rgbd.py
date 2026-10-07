@@ -1933,6 +1933,8 @@ class Studio(tk.Tk):
         ttk.Combobox(row, textvariable=self.kecepatan, width=5, state="readonly",
                      values=("0.25x","0.5x","1x","2x","4x","8x")).pack(side="left")
         self.tombol_ringkas(row, "Folder", self.buka_sesi, "#E8DDD5", INK, width=68).pack(side="right", padx=(4, 0))
+        self.tombol_ringkas(row, "Isi meteran", lambda: self.buka_pemutar_ukur(mulai=self.posisi.get()),
+                            ACCENT, "white", width=96).pack(side="right", padx=4)
 
         self.scale_pos = tk.Scale(bawah, from_=0, to=0, orient="horizontal", variable=self.posisi,
                                   label="Posisi frame", bg=PANEL, fg=INK, highlightthickness=0,
@@ -3480,6 +3482,18 @@ class Studio(tk.Tk):
         self._n_frame = 0
         self._depth_frame_cache = (None, None)
 
+    def buka_pemutar_ukur(self, sesi: Path | None = None, mulai: int | None = None):
+        """Jendela "Putar & isi meteran": rekaman diputar dengan nomor anak tangga dari pelacak."""
+        sesi = sesi or self.sesi
+        if not sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman dahulu.", parent=self); return
+        self._hentikan_pemutar()
+        try:
+            from .pemutar_ukur import buka
+        except ImportError:
+            from pemutar_ukur import buka
+        buka(self, Path(sesi), mulai)
+
     def putar_preview(self):
         if self._pemutar_jalan():
             self._hentikan_pemutar(); return
@@ -4437,9 +4451,16 @@ class Studio(tk.Tk):
         self.list_frame.selection_clear(0, "end"); self.list_frame.selection_set(tujuan); self.list_frame.activate(tujuan)
         self._buka_frame_ekspor(self.frame_paths[tujuan])
 
+    def _di_jendela_utama(self, event) -> bool:
+        """Peristiwa berasal dari jendela utama, bukan dari jendela lain (pemutar ukur, dialog)."""
+        try:
+            return event.widget.winfo_toplevel() is self
+        except (AttributeError, KeyError, tk.TclError):
+            return False
+
     def _shortcut_label(self, event):
         """Shortcut label tetap berfungsi saat fokus berada di panel mana pun."""
-        if self.tabs.select() != str(self.tab_label):
+        if self.tabs.select() != str(self.tab_label) or not self._di_jendela_utama(event):
             return None
         # Saat mengetik di kotak isian, huruf dan angka adalah isi, bukan pintasan.
         fokus = self.focus_get()
@@ -4937,6 +4958,8 @@ class Studio(tk.Tk):
         self.kanvas.warna_bidang = float(self.warna_bidang.get())
         self.kanvas.render(); self.simpan_preferensi()
     def _fokus_kanvas_label(self, _e=None):
+        if _e is not None and not self._di_jendela_utama(_e):
+            return
         if self.tabs.select() == str(self.tab_label):
             self.after_idle(self.kanvas.focus_set)
     def ganti_kecerahan(self):

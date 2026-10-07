@@ -7,14 +7,15 @@ dengan perintah ``tangga``) pada SETIAP frame rekaman sesi; hasilnya:
 
 - nomor ``#n R`` / ``#n T`` ditandai di atas gambar frame yang sedang dilabel
   (dicocokkan lewat cap waktu kamera warna);
-- video bernomor ``derived/ukuran_sistem.mp4`` untuk memastikan urutannya;
+- tombol "Putar & isi meteran" membuka ``pemutar_ukur``: rekaman diputar di
+  Studio dengan nomor di atas gambar, video berhenti di setiap anak tangga
+  baru, dan ukuran meterannya diisi langsung di atas video;
 - tinggi riser dan panjang tread sistem per anak tangga, di samping kolom
   isian ukuran meteran yang disimpan ``ukuran_meteran.py`` (per tangga fisik
   bila sesi/scene sudah dikaitkan ke tangga, selain itu per sesi).
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -66,8 +67,9 @@ class PanelUkuran:
         self.btn_hitung = tk.Button(baris, text="Hitung nomor dari video", command=self.hitung, bg="#3C5F7A",
                                     fg="white", relief="flat", font=("Segoe UI", 8, "bold"), pady=4)
         self.btn_hitung.pack(side="left", fill="x", expand=True, padx=(0, 2))
-        tk.Button(baris, text="▶ Video bernomor", command=self.putar_video, bg="#E8DDD5", fg=INK, relief="flat",
-                  font=("Segoe UI", 8, "bold"), pady=4).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        tk.Button(baris, text="▶ Putar & isi meteran", command=self.putar_video, bg=ACCENT, fg="white",
+                  relief="flat", font=("Segoe UI", 8, "bold"), pady=4).pack(side="left", fill="x", expand=True,
+                                                                            padx=(2, 0))
         tk.Checkbutton(induk, text="Tandai nomor anak tangga di gambar (dari video)", variable=self.tandai,
                        command=self._segarkan_tanda, bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        font=("Segoe UI", 8)).pack(anchor="w", pady=(4, 0))
@@ -245,7 +247,7 @@ class PanelUkuran:
 
         def kerja():
             try:
-                _modul_ukuran().hitung(sesi, video=True, progres=lambda n: setattr(self, "_progres", n))
+                _modul_ukuran().hitung(sesi, progres=lambda n: setattr(self, "_progres", n))
             except Exception as e:                                  # noqa: BLE001
                 baris = [b for b in str(e).strip().splitlines() if b.strip()]
                 self._galat = f"{type(e).__name__}: {baris[-1][:200] if baris else ''}"
@@ -266,16 +268,24 @@ class PanelUkuran:
         self.sistem = _modul_ukuran().baca(self.sesi) if self.sesi else None
         self._muat_meteran()
         self._segarkan_tanda()
-        self.status.set("Selesai. Nomor ditandai di gambar; cek urutannya dengan ▶ Video bernomor.")
+        self.status.set("Selesai. Nomor ditandai di gambar; isi ukurannya sambil menonton dengan "
+                        "▶ Putar & isi meteran.")
 
     def putar_video(self) -> None:
-        if self.sesi is None:
+        """Buka pemutar interaktif di frame yang sedang dilabel."""
+        sesi = self.sesi or getattr(self.studio, "sesi", None)
+        if sesi is None:
+            self.status.set("Buka sebuah frame ekspor atau pilih rekaman dulu.")
             return
-        video = self.sesi / "derived" / "ukuran_sistem.mp4"
-        if not video.exists():
-            self.status.set("Video bernomor belum ada; tekan Hitung nomor dari video.")
+        info = getattr(self.studio, "label_info", None) or {}
+        mulai = info.get("index_bag") if self.sesi is not None else None
+        self.studio.buka_pemutar_ukur(sesi, int(mulai) if isinstance(mulai, (int, float)) else None)
+
+    def segarkan_dari_luar(self, sesi: Path, sistem_baru: bool = False) -> None:
+        """Dipanggil pemutar sesudah menyimpan ukuran meteran atau menghitung ulang nomor."""
+        if self.sesi is None or Path(sesi) != self.sesi:
             return
-        try:
-            subprocess.Popen(["xdg-open", str(video)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError as e:
-            self.status.set(f"Tidak dapat membuka pemutar video: {e}")
+        if sistem_baru:
+            self.sistem = _modul_ukuran().baca(self.sesi) if self._ada_sistem(self.sesi) else None
+        self._muat_meteran()
+        self._segarkan_tanda()
