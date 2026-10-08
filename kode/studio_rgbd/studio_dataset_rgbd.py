@@ -59,6 +59,7 @@ if __package__:
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
+    from .hitung_data import JendelaJumlahData, status_label
     from .ui_bantu import kolom_gulir
     from . import visual_depth, ir_selaras, sinkron, tema
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
@@ -74,6 +75,7 @@ else:
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
+    from studio_rgbd.hitung_data import JendelaJumlahData, status_label
     from studio_rgbd.ui_bantu import kolom_gulir
     from studio_rgbd import visual_depth, ir_selaras, sinkron, tema
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
@@ -157,20 +159,6 @@ WARNA_LABEL = {"diperiksa": "#1E8E3E", "claude_cek": "#D93025", "claude": "#7C3A
                "usulan": "#B0A8A0"}
 KETERANGAN_LABEL = ("\u2714 diperiksa   \U0001f916 Claude   \U0001f916\u26a0 perlu dicek\n"
                     "\U0001f916\u2205 Claude: tanpa tangga   \u25cc usulan lama   \u25cb belum ada label")
-
-
-def status_label(frame: Path) -> str:
-    """'diperiksa' | 'claude_cek' | 'claude' | 'claude_kosong' | 'usulan' | '' (tanpa draf) untuk satu folder frame."""
-    j = baca_json(frame / "label_draft.json", {})
-    if not j:
-        return ""
-    if j.get("diperiksa_manual", not j.get("otomatis", False)):
-        return "diperiksa"
-    if j.get("oleh_claude"):
-        if j.get("perlu_dicek"):
-            return "claude_cek"
-        return "claude" if any(j.get("poligon", {}).values()) else "claude_kosong"
-    return "usulan"
 
 
 def stamp() -> str:
@@ -1905,6 +1893,8 @@ class Studio(tk.Tk):
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(3, 0))
         self.tombol_ringkas(baris, "Hapus preview", self.hapus_preview_permanen, "#F3D8D4", INK, width=110).pack(side="left", expand=True, fill="x")
         self.tombol_ringkas(baris, "Hapus rekaman", self.hapus_sesi_permanen, RED, width=110).pack(side="left", expand=True, fill="x", padx=(3, 0))
+        self.tombol_ringkas(i, "📊 Jumlah data berlabel", self.buka_jumlah_data, "#E8DDD5", INK,
+                            width=220).pack(fill="x", pady=(3, 0))
         tk.Checkbutton(i, text="\U0001f5d1 Tampilkan isi tempat sampah", variable=self.tampil_sampah,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.muat_daftar).pack(anchor="w", pady=(4, 0))
@@ -3497,6 +3487,14 @@ class Studio(tk.Tk):
             self._video_cap = None
         self._n_frame = 0
         self._depth_frame_cache = (None, None)
+
+    def buka_jumlah_data(self):
+        """Jendela jumlah frame berlabel per rekaman dan perkiraan data train/val/test."""
+        lama = getattr(self, "_jendela_jumlah", None)
+        if lama is not None and lama.winfo_exists():
+            lama.lift(); lama.hitung(); return
+        kat = self.filter_sesi.get() if self.filter_sesi.get() in KATEGORI else "tangga_naik"
+        self._jendela_jumlah = JendelaJumlahData(self, kat, KATEGORI)
 
     def buka_pemutar_ukur(self, sesi: Path | None = None, mulai: int | None = None):
         """Jendela "Putar & isi meteran": rekaman diputar dengan nomor anak tangga dari pelacak."""
