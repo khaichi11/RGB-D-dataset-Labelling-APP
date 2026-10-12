@@ -138,6 +138,9 @@ class TabSplit:
         tk.Checkbutton(i, text="Hanya label yang sudah divalidasi manual (disarankan)", variable=self.hanya_diperiksa,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.muat_ulang).pack(anchor="w", pady=(6, 0))
+        tk.Label(i, text="Hanya rekaman bertanda ✔ di tab 2. Tinjau yang dipakai melatih; rekaman lain tidak punya "
+                         "frame siap latih, tidak ikut dibagi, dan masuk 'unassigned' di dataset HF.",
+                 bg=PANEL, fg=MUTED, wraplength=470, justify="left", font=("Segoe UI", 8)).pack(anchor="w")
 
         # --- rekaman & scene
         b, i = st.card(kiri, "Rekaman & scene  (Shift/Ctrl+klik memblok)"); b.pack(fill="x", pady=(0, 8))
@@ -154,6 +157,7 @@ class TabSplit:
         for nama, w in CR.WARNA.items():
             self.tree.tag_configure(f"stabilo_{nama}", background=w)
         self.tree.tag_configure("scene", font=("Segoe UI", 9, "italic"))
+        self.tree.tag_configure("belum_selesai", foreground=MUTED)
         gulir = ttk.Scrollbar(f2, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=gulir.set)
         self.tree.pack(side="left", fill="both", expand=True); gulir.pack(side="left", fill="y")
@@ -253,7 +257,8 @@ class TabSplit:
                     catatan[r] = CR.baca(self.akar / r)
                     w = CR.waktu_rekaman(self.akar / r)
                     waktu[r] = w[0] if w else None
-                    frames[r] = [d for d in self.frame_bersih(self.akar, [r], hanya_diperiksa=hanya)
+                    # Rekaman yang belum ✔ di tab 2. Tinjau tidak dipakai melatih: tanpa frame siap latih.
+                    frames[r] = [d for d in self.frame_bersih(self.akar, [r], hanya_diperiksa=hanya, hanya_selesai=True)
                                  if d.parent.parent.parent.name == r]
                     ek = self.akar / r / "exports" / "frames"
                     n_ekspor[r] = sum(1 for d in ek.iterdir() if d.is_dir()) if ek.exists() else 0
@@ -380,8 +385,9 @@ class TabSplit:
             c = self.catatan.get(r) or {}
             s = self.data["rekaman"].get(r)
             w = CR.warna_rekaman(c, self.daftar_tangga)
-            tag = [str(s)] + ([f"stabilo_{w}"] if w else [])
-            teks = ("✔ " if c.get("selesai") else "") + r.replace("TANGGA_NAIK_", "") + ("  📝" if c.get("catatan") else "")
+            tag = [str(s)] + ([f"stabilo_{w}"] if w else []) + ([] if c.get("selesai") else ["belum_selesai"])
+            teks = (("✔ " if c.get("selesai") else "") + r.replace("TANGGA_NAIK_", "") + ("  📝" if c.get("catatan") else "")
+                    + ("" if c.get("selesai") else "  · belum ✔, tidak dilatih"))
             self.tree.insert("", "end", iid=r, text=teks, values=self._nilai_baris(r), tags=tag,
                              open=r in buka)
             for i, sc in enumerate(self._scene(r)):
@@ -448,6 +454,8 @@ class TabSplit:
             teks += "\nScene: " + "; ".join(f"{sc['nama']} ({sc['awal']}–{sc['akhir']})" for sc in self._scene(r))
         if c.get("selesai"):
             teks = "✔ Rekaman ditandai sudah benar semua.\n" + teks
+        else:
+            teks = "Belum ✔ di tab 2. Tinjau: frame rekaman ini tidak dipakai melatih.\n" + teks
         self.info_rek.config(text=teks, bg=CR.WARNA.get(CR.warna_rekaman(c, self.daftar_tangga)) or BG)
 
     def _isi_daftar(self, pertahankan: bool = False) -> None:

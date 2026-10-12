@@ -5146,6 +5146,10 @@ class Studio(tk.Tk):
         if not self.sesi:
             messagebox.showinfo("Pilih sesi", "Pilih sesi pada tab Tinjau dahulu.", parent=self)
             return
+        if not CR.baca(self.sesi).get("selesai"):
+            messagebox.showinfo("Rekaman belum ✔", "Rekaman ini belum ditandai ✔ (sudah benar semua) di tab Tinjau, "
+                                "jadi tidak dipakai untuk melatih. Tandai dulu bila labelnya sudah benar.", parent=self)
+            return
         meta_sesi = baca_json(self.sesi / "source" / "session.json")
         split = meta_sesi.get("split", "train")
         root = self.root_data / "dataset_yolo_seg"

@@ -39,8 +39,10 @@ import cv2
 import numpy as np
 
 try:
+    from . import catatan_rekaman as CR
     from .segmentasi_convnext_depth import akar_aplikasi, akar_proyek
 except ImportError:
+    import catatan_rekaman as CR
     from segmentasi_convnext_depth import akar_aplikasi, akar_proyek
 
 NAMA_SPLIT_HF = {'train': 'train', 'val': 'validation', 'test': 'test'}   # selain itu: unassigned
@@ -263,10 +265,15 @@ def bangun(akar: Path, berkas_split: Path, keluar: Path,
         pq.write_table(pa.Table.from_pylist(buf, schema=skema), folder / f'bagian-{i:05d}.parquet')
         buf.clear()
 
+    selesai: dict[Path, bool] = {}
     for n, (kat, d) in enumerate(semua, 1):
         s = split_dataset.set_frame(data, d)
         b = _baris(d, kat, s)
-        nama = NAMA_SPLIT_HF.get(s, 'unassigned') if b['berlabel'] and not b['di_sampah'] else 'unassigned'
+        sesi = d.parent.parent.parent
+        if sesi not in selesai:                    # rekaman belum ✔ di tab Tinjau: tidak untuk melatih
+            selesai[sesi] = CR.baca(sesi).get('selesai') is True
+        nama = (NAMA_SPLIT_HF.get(s, 'unassigned') if b['berlabel'] and not b['di_sampah'] and selesai[sesi]
+                else 'unassigned')
         buf = penulis.setdefault(nama, [])
         buf.append(b)
         jumlah[nama] = jumlah.get(nama, 0) + 1

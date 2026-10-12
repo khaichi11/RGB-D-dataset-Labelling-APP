@@ -13,7 +13,8 @@ Definisinya sama dengan yang dipakai pelatihan dan tab Split Dataset:
   Split Dataset ("Hanya label yang sudah divalidasi manual");
 - train/val/test: dari ``split_dataset.json`` bila sudah ada, selain itu
   perkiraan pembagian per blok frame 70/15/15 tab Split Dataset (awal rekaman
-  train, tengah val, akhir test).
+  train, tengah val, akhir test). Hanya rekaman bertanda ✔ di tab Tinjau yang
+  dipakai melatih (``frame_bersih(hanya_selesai=True)``); rekaman lain 0.
 """
 from __future__ import annotations
 
@@ -89,13 +90,14 @@ def hitung_rekaman(sesi: Path, split: dict | None = None, rasio: dict = RASIO_BA
         if not j.get("diperiksa_manual", not j.get("otomatis", False)):      # aturan frame_bersih(hanya_diperiksa)
             continue
         hasil["siap_diperiksa"] += 1
-        if split is not None:
+        if split is not None and hasil["selesai"]:
             s = split.get("frame", {}).get(f"{sesi.name}/{d.name}") or split.get("rekaman", {}).get(sesi.name)
             per_set[s if s in per_set else "belum"] += 1
     if split is not None:
         hasil.update({f"set_{k}": v for k, v in per_set.items()})
     else:
-        hasil.update({f"set_{k}": v for k, v in _bagi_blok(hasil["siap_diperiksa"], rasio).items()})
+        n = hasil["siap_diperiksa"] if hasil["selesai"] else 0       # rekaman belum ✔ tidak dilatih
+        hasil.update({f"set_{k}": v for k, v in _bagi_blok(n, rasio).items()})
     hasil["set_dari_split"] = split is not None
     return hasil
 
@@ -169,8 +171,9 @@ class JendelaJumlahData(tk.Toplevel):
         tk.Label(self, textvariable=self.ringkas, bg=BG, fg=INK, justify="left", anchor="w",
                  font=("Segoe UI", 10, "bold")).pack(fill="x", padx=12, pady=(4, 2))
         tk.Label(self, text="Siap latih = berkas lengkap, bukan sampah (sama dengan skrip latih). Siap latih ✔ = hanya "
-                            "label yang sudah diperiksa manual, bawaan tab Split Dataset. Train/Val/Test dari "
-                            "split_dataset.json bila sudah dibuat, selain itu perkiraan per blok 70/15/15. "
+                            "label yang sudah diperiksa manual, bawaan tab Split Dataset. Train/Val/Test hanya dari rekaman ✔ "
+                            "(rekaman lain tidak dilatih), dari split_dataset.json bila sudah dibuat, selain itu "
+                            "perkiraan per blok 70/15/15. "
                             "Klik judul kolom untuk mengurutkan; klik dua kali baris untuk membuka rekamannya.",
                  bg=BG, fg=MUTED, justify="left", anchor="w", wraplength=1100,
                  font=("Segoe UI", 8)).pack(fill="x", padx=12, pady=(0, 6))
