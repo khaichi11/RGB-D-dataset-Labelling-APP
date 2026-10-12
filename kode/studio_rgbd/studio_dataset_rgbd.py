@@ -4175,6 +4175,7 @@ class Studio(tk.Tk):
         # diperlukan sebelum navigasi pertama, bukan setiap kali frame baru
         # dibuka; jika tidak tombol panah berhenti setelah satu perpindahan.
         self.label_path=p; self.label_info=baca_json(p/"frame.json")
+        self._usulan_aktif = None                     # riwayat undo frame lama tidak berlaku lagi
         try:
             self.kanvas.intrinsik = self._intrinsics(self.label_info)
         except (KeyError, TypeError, ValueError):
@@ -4763,10 +4764,46 @@ class Studio(tk.Tk):
                 lbl.config(text="⚠  masih usulan otomatis", bg="#FBEEDA", fg="#8A5A12")
         self._segarkan_item_frame()
 
+    BERKAS_LABEL = ("label_draft.json", "label_yolo_seg.txt", "mask_objek.png", "mask_acuan.png")
+
+    def _potret_berkas_label(self, frame: Path | None) -> dict:
+        """Isi berkas label sebuah frame (None = berkas belum ada), untuk dipulihkan persis."""
+        if frame is None:
+            return {}
+        return {n: ((frame / n).read_bytes() if (frame / n).exists() else None) for n in self.BERKAS_LABEL}
+
+    @staticmethod
+    def _pulihkan_berkas_label(frame: Path, potret: dict) -> None:
+        for nama, isi in potret.items():
+            if isi is None:
+                (frame / nama).unlink(missing_ok=True)     # dibuat oleh usulan yang dibatalkan
+            else:
+                (frame / nama).write_bytes(isi)
+
     def simpan_draft_label(self):
         self._autosave_setelah = None
         if not self.label_path or self.kanvas.rgb is None:
             return
+        u = getattr(self, "_usulan_aktif", None)
+        if u is not None and u["frame"] == self.label_path:
+            kini = self.kanvas._salin_poligon()
+            if kini == u["sebelum"]:
+                # Ctrl+Z sampai sebelum usulan: berkas label kembali persis, termasuk statusnya.
+                self._pulihkan_berkas_label(self.label_path, u["berkas"])
+                self.perbarui_lencana_periksa()
+                self.status.set(f"Usulan dibatalkan; label sebelumnya dipulihkan: {self.label_path.name}")
+                return
+            if kini == u["usulan"]:
+                # Usulan mesin yang belum disentuh bukan label diperiksa.
+                tulis_json(self.label_path / "label_draft.json", {
+                    "versi": 3, "otomatis": True, "diperiksa_manual": False, "diperiksa_iso": None,
+                    "disimpan_iso": datetime.now().isoformat(timespec="seconds"), "poligon": self.kanvas.poligon,
+                })
+                self.perbarui_lencana_periksa()
+                if self._ada_poligon():
+                    self.simpan_label(senyap=True)
+                self.status.set(f"Usulan disimpan sebagai belum diperiksa (Ctrl+Z membatalkan): {self.label_path.name}")
+                return
         # Menyunting poligon berarti manusia sudah memeriksanya. Penanda
         # otomatis karena itu dicabut sendiri, bukan menunggu tombol ditekan:
         # kalau menunggu, sebagian besar frame akan tetap bertanda otomatis
@@ -4979,11 +5016,21 @@ class Studio(tk.Tk):
         # Urutan visual bawah->atas juga dipakai untuk riser agar konsisten.
         tapakan = [t["poligon"] for t in hasil.get("tapakan_terurut", [])] or hasil["tapakan"]
         urut_bawah = lambda daftar: sorted(daftar, key=lambda poly: -sum(p[1] for p in poly) / max(1, len(poly)))
+        # Simpanan tertunda dituntaskan dulu, lalu berkas label sebelum usulan dipotret:
+        # Ctrl+Z sampai ke poligon sebelum usulan memulihkan berkas itu persis
+        # (status ✔ diperiksa / 🤖 Claude / perlu dicek ikut kembali).
+        if self._autosave_setelah is not None:
+            self.after_cancel(self._autosave_setelah)
+            self.simpan_draft_label()
+        self._usulan_aktif = {"frame": self.label_path, "sebelum": self.kanvas._salin_poligon(),
+                              "berkas": self._potret_berkas_label(self.label_path)}
         self.kanvas.poligon["acuan"] = [list(map(tuple, p)) for p in urut_bawah(tapakan)]
         self.kanvas.poligon["objek"] = [list(map(tuple, p)) for p in urut_bawah(hasil["bidang_tegak"])]
+        self._usulan_aktif["usulan"] = self.kanvas._salin_poligon()
         self.kanvas.aktif_indeks = {nama: (len(daftar) - 1 if daftar else None)
                                     for nama, daftar in self.kanvas.poligon.items()}
-        self.kanvas.reset_riwayat()
+        # Satu langkah riwayat, bukan reset: Ctrl+Z mengembalikan label sebelum usulan.
+        self.kanvas.catat_riwayat()
         self._aktif_mask_berubah(self.mode_label.get(), self.kanvas.aktif_indeks[self.mode_label.get()])
         self.kanvas.render(); self.kanvas.on_change()
         urut = hasil.get("tapakan_terurut", [])
@@ -4992,7 +5039,7 @@ class Studio(tk.Tk):
         self.ukur_status.set(
             f"Rekomendasi {hasil.get('sumber', 'depth')}: {len(hasil['tapakan'])} tapakan (biru), {len(hasil['bidang_tegak'])} riser (merah). "
             + (f"Beda tinggi antar tapakan: {beda} cm." if beda else "")
-            + " Periksa lalu koreksi sebelum menyimpan.")
+            + " Periksa lalu koreksi sebelum menyimpan. Ctrl+Z membatalkan usulan ini.")
 
     def ganti_mode(self):
         self.kanvas.mode = self.mode_label.get()
