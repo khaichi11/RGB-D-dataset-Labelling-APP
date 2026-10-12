@@ -2019,6 +2019,8 @@ class Studio(tk.Tk):
         self.pilih_tangga.pack(side="left", fill="x", expand=True)
         self.pilih_tangga.bind("<<ComboboxSelected>>", lambda _e: self.atur_tangga_sesi(self.pilih_tangga.get()))
         self.tombol_ringkas(baris, "+ Baru", self.tangga_baru, GREEN, width=60).pack(side="left", padx=(3, 0))
+        self.tombol_ringkas(i, "🪜 Kelompokkan rekaman per tangga…", self.buka_kelompok_tangga, "#E8DDD5", INK,
+                            width=240).pack(fill="x", pady=(3, 0))
         tk.Label(i, text="Catatan / lokasi (tersimpan otomatis)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
         self.teks_catatan = tk.Text(i, height=3, wrap="word", bg="#FFF9F4", fg=INK, relief="flat",
                                     font=("Segoe UI", 9), undo=True)
@@ -2209,6 +2211,18 @@ class Studio(tk.Tk):
         CR.tulis_tangga(self.root_data, daftar)
         self._ubah_catatan(lambda d: d.update(tangga=tid))
         self.status.set(f"Tangga {tid} · {nama.strip()} dibuat dan dipasang ke rekaman ini.")
+
+    def buka_kelompok_tangga(self) -> None:
+        """Jendela kartu bergambar untuk menandai banyak rekaman sekaligus sebagai tangga fisik yang sama."""
+        lama = getattr(self, "_jendela_kelompok", None)
+        if lama is not None and lama.winfo_exists():
+            lama.lift(); lama.muat(); return
+        try:
+            from .kelompok_tangga import JendelaKelompokTangga
+        except ImportError:
+            from kelompok_tangga import JendelaKelompokTangga
+        kat = self.filter_sesi.get() if self.filter_sesi.get() in KATEGORI else "tangga_naik"
+        self._jendela_kelompok = JendelaKelompokTangga(self, kat)
 
     def tangga_scene(self) -> None:
         """Tangga untuk scene terpilih (satu rekaman bisa melewati beberapa tangga)."""
