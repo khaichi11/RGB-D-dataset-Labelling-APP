@@ -101,7 +101,16 @@ BOBOT_USULAN = [
 # atas; frame jelek (< 0,7) 23 -> 5; menggabungkannya dengan ensembel lama justru
 # menurunkan (0,890/0,857). Bila berkasnya ada, model ini dipakai SENDIRIAN.
 # Bukti: Train-RGB-D-Model/bukti/final_d435/label_claude_20261004/.
-BOBOT_USULAN_UTAMA = ('latih semua label 2026-10-04', 'runs/pengusul_20261004_semua/deployment_penuh.pt')
+# 13 Oktober 2026: pengusul dilatih HANYA dari rekaman bertanda ✔ di tab Tinjau
+# (53 rekaman, 3.862 label terperiksa). Pada 879 frame terperiksa dari 9 rekaman
+# yang belum ✔ (tidak satu pun dilatih model ini), Dice usulan riser/tread
+# 0,972/0,967 lawan 0,924/0,953 pengusul 2026-10-04; frame < 0,7: 75 -> 26.
+# Pada 46 frame uji lama sedikit lebih rendah (0,892/0,891 lawan 0,904/0,916).
+# Bukti: Train-RGB-D-Model/bukti/final_d435/pengusul_20261013/.
+BOBOT_USULAN_UTAMA = [
+    ('latih rekaman ✔ 2026-10-13', 'runs/pengusul_20261013_selesai/deployment_penuh.pt'),
+    ('latih semua label 2026-10-04', 'runs/pengusul_20261004_semua/deployment_penuh.pt'),   # cadangan
+]
 
 
 def pilih_bobot_usulan() -> tuple[str, list[Path]]:
@@ -112,9 +121,10 @@ def pilih_bobot_usulan() -> tuple[str, list[Path]]:
         if not p.exists():
             raise FileNotFoundError(f'STUDIO_BOBOT_USULAN menunjuk berkas yang tidak ada:\n  {p}')
         return f'ConvNeXt RGB-D ({p.name}, dari STUDIO_BOBOT_USULAN)', [p]
-    utama = akar_aplikasi() / BOBOT_USULAN_UTAMA[1]
-    if utama.exists():
-        return f'ConvNeXt V2 Atto RGB-D 384 ({BOBOT_USULAN_UTAMA[0]})', [utama]
+    for nama, rel in BOBOT_USULAN_UTAMA:              # yang pertama tersedia dipakai SENDIRIAN
+        utama = akar_aplikasi() / rel
+        if utama.exists():
+            return f'ConvNeXt V2 Atto RGB-D 384 ({nama})', [utama]
     ada = [(nama, akar_aplikasi() / rel) for nama, rel in BOBOT_USULAN if (akar_aplikasi() / rel).exists()]
     if not ada:
         raise FileNotFoundError('Checkpoint pengusul label tidak ditemukan. Yang dicari:\n  '
