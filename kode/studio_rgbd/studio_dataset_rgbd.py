@@ -59,6 +59,7 @@ if __package__:
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
+    from . import tempat_sampah as TS
     from .hitung_data import JendelaJumlahData, status_label
     from .ui_bantu import kolom_gulir
     from . import visual_depth, ir_selaras, sinkron, tema
@@ -75,6 +76,7 @@ else:
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
+    from studio_rgbd import tempat_sampah as TS
     from studio_rgbd.hitung_data import JendelaJumlahData, status_label
     from studio_rgbd.ui_bantu import kolom_gulir
     from studio_rgbd import visual_depth, ir_selaras, sinkron, tema
@@ -1893,6 +1895,8 @@ class Studio(tk.Tk):
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(3, 0))
         self.tombol_ringkas(baris, "Hapus preview", self.hapus_preview_permanen, "#F3D8D4", INK, width=110).pack(side="left", expand=True, fill="x")
         self.tombol_ringkas(baris, "Hapus rekaman", self.hapus_sesi_permanen, RED, width=110).pack(side="left", expand=True, fill="x", padx=(3, 0))
+        self.tombol_ringkas(i, "♻ Tempat sampah Studio…", self.buka_tempat_sampah, "#E8DDD5", INK,
+                            width=220).pack(fill="x", pady=(3, 0))
         self.tombol_ringkas(i, "📊 Jumlah data berlabel", self.buka_jumlah_data, "#E8DDD5", INK,
                             width=220).pack(fill="x", pady=(3, 0))
         tk.Checkbutton(i, text="\U0001f5d1 Tampilkan isi tempat sampah", variable=self.tampil_sampah,
@@ -2556,11 +2560,12 @@ class Studio(tk.Tk):
         self.tombol_ringkas(nav, "↻ Muat ulang gambar", self.kanvas.muat_ulang_gambar, "#E8DDD5", INK,
                              width=180).pack(fill="x")
         kelola = tk.Frame(i, bg=PANEL); kelola.pack(fill="x", pady=(4, 0))
-        self.tombol_ringkas(kelola, "Sampahkan", self.toggle_sampah_frame, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        self.tombol_ringkas(kelola, "Hapus permanen", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        tk.Checkbutton(i, text="\U0001f5d1 Tampilkan sampah frame", variable=self.tampil_sampah_frame,
+        self.btn_sampah_frame = self.tombol_ringkas(kelola, "🗑 Sampahkan", self.toggle_sampah_frame, "#E8DDD5", INK)
+        self.btn_sampah_frame.pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.tombol_ringkas(kelola, "Hapus", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        tk.Checkbutton(i, text="\U0001f5d1 Tampilkan sampah frame (lalu ♻ Pulihkan)", variable=self.tampil_sampah_frame,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
-                       command=self.muat_frame).pack(anchor="w", pady=(6, 0))
+                       command=self._ganti_tampilan_sampah_frame).pack(anchor="w", pady=(6, 0))
         b, i = self.card(right, "Label dan depth") ; b.pack(fill="x", pady=(0, 7))
         panel_label = ttk.Notebook(i); panel_label.pack(fill="both", expand=True)
         edit_i = tk.Frame(panel_label, bg=PANEL); otomatis_i = tk.Frame(panel_label, bg=PANEL)
@@ -3417,16 +3422,18 @@ class Studio(tk.Tk):
         rekaman = (self.root_data / "rekaman").resolve()
         if rekaman not in target.parents:
             messagebox.showerror("Target tidak aman", "Folder terpilih bukan sesi rekaman yang valid.", parent=self); return
-        if not messagebox.askyesno("Hapus rekaman permanen", f"Hapus PERMANEN seluruh sesi ini?\n\n{target.name}\n\nRAW, preview, ekspor frame, gambar, mask, dan label akan hilang dan tidak dapat dipulihkan.", icon="warning", parent=self):
+        if not messagebox.askyesno("Hapus rekaman", f"Hapus seluruh sesi ini?\n\n{target.name}\n\nFoldernya (RAW, preview, ekspor, label) "
+                                   "dipindah ke Tempat sampah Studio dan masih bisa dipulihkan. Ruang disk baru kembali "
+                                   "setelah tempat sampah dikosongkan.", icon="warning", parent=self):
             return
         self._tutup_video()
         try:
-            shutil.rmtree(target)
+            TS.buang(self.root_data, target, "rekaman")
             self.sesi = None; self.indeks = []; self.frame_paths = []; self.label_path = None; self.label_info = None
             self.list_frame.delete(0, "end"); self.kanvas.delete("all")
             self.kategori_sesi.set("(rekaman dihapus)")
             self.muat_daftar()
-            self.status.set("Rekaman dan seluruh turunannya dihapus permanen.")
+            self.status.set(f"{target.name} dipindah ke Tempat sampah Studio (bisa dipulihkan).")
         except OSError as e:
             messagebox.showerror("Hapus rekaman", str(e), parent=self)
 
@@ -3501,6 +3508,13 @@ class Studio(tk.Tk):
             self._video_cap = None
         self._n_frame = 0
         self._depth_frame_cache = (None, None)
+
+    def buka_tempat_sampah(self):
+        """Frame/rekaman yang dihapus: pulihkan, hapus selamanya, atau kosongkan."""
+        lama = getattr(self, "_jendela_sampah", None)
+        if lama is not None and lama.winfo_exists():
+            lama.lift(); lama.muat(); return
+        self._jendela_sampah = TS.JendelaTempatSampah(self)
 
     def buka_jumlah_data(self):
         """Jendela jumlah frame berlabel per rekaman dan perkiraan data train/val/test."""
@@ -3921,13 +3935,15 @@ class Studio(tk.Tk):
             messagebox.showinfo("Belum ada ekspor", "Sesi ini belum memiliki hasil ekspor.", parent=self); return
         if getattr(self, "_ekspor_thread", None) and self._ekspor_thread.is_alive():
             messagebox.showinfo("Ekspor berjalan", "Tunggu ekspor yang sedang berjalan selesai.", parent=self); return
-        if not messagebox.askyesno("Hapus semua ekspor", "Hapus SEMUA frame ekspor, gambar, depth, IR, mask, label, dan video ekspor sesi ini?\n\nRekaman RAW tidak dihapus. Anda dapat mengekspor ulang dari awal.", icon="warning", parent=self):
+        if not messagebox.askyesno("Hapus semua ekspor", "Hapus SEMUA frame ekspor, gambar, depth, IR, mask, label, dan video ekspor sesi ini?\n\n"
+                                   "Foldernya dipindah ke Tempat sampah Studio dan masih bisa dipulihkan. Rekaman RAW tidak "
+                                   "dihapus.", icon="warning", parent=self):
             return
         try:
-            shutil.rmtree(root)
+            TS.buang(self.root_data, root, "ekspor")
             self.frame_paths = []; self.label_path = None; self.label_info = None
             self.list_frame.delete(0, "end"); self.kanvas.delete("all")
-            self.status.set("Semua hasil ekspor dihapus. RAW tetap aman dan siap diekspor ulang.")
+            self.status.set("Semua hasil ekspor dipindah ke Tempat sampah Studio (bisa dipulihkan). RAW tetap aman.")
         except OSError as e:
             messagebox.showerror("Hapus ekspor", str(e), parent=self)
 
@@ -4899,9 +4915,16 @@ class Studio(tk.Tk):
         self.status.set(f"Disalin ke papan klip: {nama}")
         return "break"
 
+    def _ganti_tampilan_sampah_frame(self):
+        """Di tampilan sampah tombol yang sama memulihkan; labelnya ikut berganti agar tidak menyesatkan."""
+        self.btn_sampah_frame.configure(text="♻ Pulihkan" if self.tampil_sampah_frame.get() else "🗑 Sampahkan")
+        self.muat_frame()
+
     def toggle_sampah_frame(self):
         pilihan = [self.frame_paths[i] for i in self.list_frame.curselection() if i < len(self.frame_paths)]
-        target = pilihan if len(pilihan) > 1 else ([self.label_path] if self.label_path else [])
+        # Frame yang dipilih di daftar diutamakan: setelah tampilan diganti, label_path
+        # masih bisa menunjuk frame dari tampilan sebelumnya.
+        target = pilihan or ([self.label_path] if self.label_path else [])
         if not target:
             messagebox.showinfo("Pilih frame", "Pilih frame yang ingin dipindahkan atau dipulihkan.", parent=self)
             return
@@ -4918,7 +4941,7 @@ class Studio(tk.Tk):
             self.simpan_draft_label()
         for f in target:
             state = baca_json(f / "frame_state.json", {"di_sampah": False})
-            state["di_sampah"] = ke_sampah if len(target) > 1 else not state.get("di_sampah", False)
+            state["di_sampah"] = ke_sampah
             state["waktu_ubah_iso"] = datetime.now().isoformat(timespec="seconds")
             tulis_json(f / "frame_state.json", state)
         # Hanya frame INI yang ditandai - folder dan isinya tidak dipindah,
@@ -4949,7 +4972,8 @@ class Studio(tk.Tk):
         exports = (self.sesi / "exports").resolve() if self.sesi else None
         if exports is None or exports not in p.resolve().parents:
             messagebox.showerror("Target tidak aman", "Frame bukan bagian dari exports sesi aktif.", parent=self); return
-        if not messagebox.askyesno("Hapus frame permanen", f"Hapus seluruh paket turunan {p.name}?\n\nRGB, depth, IR, mask, dan label pada frame ini akan hilang. RAW tidak dihapus.", parent=self):
+        if not messagebox.askyesno("Hapus frame", f"Hapus {p.name} dari daftar?\n\nFoldernya dipindah ke Tempat sampah Studio "
+                                   "(kartu Rekaman, tab Tinjau) dan masih bisa dipulihkan sampai dikosongkan.", parent=self):
             return
         try:
             # Simpan kandidat sesudah frame kini SEBELUM folder dihapus. Dengan
@@ -4960,7 +4984,7 @@ class Studio(tk.Tk):
                 posisi = -1
             berikut = self.frame_paths[posisi + 1] if 0 <= posisi < len(self.frame_paths) - 1 else None
             sebelum = self.frame_paths[posisi - 1] if posisi > 0 else None
-            shutil.rmtree(p)
+            TS.buang(self.root_data, p, "frame")
             self.label_path = None; self.label_info = None
             self.kanvas.rgb = self.kanvas.depth = None; self.kanvas.delete("all")
             self.muat_frame()
@@ -4970,9 +4994,9 @@ class Studio(tk.Tk):
                 # ikut tergulir ke frame terpilih, bukan hanya menyorotinya di
                 # luar layar.
                 self._pilih_indeks_frame(self.frame_paths.index(tujuan))
-                self.status.set(f"Frame dihapus. Lanjut ke {tujuan.name}.")
+                self.status.set(f"{p.name} dipindah ke Tempat sampah Studio (bisa dipulihkan). Lanjut ke {tujuan.name}.")
             else:
-                self.status.set("Frame ekspor dihapus permanen. Rekaman RAW tetap aman.")
+                self.status.set(f"{p.name} dipindah ke Tempat sampah Studio (bisa dipulihkan).")
         except OSError as e:
             messagebox.showerror("Hapus frame", str(e), parent=self)
 
