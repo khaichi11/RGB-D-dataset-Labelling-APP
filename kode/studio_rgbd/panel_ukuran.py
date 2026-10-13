@@ -23,10 +23,12 @@ from pathlib import Path
 
 try:
     from . import catatan_rekaman as CR
+    from . import segmentasi_convnext_depth as SC
     from . import ukuran_meteran as UM
     from .uji_realtime import AKAR_APLIKASI
 except ImportError:
     import catatan_rekaman as CR
+    import segmentasi_convnext_depth as SC
     import ukuran_meteran as UM
     from uji_realtime import AKAR_APLIKASI
 
@@ -39,6 +41,21 @@ def _modul_ukuran():
         sys.path.insert(0, str(AKAR_APLIKASI))
     from rgbd_convnext import ukuran_sesi
     return ukuran_sesi
+
+
+def bobot_nomor() -> str | None:
+    """Checkpoint untuk "Hitung nomor dari video": sama dengan pengusul label Studio.
+
+    Dulu ``hitung`` dipanggil tanpa bobot, jadi memakai checkpoint rujukan lama
+    (final_d435, 5 rekaman latih), sementara video inferensi yang dibandingkan
+    memakai model akhir gabung. Pada 192125 model lama memecah tangga jadi 8
+    penomoran, model akhir 4. None (bawaan ukuran_sesi) bila pengusul berupa ensembel.
+    """
+    try:
+        jalur = SC.pilih_bobot_usulan()[1]
+    except (FileNotFoundError, OSError):
+        return None
+    return str(jalur[0]) if len(jalur) == 1 else None
 
 
 def _cm(blok) -> str:
@@ -141,6 +158,10 @@ class PanelUkuran:
             n = sum(len(t["anak_tangga"]) for t in self.sistem["tangga"])
             nomor = (f"Nomor dari video: {n} anak tangga, {len(self.sistem['tangga'])} penomoran; "
                      f"frame ini {n_tanda} bidang bernomor.")
+            dipakai, kini = Path(self.sistem.get("bobot") or "").resolve(), bobot_nomor()
+            if kini is not None and dipakai != Path(kini).resolve():
+                nomor += (f"\nDihitung dengan model lain ({dipakai.parent.name}/{dipakai.name}); "
+                          "tekan Hitung nomor dari video untuk memakai model pengusul sekarang.")
         self.info.set(f"{self.sesi.name}\nUkuran meteran disimpan untuk {tempat}.\n{nomor}")
 
     # ------------------------------------------------------------ tabel
@@ -247,7 +268,7 @@ class PanelUkuran:
 
         def kerja():
             try:
-                _modul_ukuran().hitung(sesi, progres=lambda n: setattr(self, "_progres", n))
+                _modul_ukuran().hitung(sesi, bobot=bobot_nomor(), progres=lambda n: setattr(self, "_progres", n))
             except Exception as e:                                  # noqa: BLE001
                 baris = [b for b in str(e).strip().splitlines() if b.strip()]
                 self._galat = f"{type(e).__name__}: {baris[-1][:200] if baris else ''}"
