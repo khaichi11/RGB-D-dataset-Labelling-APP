@@ -193,6 +193,12 @@ class TabSplit:
         self.lb.configure(yscrollcommand=gulir.set)
         self.lb.pack(side="left", fill="both", expand=True); gulir.pack(side="left", fill="y")
         self.lb.bind("<<ListboxSelect>>", lambda e: self._pilih_frame())
+        # Pengikatan bawaan Listbox untuk Spasi/panah memilih item aktif lebih dulu, sehingga frame
+        # lama digambar sekali lagi sebelum frame berikutnya (tampak berkedip). Ditangani di sini saja.
+        for tombol, arah in (("<space>", 1), ("<Right>", 1), ("<Left>", -1), ("<KeyPress-d>", -1), ("<KeyPress-D>", -1)):
+            self.lb.bind(tombol, lambda e, a=arah: (self.geser(a), "break")[1])
+            # Pohon rekaman: Spasi bawaan Treeview memilih/membuka item, bukan pindah frame.
+            self.tree.bind(tombol, lambda e, a=arah: (self.geser(a), "break")[1])
         self.lb.bind("<Button-1>", lambda e: self._set_fokus("frame"), add="+")
         self._baris_tombol(i, "Atur frame terpilih (pengecualian)", self.atur_frame, ikut=True)
 
@@ -852,7 +858,7 @@ class TabSplit:
 
     def _pilih_frame(self) -> None:
         s = self.lb.curselection()
-        if len(s) == 1:
+        if len(s) == 1 and self.daftar[s[0]] is not self.kini:     # frame yang sama tidak digambar ulang
             self.kini = self.daftar[s[0]]
             self._gambar()
 
@@ -881,6 +887,9 @@ class TabSplit:
         sem = np.zeros(riser.shape, np.uint8)
         sem[tread > 0] = 2
         sem[riser > 0] = 1                                 # sama dengan FrameD435
+        if not sem.any():
+            # Contoh latar yang disengaja (frame tanpa tangga): mask kosong itu benar, bukan hilang.
+            self.lencana.config(text=self.lencana.cget("text") + " · TANPA TANGGA (contoh latar)")
         if self.cerah.get():
             rgb = _cerahkan(rgb)
         if self.seperti_model.get():
