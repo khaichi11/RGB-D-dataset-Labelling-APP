@@ -107,7 +107,12 @@ BOBOT_USULAN = [
 # 0,972/0,967 lawan 0,924/0,953 pengusul 2026-10-04; frame < 0,7: 75 -> 26.
 # Pada 46 frame uji lama sedikit lebih rendah (0,892/0,891 lawan 0,904/0,916).
 # Bukti: Train-RGB-D-Model/bukti/final_d435/pengusul_20261013/.
+# 13 Oktober 2026 (sore): model akhir resep gabung (ConvNeXt Atto ImageNet + 1.314 gambar publik
+# riser+tread berformat D435 + 56 rekaman ✔). Pada 703 frame terperiksa dari 8 rekaman yang belum
+# ✔ (tak dilatih kedua model), Dice usulan riser/tread 0,951/0,952 lawan 0,951/0,944 pengusul
+# siang ini; frame < 0,7: 33 -> 26. Bukti: Train-RGB-D-Model/bukti/final_d435/cv_publik_gabung/.
 BOBOT_USULAN_UTAMA = [
+    ('rekaman ✔ + publik 2026-10-13', 'runs/cv_publik_gabung/akhir_baru/deployment_penuh.pt'),
     ('latih rekaman ✔ 2026-10-13', 'runs/pengusul_20261013_selesai/deployment_penuh.pt'),
     ('latih semua label 2026-10-04', 'runs/pengusul_20261004_semua/deployment_penuh.pt'),   # cadangan
 ]
