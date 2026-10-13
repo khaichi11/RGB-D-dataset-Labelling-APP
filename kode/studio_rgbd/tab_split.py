@@ -9,7 +9,7 @@ yang sudah diperiksa), dan mask pratinjau dibentuk seperti ``FrameD435``
 
 Pintasan saat tab ini aktif: 1 Train, 2 Val, 3 Test, 0 Abaikan, Backspace
 kosongkan (berlaku pada daftar yang terakhir diklik: rekaman atau frame);
-panah kanan/Space frame berikutnya, panah kiri sebelumnya.
+panah kanan/Space frame berikutnya, panah kiri/D sebelumnya (sama dengan tab Label).
 """
 from __future__ import annotations
 
@@ -91,6 +91,7 @@ class TabSplit:
         self._q: queue.Queue = queue.Queue()
         self._foto = None
         self._sibuk = False
+        self._sesi_awal: str | None = None
 
         self.hanya_diperiksa = tk.BooleanVar(value=True)
         self.filter_set = tk.StringVar(value="semua")
@@ -161,7 +162,7 @@ class TabSplit:
         gulir = ttk.Scrollbar(f2, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=gulir.set)
         self.tree.pack(side="left", fill="both", expand=True); gulir.pack(side="left", fill="y")
-        self.tree.bind("<<TreeviewSelect>>", lambda e: (self._isi_daftar(), self._tampil_catatan()))
+        self.tree.bind("<<TreeviewSelect>>", lambda e: (self._isi_daftar(), self._tampil_catatan(), self._catat_pilihan()))
         self.tree.bind("<Button-1>", lambda e: self._set_fokus("rekaman"), add="+")
         self.info_rek = tk.Label(i, text="", bg=PANEL, fg=INK, justify="left", anchor="w", wraplength=470,
                                  font=("Segoe UI", 9))
@@ -242,6 +243,14 @@ class TabSplit:
             self.studio.tombol_ringkas(baris, teks, lambda s_=s_: aksi(s_), WARNA_SET[s_],
                                        "white" if s_ else INK, width=86).pack(side="left", expand=True, fill="x", padx=1)
 
+    def _catat_pilihan(self) -> None:
+        """Rekaman terpilih di sini diteruskan ke tab lain (dipilih saat tab berganti)."""
+        pilih = self.tree.selection()
+        if len(pilih) == 1 and not pilih[0].startswith("tg::"):
+            r = pilih[0].split("::")[0]
+            self.studio._sesi_dari_split = self.akar / r
+            self._sesi_awal = r
+
     def _set_fokus(self, nama: str) -> None:
         self._fokus = nama
 
@@ -284,6 +293,11 @@ class TabSplit:
                     self.rekaman, self.frames, self.n_ekspor, self.catatan, self.waktu = isi
                     self._sibuk = False
                     self._isi_tree()
+                    kini = getattr(getattr(self.studio, "sesi", None), "name", None)
+                    if kini in self.rekaman and self.tree.exists(kini) and self._sesi_awal != kini:
+                        # Rekaman yang sedang dibuka di tab Tinjau/Label ikut terpilih di sini.
+                        self._sesi_awal = kini
+                        self.tree.selection_set([kini]); self.tree.see(kini)
                     if not self.tree.selection() and self.rekaman:
                         self.tree.selection_set([self.rekaman[0]])     # pratinjau tidak kosong saat tab dibuka
                     self._isi_daftar()
@@ -820,7 +834,7 @@ class TabSplit:
             return "break"
         if e.keysym in ("Right", "space"):
             self.geser(1); return "break"
-        if e.keysym == "Left":
+        if e.keysym in ("Left", "d", "D"):              # D = sebelumnya, sama dengan tab Label
             self.geser(-1); return "break"
         return None
 

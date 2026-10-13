@@ -2795,6 +2795,18 @@ class Studio(tk.Tk):
         # Catatan/scene dan label bisa berubah di tab lain; tab Split memuat ulang sendiri.
         if self.tabs.select() == str(getattr(self, "tab_split", "")) and getattr(self, "panel_split", None):
             self.panel_split.muat_ulang()
+        # Rekaman yang terakhir dipilih di tab Split ikut terpilih di Tinjau/Label/Ekspor,
+        # agar ✔-nya bisa langsung diubah tanpa mencari ulang di daftar.
+        dari_split = getattr(self, "_sesi_dari_split", None)
+        if (dari_split is not None and self.tabs.select() != str(getattr(self, "tab_split", ""))
+                and dari_split != self.sesi and dari_split in getattr(self, "_map_sesi", [])):
+            i = self._map_sesi.index(dari_split)
+            self.list_sesi.selection_clear(0, "end"); self.list_sesi.selection_set(i)
+            self.list_sesi.activate(i); self.list_sesi.see(i)
+            self.pilih_sesi()
+            if self.tabs.select() == str(self.tab_label):
+                self.muat_frame()
+        self._sesi_dari_split = None
         # Uji realtime memakai kamera secara eksklusif; hentikan begitu pengguna
         # pindah ke tab lain agar device tidak diperebutkan dengan preview/rekam.
         if self.tabs.select() != str(self.tab_uji) and getattr(self, 'panel_uji', None) is not None:
