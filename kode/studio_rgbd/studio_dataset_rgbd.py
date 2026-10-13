@@ -558,6 +558,9 @@ class KanvasLabel(tk.Canvas):
         self._blok_awal = None
         self._blok_kotak = None
         self.lapor_blok = None
+        # Dipanggil saat Ctrl+Z tidak punya langkah lagi di frame ini; Studio
+        # memakainya untuk kembali ke frame yang baru disunting (riwayat lintas frame).
+        self.saat_undo_habis = None
         # Alat tarik tanpa modifier, untuk papan sentuh yang sulit menahan
         # Ctrl atau Shift sambil menarik satu jari.
         self.alat = "normal"      # "normal" | "geser" | "blok"
@@ -678,6 +681,8 @@ class KanvasLabel(tk.Canvas):
 
     def undo_riwayat(self, _e=None):
         if self._riwayat_pos <= 0:
+            if self.saat_undo_habis is not None:
+                self.saat_undo_habis()
             return "break"
         self._riwayat_pos -= 1
         self._pulihkan_riwayat(self._riwayat_pos)
@@ -1588,6 +1593,7 @@ class Studio(tk.Tk):
         self.sesi: Path | None = None
         self.indeks: list[dict] = []
         self.frame_paths: list[Path] = []
+        self._riwayat_frame: "OrderedDict[str, dict]" = OrderedDict()   # Ctrl+Z lintas frame
         self.label_path: Path | None = None
         self.label_info: dict | None = None
         self.preview_photo = None
@@ -2453,6 +2459,7 @@ class Studio(tk.Tk):
         f = tk.Frame(self.tab_label, bg=BG); f.pack(fill="both", expand=True, padx=14, pady=14)
         left = tk.Frame(f, bg=BG); left.pack(side="left", fill="both", expand=True, padx=(0, 12))
         self.kanvas = KanvasLabel(left, self.hitung_ukuran, self._aktif_mask_berubah); self.kanvas.pack(fill="both", expand=True)
+        self.kanvas.saat_undo_habis = self._undo_frame_lain
         self.kanvas.penyedia_peta = self._peta_model_kini
         self.kanvas.lapor_blok = self._lapor_blok
         self.kanvas.touchpad = bool(self.mode_touchpad.get())
@@ -4212,6 +4219,7 @@ class Studio(tk.Tk):
             self.simpan_draft_label()
         data = self._baca_frame(p)
         if data is None: return
+        self._simpan_riwayat_frame()
         bgr, dep = data["bgr"], data["dep"]
         # Pilihan A/S dipertahankan antar-frame. Penguncian hanya
         # diperlukan sebelum navigasi pertama, bukan setiap kali frame baru
@@ -4232,7 +4240,8 @@ class Studio(tk.Tk):
             self.kanvas.reset_riwayat()
             self.kanvas.fit()                           # sekali, sudah dengan mask (lihat set_frame)
             self.status.set(f"Draft mask {p.name} dipulihkan otomatis.")
-        elif not self._punya_label(p):
+        self._pulihkan_riwayat_frame(p)
+        if not draft.get("poligon") and not self._punya_label(p):
             # Frame baru selalu mendapat usulan terlebih dahulu. Pengguna lalu
             # tinggal mengoreksi; draft/label yang sudah ada tidak ditimpa.
             self.after(180, lambda target=p: self._auto_segmentasi(target))
@@ -4807,6 +4816,55 @@ class Studio(tk.Tk):
         self._segarkan_item_frame()
 
     BERKAS_LABEL = ("label_draft.json", "label_yolo_seg.txt", "mask_objek.png", "mask_acuan.png")
+    MAKS_RIWAYAT_FRAME = 10
+
+    # Riwayat Ctrl+Z lintas frame. Dulu riwayat kanvas direset setiap frame
+    # dibuka, jadi usulan auto-label atau suntingan di frame yang sudah
+    # ditinggalkan tidak bisa dibatalkan lagi. Sekarang riwayat 10 frame
+    # terakhir yang disunting disimpan di memori: kembali ke frame itu,
+    # Ctrl+Z melanjutkan riwayatnya; Ctrl+Z di frame yang tidak punya langkah
+    # lagi membuka frame yang terakhir disunting lalu membatalkan langkahnya.
+    def _simpan_riwayat_frame(self) -> None:
+        if self.label_path is None or not hasattr(self, "_riwayat_frame"):
+            return
+        k = self.kanvas
+        kunci = str(self.label_path)
+        self._riwayat_frame.pop(kunci, None)
+        if len(getattr(k, "_riwayat", [])) <= 1:
+            return
+        self._riwayat_frame[kunci] = {"riwayat": list(k._riwayat), "pos": k._riwayat_pos,
+                                      "usulan": getattr(self, "_usulan_aktif", None)}
+        while len(self._riwayat_frame) > self.MAKS_RIWAYAT_FRAME:
+            self._riwayat_frame.popitem(last=False)
+
+    def _pulihkan_riwayat_frame(self, p: Path) -> None:
+        r = getattr(self, "_riwayat_frame", {}).get(str(p))
+        if r is not None and r["riwayat"][r["pos"]] != self.kanvas._salin_poligon():
+            self._riwayat_frame.pop(str(p), None)          # label berubah di luar kanvas: riwayatnya basi
+            r = None
+        if r is None:
+            # Potret saat dibuka: Ctrl+Z sampai keadaan ini memulihkan berkas label
+            # persis (status ✔/otomatis/Claude), bukan menyimpannya sebagai suntingan.
+            self._usulan_aktif = {"frame": p, "sebelum": self.kanvas._salin_poligon(),
+                                  "berkas": self._potret_berkas_label(p), "usulan": None}
+            return
+        self.kanvas._riwayat, self.kanvas._riwayat_pos = list(r["riwayat"]), r["pos"]
+        self._usulan_aktif = r["usulan"]
+
+    def _undo_frame_lain(self) -> None:
+        """Ctrl+Z tanpa langkah di frame ini: buka frame yang terakhir disunting dan batalkan langkahnya."""
+        kini = str(self.label_path) if self.label_path else None
+        posisi = {str(q): i for i, q in enumerate(self.frame_paths)}
+        for kunci in reversed(list(getattr(self, "_riwayat_frame", {}))):
+            r = self._riwayat_frame[kunci]
+            if kunci == kini or r["pos"] <= 0 or kunci not in posisi:
+                continue
+            self._pilih_indeks_frame(posisi[kunci])
+            if str(self.label_path) == kunci and self.kanvas._riwayat_pos > 0:
+                self.kanvas.undo_riwayat()
+                self.status.set(f"Ctrl+Z: kembali ke {Path(kunci).name} dan membatalkan langkah terakhirnya.")
+            return
+        self.status.set("Tidak ada lagi yang bisa dibatalkan (riwayat menyimpan 10 frame terakhir yang disunting).")
 
     def _potret_berkas_label(self, frame: Path | None) -> dict:
         """Isi berkas label sebuah frame (None = berkas belum ada), untuk dipulihkan persis."""
@@ -4833,7 +4891,8 @@ class Studio(tk.Tk):
                 # Ctrl+Z sampai sebelum usulan: berkas label kembali persis, termasuk statusnya.
                 self._pulihkan_berkas_label(self.label_path, u["berkas"])
                 self.perbarui_lencana_periksa()
-                self.status.set(f"Usulan dibatalkan; label sebelumnya dipulihkan: {self.label_path.name}")
+                self.status.set(f"{'Suntingan' if u['usulan'] is None else 'Usulan'} dibatalkan; "
+                                f"label sebelumnya dipulihkan: {self.label_path.name}")
                 return
             if kini == u["usulan"]:
                 # Usulan mesin yang belum disentuh bukan label diperiksa.
