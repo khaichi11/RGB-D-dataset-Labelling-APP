@@ -2023,11 +2023,18 @@ class Studio(tk.Tk):
                                     "#E8DDD5", INK, width=100).pack(side="left", padx=(6, 0))
         # Tangga fisik: rekaman yang merekam tangga yang sama diberi ID sama, agar
         # pembagian train/val/test bisa per tangga (tab Split).
-        tk.Label(i, text="Tangga fisik (rekaman dengan tangga sama = ID sama)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
+        tk.Label(i, text="Tangga fisik: ketik nama lalu Enter (nama sama = otomatis terhubung)", bg=PANEL,
+                 fg=MUTED).pack(anchor="w", pady=(6, 0))
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x")
-        self.pilih_tangga = ttk.Combobox(baris, state="readonly", width=24)
+        # Bisa diketik: nama yang sudah ada dipakai ulang (tanpa beda huruf besar/spasi),
+        # nama baru otomatis menjadi tangga baru. Dulu hanya bisa memilih dari daftar
+        # atau "+ Baru", yang membuat ID ganda bila namanya diketik ulang.
+        self.pilih_tangga = ttk.Combobox(baris, width=24)
         self.pilih_tangga.pack(side="left", fill="x", expand=True)
         self.pilih_tangga.bind("<<ComboboxSelected>>", lambda _e: self.atur_tangga_sesi(self.pilih_tangga.get()))
+        self.pilih_tangga.bind("<Return>", lambda _e: self.tangga_dari_ketikan())
+        self.pilih_tangga.bind("<KP_Enter>", lambda _e: self.tangga_dari_ketikan())
+        self.pilih_tangga.bind("<FocusOut>", lambda _e: self.tangga_dari_ketikan())
         self.tombol_ringkas(baris, "+ Baru", self.tangga_baru, GREEN, width=60).pack(side="left", padx=(3, 0))
         self.tombol_ringkas(i, "🪜 Kelompokkan rekaman per tangga…", self.buka_kelompok_tangga, "#E8DDD5", INK,
                             width=240).pack(fill="x", pady=(3, 0))
@@ -2206,21 +2213,47 @@ class Studio(tk.Tk):
     def atur_tangga_sesi(self, label: str) -> None:
         self._ubah_catatan(lambda d: d.update(tangga=self._id_dari_label(label)))
 
+    def tangga_dari_ketikan(self) -> None:
+        """Kaitkan rekaman ke tangga bernama sesuai ketikan; nama baru menjadi tangga baru."""
+        if not self.sesi:
+            return
+        teks = " ".join(self.pilih_tangga.get().split())
+        daftar = CR.baca_tangga(self.root_data)
+        lama = CR.baca(self.sesi).get("tangga") or ""
+        if teks == (CR.label_tangga(lama, daftar) if lama else self.TANPA_TANGGA):
+            return                                       # tidak berubah (mis. fokus pindah saja)
+        if not teks or teks.startswith("—"):
+            self._ubah_catatan(lambda d: d.update(tangga=""))
+            self.status.set("Tangga fisik dilepas dari rekaman ini.")
+            return
+        tid, baru = CR.tangga_dari_nama(self.root_data, teks)
+        self._ubah_catatan(lambda d: d.update(tangga=tid))
+        label = CR.label_tangga(tid, CR.baca_tangga(self.root_data))
+        if baru:
+            self.status.set(f"Tangga baru {label} dibuat dan dipasang. Ketik nama yang sama di rekaman lain "
+                            "untuk menghubungkannya.")
+        else:
+            n = sum(1 for p in getattr(self, "_map_sesi", []) if CR.baca(p).get("tangga") == tid)
+            self.status.set(f"Terhubung ke {label} ({n} rekaman).")
+
     def tangga_baru(self) -> None:
         """Daftarkan tangga fisik baru lalu pasang ke rekaman terpilih."""
         if not self.sesi:
             messagebox.showinfo("Pilih rekaman", "Pilih rekaman dahulu.", parent=self); return
         daftar = CR.baca_tangga(self.root_data)
-        tid = CR.id_tangga_baru(daftar)
-        nama = simpledialog.askstring("Tangga baru", f"Nama tangga {tid}\n(mis. Rusunawa tangga 1, Gedung F tangga darurat):",
-                                      parent=self)
+        nama = simpledialog.askstring("Tangga baru", f"Nama tangga {CR.id_tangga_baru(daftar)}\n"
+                                      "(mis. Rusunawa tangga 1, Gedung F tangga darurat):", parent=self)
         if not nama or not nama.strip():
             return
-        lokasi = simpledialog.askstring("Tangga baru", "Lokasi/keterangan (boleh kosong):", parent=self) or ""
-        daftar[tid] = {"nama": nama.strip(), "lokasi": lokasi.strip(), "warna": CR.warna_tangga_baru(daftar)}
-        CR.tulis_tangga(self.root_data, daftar)
+        if CR.cari_tangga(daftar, nama) is None:
+            lokasi = simpledialog.askstring("Tangga baru", "Lokasi/keterangan (boleh kosong):", parent=self) or ""
+        else:
+            lokasi = ""
+        tid, baru = CR.tangga_dari_nama(self.root_data, nama, lokasi)
         self._ubah_catatan(lambda d: d.update(tangga=tid))
-        self.status.set(f"Tangga {tid} · {nama.strip()} dibuat dan dipasang ke rekaman ini.")
+        label = CR.label_tangga(tid, CR.baca_tangga(self.root_data))
+        self.status.set(f"Tangga {label} dibuat dan dipasang ke rekaman ini." if baru
+                        else f"Nama itu sudah dipakai {label}; rekaman ini dihubungkan ke sana, bukan tangga baru.")
 
     def buka_kelompok_tangga(self) -> None:
         """Jendela kartu bergambar untuk menandai banyak rekaman sekaligus sebagai tangga fisik yang sama."""

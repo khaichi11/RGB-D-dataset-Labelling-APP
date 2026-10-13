@@ -311,14 +311,14 @@ class JendelaKelompokTangga(tk.Toplevel):
         if not self._perlu_pilihan():
             return
         daftar = CR.baca_tangga(self.akar)
-        tid = CR.id_tangga_baru(daftar)
-        nama = simpledialog.askstring("Tangga baru", f"Nama tangga {tid} untuk {len(self.pilih)} rekaman\n"
-                                                     "(mis. Gedung F tangga depan):", parent=self)
+        nama = simpledialog.askstring("Tangga baru", f"Nama tangga {CR.id_tangga_baru(daftar)} untuk {len(self.pilih)} "
+                                                     "rekaman\n(mis. Gedung F tangga depan; nama yang sudah ada = "
+                                                     "digabung ke tangga itu):", parent=self)
         if not nama or not nama.strip():
             return
-        lokasi = simpledialog.askstring("Tangga baru", "Lokasi/keterangan (boleh kosong):", parent=self) or ""
-        daftar[tid] = {"nama": nama.strip(), "lokasi": lokasi.strip(), "warna": CR.warna_tangga_baru(daftar)}
-        CR.tulis_tangga(self.akar, daftar)
+        lokasi = (simpledialog.askstring("Tangga baru", "Lokasi/keterangan (boleh kosong):", parent=self) or ""
+                  if CR.cari_tangga(daftar, nama) is None else "")
+        tid, _ = CR.tangga_dari_nama(self.akar, nama, lokasi)
         self._tulis(tid)
         self.pilih.clear()
         self._segarkan()
