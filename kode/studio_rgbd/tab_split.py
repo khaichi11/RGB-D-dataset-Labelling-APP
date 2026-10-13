@@ -170,6 +170,11 @@ class TabSplit:
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=lambda: (self._isi_tree(), self._isi_daftar())).pack(anchor="w", pady=(4, 0))
         self._baris_tombol(i, "Atur rekaman / scene / tangga terpilih", self.atur_rekaman)
+        baris_ok = tk.Frame(i, bg=PANEL); baris_ok.pack(fill="x", pady=(3, 0))
+        st.tombol_ringkas(baris_ok, "✔ Tandai selesai", lambda: self.atur_selesai(True), "#6B8B63", "white",
+                          width=150).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        st.tombol_ringkas(baris_ok, "✖ Batalkan ✔", lambda: self.atur_selesai(False), "#E8DDD5", INK,
+                          width=150).pack(side="left", fill="x", expand=True, padx=(2, 0))
 
         # --- frame
         b, i = st.card(kiri, "Frame siap latih"); b.pack(fill="x", pady=(0, 8))
@@ -244,6 +249,9 @@ class TabSplit:
     def muat_ulang(self) -> None:
         """Hitung frame siap latih tiap rekaman di thread latar (disk dataset lambat)."""
         if self._sibuk:
+            # Pekerjaan lain (QA, push/tarik HF, CSV) sedang berjalan: muat ulang begitu selesai,
+            # agar ✔ yang diubah di tab Tinjau tidak tertinggal.
+            self.induk.after(1000, self.muat_ulang)
             return
         self._sibuk = True
         self.ringkas.config(text="Membaca daftar frame…")
@@ -699,6 +707,43 @@ class TabSplit:
         self._gambar()
 
     # ------------------------------------------------------------ aksi
+    def _rekaman_iid(self, iid: str) -> list[str]:
+        """Rekaman yang diwakili satu baris pohon (rekaman, scene, atau tangga fisik)."""
+        if iid.startswith("tg::"):
+            return sorted({d.parent.parent.parent.name for d in self._frames_iid(iid)}
+                          | {x.split("::")[-1] for x in self.tree.get_children(iid)})
+        return [iid.split("::")[0]]
+
+    def atur_selesai(self, nilai: bool) -> None:
+        """✔ rekaman terpilih langsung dari tab ini (sama dengan centang di tab Tinjau)."""
+        rek = sorted({r for iid in self.tree.selection() for r in self._rekaman_iid(iid) if r in self.rekaman})
+        if not rek:
+            messagebox.showinfo("Pilih rekaman", "Pilih satu atau beberapa rekaman dahulu."); return
+        if nilai and not messagebox.askyesno("Tandai selesai", f"Tandai {len(rek)} rekaman ✔ (label sudah benar semua)?\n"
+                                             "Frame terperiksanya akan dipakai melatih."):
+            return
+        if not nilai and not messagebox.askyesno("Batalkan ✔", f"Cabut ✔ dari {len(rek)} rekaman?\n"
+                                                 "Framenya tidak lagi dipakai melatih."):
+            return
+        for r in rek:
+            sesi = self.akar / r
+            c = CR.baca(sesi)
+            c["selesai"] = nilai
+            c["selesai_iso"] = datetime.now().isoformat(timespec="seconds") if nilai else ""
+            CR.tulis(sesi, c)
+            if hasattr(self.studio, "_segarkan_item_sesi"):
+                self.studio._segarkan_item_sesi(sesi)
+        if getattr(self.studio, "sesi", None) in {self.akar / r for r in rek} and hasattr(self.studio, "_muat_catatan_ui"):
+            self.studio._muat_catatan_ui()
+        self.muat_ulang()
+
+    def _peringatan_belum_selesai(self, rek: list[str]) -> None:
+        belum = [r for r in rek if not (self.catatan.get(r) or {}).get("selesai")]
+        if belum:
+            self.ringkas.config(text=f"Set dicatat, tetapi {len(belum)} rekaman belum ✔ ("
+                                + ", ".join(r.replace("TANGGA_NAIK_", "") for r in belum[:3]) + ("…" if len(belum) > 3 else "")
+                                + "): framenya tidak dilatih sampai ditandai ✔ (tombol ✔ Tandai selesai di atas atau tab Tinjau).")
+
     def atur_rekaman(self, s: str | None) -> None:
         """Set untuk rekaman terpilih; untuk baris scene, set dicatat per frame di rentangnya."""
         pilih = list(self.tree.selection())
@@ -724,6 +769,7 @@ class TabSplit:
         self._isi_daftar(pertahankan=True)
         self._perbarui_ringkas()
         self._gambar()
+        self._peringatan_belum_selesai(sorted({r for iid in pilih for r in self._rekaman_iid(iid)}))
 
     def _terapkan_set(self, frames: list[Path], s: str | None) -> None:
         """Set untuk sekumpulan frame: rekaman yang seluruh framenya terpilih diberi set
