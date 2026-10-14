@@ -92,6 +92,7 @@ class TabSplit:
         self._foto = None
         self._sibuk = False
         self._sesi_awal: str | None = None
+        self._ke_akhir = False                           # rekaman sebelumnya dibuka dari frame terakhirnya
 
         self.hanya_diperiksa = tk.BooleanVar(value=True)
         self.filter_set = tk.StringVar(value="semua")
@@ -170,6 +171,17 @@ class TabSplit:
         tk.Checkbutton(i, text="🪜 Kelompokkan per tangga fisik (tangga → rekaman/scene)", variable=self.per_tangga,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=lambda: (self._isi_tree(), self._isi_daftar())).pack(anchor="w", pady=(4, 0))
+        # Tangga fisik langsung dari tab ini: ketik nama lalu Enter untuk semua rekaman/scene
+        # terpilih; nama yang sama (tanpa beda huruf besar/spasi) = tangga yang sama.
+        tk.Label(i, text="Tangga fisik terpilih: ketik nama, Enter (nama sama = otomatis terhubung)",
+                 bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 2))
+        baris_tg = tk.Frame(i, bg=PANEL); baris_tg.pack(fill="x")
+        self.pilih_tangga = ttk.Combobox(baris_tg, width=28)
+        self.pilih_tangga.pack(side="left", fill="x", expand=True)
+        for ev in ("<Return>", "<KP_Enter>", "<<ComboboxSelected>>"):
+            self.pilih_tangga.bind(ev, lambda _e: self.atur_tangga())
+        st.tombol_ringkas(baris_tg, "Lepas", lambda: self.atur_tangga(lepas=True), "#E8DDD5", INK,
+                          width=60).pack(side="left", padx=(3, 0))
         self._baris_tombol(i, "Atur rekaman / scene / tangga terpilih", self.atur_rekaman)
         baris_ok = tk.Frame(i, bg=PANEL); baris_ok.pack(fill="x", pady=(3, 0))
         st.tombol_ringkas(baris_ok, "✔ Tandai selesai", lambda: self.atur_selesai(True), "#6B8B63", "white",
@@ -463,7 +475,71 @@ class TabSplit:
                     w = CR.warna_rekaman(self.catatan.get(iid) or {}, self.daftar_tangga)
                     self.tree.item(iid, tags=[str(s)] + ([f"stabilo_{w}"] if w else []))
 
+    def _isi_pilihan_tangga(self) -> None:
+        """Daftar tangga di kotak isian, terisi tangga baris terpilih bila hanya satu."""
+        self.pilih_tangga.configure(values=[CR.label_tangga(k, self.daftar_tangga) for k in self.daftar_tangga])
+        sasaran = self._sasaran_tangga()
+        tid = set()
+        for r, i in sasaran:
+            c = self.catatan.get(r) or {}
+            tid.add((self._scene(r)[i].get("tangga") if i is not None else c.get("tangga")) or "")
+        self.pilih_tangga.set(CR.label_tangga(next(iter(tid)), self.daftar_tangga) if len(tid) == 1 and "" not in tid
+                              else "")
+
+    def _sasaran_tangga(self) -> list[tuple[str, int | None]]:
+        """(rekaman, indeks scene atau None) untuk setiap baris terpilih."""
+        out = []
+        for iid in self.tree.selection():
+            if iid.startswith("tg::"):
+                anak = [iid] if iid.count("::") == 2 else list(self.tree.get_children(iid))
+                out += [(a.split("::")[2], None) for a in anak]
+            elif "::" in iid:
+                r, i = iid.split("::")
+                out.append((r, int(i)))
+            else:
+                out.append((iid, None))
+        return list(dict.fromkeys(out))
+
+    def atur_tangga(self, lepas: bool = False) -> None:
+        """Pasang tangga fisik (dari nama ketikan) ke rekaman/scene terpilih; nama baru = tangga baru."""
+        sasaran = self._sasaran_tangga()
+        if not sasaran:
+            messagebox.showinfo("Pilih rekaman", "Pilih satu atau beberapa rekaman/scene di daftar dahulu.")
+            return
+        teks = "" if lepas else " ".join(self.pilih_tangga.get().split())
+        akar_data = Path(self.studio.root_data)
+        tid, baru = ("", False) if not teks else CR.tangga_dari_nama(akar_data, teks)
+        if hasattr(self.studio, "_simpan_catatan_sekarang"):
+            self.studio._simpan_catatan_sekarang()       # catatan yang sedang diketik di Tinjau tidak tertimpa
+        for r, i in sasaran:
+            sesi = self.akar / r
+            c = CR.baca(sesi)
+            if i is None:
+                c["tangga"] = tid
+            elif i < len(c.get("scene", [])):
+                c["scene"][i]["tangga"] = tid
+            CR.tulis(sesi, c)
+            self.catatan[r] = c
+            if hasattr(self.studio, "_segarkan_item_sesi"):
+                self.studio._segarkan_item_sesi(sesi)
+        if getattr(self.studio, "sesi", None) in {self.akar / r for r, _ in sasaran} \
+                and hasattr(self.studio, "_muat_catatan_ui"):
+            self.studio._muat_catatan_ui()
+        self.daftar_tangga = CR.baca_tangga(akar_data)
+        self._isi_tree()
+        self._tampil_catatan()
+        rek = len({r for r, _ in sasaran})
+        if not tid:
+            pesan = f"Tangga fisik dilepas dari {rek} rekaman."
+        else:
+            label = CR.label_tangga(tid, self.daftar_tangga)
+            n = sum(1 for c in self.catatan.values() if (c or {}).get("tangga") == tid)
+            pesan = (f"Tangga baru {label} dibuat untuk {rek} rekaman." if baru
+                     else f"{rek} rekaman dihubungkan ke {label} ({n} rekaman bertangga ini).")
+        self.ringkas.config(text=pesan)
+
     def _tampil_catatan(self) -> None:
+        self._isi_pilihan_tangga()
         sel = self.tree.selection()
         if len(sel) != 1:
             self.info_rek.config(text="", bg=BG); return
@@ -522,7 +598,9 @@ class TabSplit:
                 i = self.daftar.index(kini)
                 self.lb.selection_set(i); self.lb.activate(i)
         elif self.daftar:
-            self._buka(0)
+            # Masuk dari rekaman berikutnya lewat "sebelumnya": mulai dari frame terakhirnya.
+            self._buka(len(self.daftar) - 1 if self._ke_akhir else 0)
+            self._ke_akhir = False
         else:
             self.kini = None
             self._gambar()
@@ -845,11 +923,58 @@ class TabSplit:
         return None
 
     def geser(self, arah: int) -> None:
-        if not self.daftar:
+        if self.daftar:
+            i = self.daftar.index(self.kini) + arah if self.kini in self.daftar else 0
+            if 0 <= i < len(self.daftar):
+                self._buka(i)
+                return
+        self._pindah_rekaman(arah)
+
+    def _baris_rekaman(self) -> list[str]:
+        """Baris rekaman berurutan seperti di pohon (tanpa scene; di mode tangga: rekaman per tangga)."""
+        akar = self.tree.get_children("")
+        if self.per_tangga.get():
+            return [a for t in akar for a in self.tree.get_children(t)]
+        return list(akar)
+
+    def _pindah_rekaman(self, arah: int) -> None:
+        """Frame rekaman ini habis: buka rekaman berikutnya/sebelumnya yang punya frame di daftar."""
+        baris = self._baris_rekaman()
+        if not baris:
             return
-        i = self.daftar.index(self.kini) + arah if self.kini in self.daftar else 0
-        if 0 <= i < len(self.daftar):
-            self._buka(i)
+        posisi = []
+        for iid in self.tree.selection():
+            if iid in baris:
+                posisi.append(baris.index(iid))
+            elif not iid.startswith("tg::") and iid.split("::")[0] in baris:      # baris scene
+                posisi.append(baris.index(iid.split("::")[0]))
+            elif iid.startswith("tg::"):
+                anak = [baris.index(a) for a in self.tree.get_children(iid) if a in baris]
+                posisi += anak
+        if not posisi:
+            return
+        i = max(posisi) if arah > 0 else min(posisi)
+        filt = self.filter_set.get()
+        while True:
+            i += arah
+            if not 0 <= i < len(baris):
+                self.ringkas.config(text="Sudah rekaman " + ("terakhir." if arah > 0 else "pertama."))
+                return
+            frames = self._frames_iid(baris[i])
+            if filt == "semua":
+                ada = bool(frames)
+            elif filt == "perlu dicek":
+                ada = any((self._qa(d) or {}).get("alasan") for d in frames)
+            else:
+                ada = any((self._set_frame(d) is None if filt == "belum" else self._set_frame(d) == filt) for d in frames)
+            if ada:
+                break
+        self._ke_akhir = arah < 0
+        self.tree.selection_set(baris[i])
+        self.tree.focus(baris[i])
+        self.tree.see(baris[i])
+        self.ringkas.config(text=f"Pindah ke rekaman {'berikutnya' if arah > 0 else 'sebelumnya'}: "
+                                 + baris[i].split("::")[-1].replace("TANGGA_NAIK_", ""))
 
     def _buka(self, i: int) -> None:
         self.lb.selection_clear(0, "end"); self.lb.selection_set(i); self.lb.activate(i); self.lb.see(i)
