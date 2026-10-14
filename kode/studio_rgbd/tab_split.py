@@ -202,6 +202,7 @@ class TabSplit:
                                   "ada mask", "latar (tanpa mask)", "disampahkan"))
         cb.pack(side="left", padx=4); cb.bind("<<ComboboxSelected>>", lambda e: self._filter_berubah())
         st.tombol_ringkas(baris, "🔎 Periksa label", self.periksa_label, "#E8DDD5", INK, width=120).pack(side="right")
+        st.tombol_ringkas(baris, "🧹 Kurasi…", self.buka_kurasi, "#E8DDD5", INK, width=90).pack(side="right", padx=(0, 4))
         f2 = tk.Frame(i, bg=PANEL); f2.pack(fill="both", expand=True, pady=(4, 0))
         self.lb = tk.Listbox(f2, height=9, selectmode="extended", exportselection=False, activestyle="none",
                              bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT,
@@ -596,6 +597,17 @@ class TabSplit:
         n = (sum(1 for q in pol.get("objek", []) if len(q) >= 3), sum(1 for q in pol.get("acuan", []) if len(q) >= 3))
         self._isi_label[d] = (mt, n)
         return n
+
+    def buka_kurasi(self) -> None:
+        """Jendela kurasi: frame siap latih yang dipilih/dibuang sebelum dilatih (kurasi.py)."""
+        try:
+            from .jendela_kurasi import JendelaKurasi
+        except ImportError:
+            from jendela_kurasi import JendelaKurasi
+        lama = getattr(self, "_jendela_kurasi", None)
+        if lama is not None and lama.winfo_exists():
+            lama.lift(); return
+        self._jendela_kurasi = JendelaKurasi(self.studio, lambda: [d for r in self.rekaman for d in self.frames.get(r, [])])
 
     def _filter_berubah(self) -> None:
         sampah = self.filter_set.get() == "disampahkan"
