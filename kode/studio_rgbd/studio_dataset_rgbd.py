@@ -4526,6 +4526,7 @@ class Studio(tk.Tk):
         # terperiksa 211803, SAM 2 + verifikasi depth menurunkan Dice usulan
         # dari 0,887 ke 0,841 (bukti/final_d435/eksperimen_semua_data_20260925/auto_label).
         hasil = usulkan_convnext_depth(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), depth, k)
+        self._sumber_batch = hasil.get("sumber", "ConvNeXt RGB-D")
         return {"acuan": hasil["tapakan"], "objek": hasil["bidang_tegak"]}
 
     def batch_auto_label(self):
@@ -4568,7 +4569,8 @@ class Studio(tk.Tk):
                             baris.append(str(cls) + " " + " ".join(f"{v:.6f}" for x, y in poly for v in (x / w, y / h)))
                 tulis_json(p / "label_draft.json", {"versi": 2, "otomatis": True,
                                                     "diperiksa_manual": False,
-                                                    "sumber": "batch ConvNeXt RGB-D + SAM2 + depth",
+                                                    # Dulu tertulis "+ SAM2 + depth" walau SAM 2 sudah tidak dipakai.
+                                                    "sumber": "batch " + getattr(self, "_sumber_batch", "ConvNeXt RGB-D"),
                                                        "disimpan_iso": datetime.now().isoformat(timespec="seconds"), "poligon": poligon})
                 if baris:
                     (p / "label_yolo_seg.txt").write_text("\n".join(baris) + "\n", encoding="utf-8")
