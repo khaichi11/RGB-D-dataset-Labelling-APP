@@ -96,6 +96,7 @@ class TabSplit:
         self._ke_akhir = False                           # rekaman sebelumnya dibuka dari frame terakhirnya
         self._pilihan_lalu: tuple = ()                   # pilihan pohon terakhir (pilihan sama = posisi frame dipertahankan)
         self._geser_terakhir = 0.0                       # waktu navigasi selesai digambar (lihat geser)
+        self._isi_label: dict = {}                       # frame -> (mtime label, jumlah poligon riser, tread)
 
         self.hanya_diperiksa = tk.BooleanVar(value=True)
         self.filter_set = tk.StringVar(value="semua")
@@ -197,7 +198,8 @@ class TabSplit:
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x")
         tk.Label(baris, text="Tampilkan", bg=PANEL, fg=MUTED).pack(side="left")
         cb = ttk.Combobox(baris, textvariable=self.filter_set, state="readonly", width=10,
-                          values=("semua", "train", "val", "test", "abaikan", "belum", "perlu dicek", "disampahkan"))
+                          values=("semua", "train", "val", "test", "abaikan", "belum", "perlu dicek",
+                                  "ada mask", "latar (tanpa mask)", "disampahkan"))
         cb.pack(side="left", padx=4); cb.bind("<<ComboboxSelected>>", lambda e: self._filter_berubah())
         st.tombol_ringkas(baris, "🔎 Periksa label", self.periksa_label, "#E8DDD5", INK, width=120).pack(side="right")
         f2 = tk.Frame(i, bg=PANEL); f2.pack(fill="both", expand=True, pady=(4, 0))
@@ -577,6 +579,24 @@ class TabSplit:
             teks = "Belum ✔ di tab 2. Tinjau: frame rekaman ini tidak dipakai melatih.\n" + teks
         self.info_rek.config(text=teks, bg=CR.WARNA.get(CR.warna_rekaman(c, self.daftar_tangga)) or BG)
 
+    def _poligon_label(self, d: Path) -> tuple[int, int]:
+        """Jumlah poligon riser dan tread di label_draft.json frame ini (tersimpan sampai labelnya berubah)."""
+        f = d / "label_draft.json"
+        try:
+            mt = f.stat().st_mtime
+        except OSError:
+            return (0, 0)
+        lama = self._isi_label.get(d)
+        if lama is not None and lama[0] == mt:
+            return lama[1]
+        try:
+            pol = json.loads(f.read_text()).get("poligon", {})
+        except (OSError, ValueError):
+            pol = {}
+        n = (sum(1 for q in pol.get("objek", []) if len(q) >= 3), sum(1 for q in pol.get("acuan", []) if len(q) >= 3))
+        self._isi_label[d] = (mt, n)
+        return n
+
     def _filter_berubah(self) -> None:
         sampah = self.filter_set.get() == "disampahkan"
         self.btn_sampah.configure(text="♻ Pulihkan (Del)" if sampah else "🗑 Sampahkan (Del)")
@@ -654,6 +674,9 @@ class TabSplit:
                     q = self._qa(d)
                     if q and q["alasan"]:
                         self.daftar.append(d)
+                elif filt in ("ada mask", "latar (tanpa mask)"):
+                    if (sum(self._poligon_label(d)) > 0) == (filt == "ada mask"):
+                        self.daftar.append(d)
                 elif filt == "semua" or (filt == "belum" and s is None) or s == filt:
                     self.daftar.append(d)
         if filt == "perlu dicek":
@@ -665,7 +688,10 @@ class TabSplit:
             ciri = "*" if self.data["frame"].get(self.sd.kunci_frame(d)) else " "
             q = self._qa(d)
             tanda = f" ⚠{q['skor']:.1f}" if q and q["alasan"] else ""
-            self.lb.insert("end", f"{LABEL_SET[s]:>7}{ciri} {d.parent.parent.parent.name[-6:]} {d.name}{tanda}")
+            ada = sum(self._poligon_label(d)) > 0
+            # ▣ = ada mask tangga, ∅ = latar (mask kosong): latar yang ternyata bertangga mudah terlihat.
+            self.lb.insert("end", f"{LABEL_SET[s]:>7}{ciri} {'▣' if ada else '∅'} {d.parent.parent.parent.name[-6:]} "
+                                  f"{d.name}{'' if ada else '  · LATAR'}{tanda}")
             self.lb.itemconfig(i, fg=WARNA_SET[s])
         if pertahankan and kini in self.daftar:
             self.lb.yview_moveto(pos[0])
@@ -1129,6 +1155,29 @@ class TabSplit:
         self._foto = ImageTk.PhotoImage(Image.fromarray(out).resize(
             ukuran, Image.NEAREST if self.seperti_model.get() else Image.BILINEAR))
         k.create_image(cw // 2, ch // 2, image=self._foto)
+        self._pita_mask(k, sem, self._poligon_label(d), cw, ch, ukuran)
+
+    @staticmethod
+    def _pita_mask(k, sem, poligon, cw, ch, ukuran) -> None:
+        """Pita mencolok di atas pratinjau: ada mask (dari PNG yang dilatih) atau latar tanpa mask."""
+        ada = bool(sem.any())
+        if ada:
+            luas = sem.size
+            teks = (f"ADA MASK  ·  riser {100 * (sem == 1).sum() / luas:.0f}%  ·  tread {100 * (sem == 2).sum() / luas:.0f}%"
+                    f"  ·  {poligon[0]} riser, {poligon[1]} tread")
+            warna = "#1E8E3E"
+        else:
+            teks = "TANPA MASK  ·  LATAR  —  pastikan memang tidak ada tangga"
+            warna = "#E8710A"
+        if ada != (sum(poligon) > 0):
+            teks += "   ⚠ mask PNG tidak cocok dengan poligon label"
+            warna = "#C5221F"
+        x0 = cw // 2 - ukuran[0] // 2
+        y0 = ch // 2 - ukuran[1] // 2
+        teks_id = k.create_text(x0 + 10, y0 + 8, anchor="nw", text=teks, fill="white", font=("Segoe UI", 11, "bold"))
+        a, b, c, d = k.bbox(teks_id)
+        kotak = k.create_rectangle(a - 6, b - 4, c + 6, d + 4, fill=warna, outline="")
+        k.tag_raise(teks_id, kotak)
 
     # ------------------------------------------------------------ perintah & HF
     def _perintah_latih(self) -> str:

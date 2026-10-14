@@ -160,7 +160,7 @@ IKON_LABEL = {"diperiksa": "\u2714 ", "claude_cek": "\U0001f916\u26a0 ", "claude
 WARNA_LABEL = {"diperiksa": "#1E8E3E", "claude_cek": "#D93025", "claude": "#7C3AED", "claude_kosong": "#64748B",
                "usulan": "#B0A8A0"}
 KETERANGAN_LABEL = ("\u2714 diperiksa   \U0001f916 Claude   \U0001f916\u26a0 perlu dicek\n"
-                    "\U0001f916\u2205 Claude: tanpa tangga   \u25cc usulan lama   \u25cb belum ada label")
+                    "\U0001f916\u2205 Claude: tanpa tangga   \u25cc usulan lama   \u25cb belum ada label   \u2205 LATAR = mask kosong")
 
 
 def stamp() -> str:
@@ -4223,7 +4223,12 @@ class Studio(tk.Tk):
         if catatan_sesi is None:
             catatan_sesi = self._catatan_cache(self.sesi)
         sc = CR.scene_untuk(catatan_sesi, CR.indeks_frame(p.name))
-        return f"{ikon}{IKON_LABEL.get(status_label(p), '')}{p.name}" + (f"  · {sc['nama']}" if sc else "")
+        st_ = status_label(p)
+        teks = f"{ikon}{IKON_LABEL.get(st_, '')}{p.name}"
+        if st_ == "diperiksa" and not any(len(q) >= 3 for v in baca_json(p / "label_draft.json", {}).get("poligon", {}).values()
+                                          for q in v):
+            teks += "  · ∅ LATAR"                       # diperiksa tanpa tangga: contoh latar, mask kosong
+        return teks + (f"  · {sc['nama']}" if sc else "")
 
     def _warnai_item_frame(self, i: int, p: Path) -> None:
         warna = WARNA_LABEL.get(status_label(p))
