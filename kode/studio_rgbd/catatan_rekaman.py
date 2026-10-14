@@ -198,6 +198,41 @@ def id_tangga_baru(data: dict) -> str:
     return f"T{(max(angka) + 1) if angka else 1:02d}"
 
 
+def _kunci_nama(nama: str) -> str:
+    return " ".join(str(nama).split()).casefold()
+
+
+def cari_tangga(daftar: dict, teks: str) -> str | None:
+    """ID tangga dari ketikan: ID ("T03"), label ("T03 · Gedung F") atau nama saja.
+
+    Nama dibandingkan tanpa beda huruf besar/kecil dan spasi ganda, jadi
+    "gedung f" dan "Gedung  F" menunjuk tangga yang sama, bukan tangga baru.
+    """
+    teks = " ".join(str(teks).split())
+    if not teks:
+        return None
+    kepala = teks.split(" · ")[0].strip().upper()
+    if kepala in daftar:
+        return kepala
+    kunci = _kunci_nama(teks)
+    return next((tid for tid, v in daftar.items() if _kunci_nama(v.get("nama", "")) == kunci), None)
+
+
+def tangga_dari_nama(akar_data: Path, nama: str, lokasi: str = "") -> tuple[str, bool]:
+    """ID tangga bernama ``nama``; dibuat bila belum ada. -> (id, baru dibuat?)
+
+    Dua rekaman yang diberi nama tangga sama otomatis terhubung ke satu ID.
+    """
+    daftar = baca_tangga(akar_data)
+    tid = cari_tangga(daftar, nama)
+    if tid is not None:
+        return tid, False
+    tid = id_tangga_baru(daftar)
+    daftar[tid] = {"nama": " ".join(nama.split()), "lokasi": lokasi.strip(), "warna": warna_tangga_baru(daftar)}
+    tulis_tangga(akar_data, daftar)
+    return tid, True
+
+
 def label_tangga(tid: str | None, daftar: dict) -> str:
     if not tid:
         return "belum ada tangga"

@@ -59,12 +59,14 @@ if __package__:
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
+    from . import tempat_sampah as TS
+    from .hitung_data import JendelaJumlahData, status_label
     from .ui_bantu import kolom_gulir
     from . import visual_depth, ir_selaras, sinkron, tema
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
-                                         usulkan as usulkan_convnext_depth)
+                                         usulkan as usulkan_convnext_depth, lepas as lepas_convnext)
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from studio_rgbd.kamera_rgbd import (KameraRGBD, cari_rekaman, nama_aman, nama_rekaman,
@@ -74,12 +76,14 @@ else:
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
+    from studio_rgbd import tempat_sampah as TS
+    from studio_rgbd.hitung_data import JendelaJumlahData, status_label
     from studio_rgbd.ui_bantu import kolom_gulir
     from studio_rgbd import visual_depth, ir_selaras, sinkron, tema
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
-                                         usulkan as usulkan_convnext_depth)
+                                         usulkan as usulkan_convnext_depth, lepas as lepas_convnext)
 
 
 BG = "#F3EEE7"
@@ -157,20 +161,6 @@ WARNA_LABEL = {"diperiksa": "#1E8E3E", "claude_cek": "#D93025", "claude": "#7C3A
                "usulan": "#B0A8A0"}
 KETERANGAN_LABEL = ("\u2714 diperiksa   \U0001f916 Claude   \U0001f916\u26a0 perlu dicek\n"
                     "\U0001f916\u2205 Claude: tanpa tangga   \u25cc usulan lama   \u25cb belum ada label")
-
-
-def status_label(frame: Path) -> str:
-    """'diperiksa' | 'claude_cek' | 'claude' | 'claude_kosong' | 'usulan' | '' (tanpa draf) untuk satu folder frame."""
-    j = baca_json(frame / "label_draft.json", {})
-    if not j:
-        return ""
-    if j.get("diperiksa_manual", not j.get("otomatis", False)):
-        return "diperiksa"
-    if j.get("oleh_claude"):
-        if j.get("perlu_dicek"):
-            return "claude_cek"
-        return "claude" if any(j.get("poligon", {}).values()) else "claude_kosong"
-    return "usulan"
 
 
 def stamp() -> str:
@@ -568,6 +558,9 @@ class KanvasLabel(tk.Canvas):
         self._blok_awal = None
         self._blok_kotak = None
         self.lapor_blok = None
+        # Dipanggil saat Ctrl+Z tidak punya langkah lagi di frame ini; Studio
+        # memakainya untuk kembali ke frame yang baru disunting (riwayat lintas frame).
+        self.saat_undo_habis = None
         # Alat tarik tanpa modifier, untuk papan sentuh yang sulit menahan
         # Ctrl atau Shift sambil menarik satu jari.
         self.alat = "normal"      # "normal" | "geser" | "blok"
@@ -688,6 +681,8 @@ class KanvasLabel(tk.Canvas):
 
     def undo_riwayat(self, _e=None):
         if self._riwayat_pos <= 0:
+            if self.saat_undo_habis is not None:
+                self.saat_undo_habis()
             return "break"
         self._riwayat_pos -= 1
         self._pulihkan_riwayat(self._riwayat_pos)
@@ -1598,6 +1593,7 @@ class Studio(tk.Tk):
         self.sesi: Path | None = None
         self.indeks: list[dict] = []
         self.frame_paths: list[Path] = []
+        self._riwayat_frame: "OrderedDict[str, dict]" = OrderedDict()   # Ctrl+Z lintas frame
         self.label_path: Path | None = None
         self.label_info: dict | None = None
         self.preview_photo = None
@@ -1645,6 +1641,10 @@ class Studio(tk.Tk):
         self.warna_bidang = DoubleVar(value=float(preferensi.get("warna_bidang", 0.0)))
         self.garis_3d = BooleanVar(value=bool(preferensi.get("garis_3d", False)))
         self.magnet_titik = BooleanVar(value=True)
+        # Model pengusul di GPU: auto-usulan frame tanpa label, peta model Bantu arah,
+        # tombol Rekomendasi/Batch. Mati = model tidak dimuat (dan dilepas bila sudah).
+        self.model_gpu = BooleanVar(value=bool(preferensi.get("model_gpu", True)))
+        self._model_gpu_aktif = bool(self.model_gpu.get())   # salinan untuk thread prefetch
         self.mode_label = StringVar(value="objek")
         self.kontrol_label = StringVar(value=preferensi.get("kontrol_label", "mudah"))
         # Navigasi frame dikunci sampai operator sengaja memilih warna mask.
@@ -1659,8 +1659,10 @@ class Studio(tk.Tk):
         self.tabs.bind("<<NotebookTabChanged>>", self.ganti_tab)
         self.after(30, self._poll)
         self.after(120, self.muat_daftar)   # daftar tangga langsung terlihat saat aplikasi dibuka
-        self.after(500, self._hangatkan_model_async)
-        self.status.set("Siap untuk labeling. Kamera dinyalakan hanya saat Preview Kamera atau Mulai rekam ditekan.")
+        if self._model_gpu_aktif:
+            self.after(500, self._hangatkan_model_async)
+        self.status.set("Siap untuk labeling. Kamera dinyalakan hanya saat Preview Kamera atau Mulai rekam ditekan."
+                        + ("" if self._model_gpu_aktif else " Auto-label/model GPU mati (tab Otomatis)."))
 
     # ----- struktur data -----
     def _siapkan_root(self):
@@ -1899,6 +1901,10 @@ class Studio(tk.Tk):
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(3, 0))
         self.tombol_ringkas(baris, "Hapus preview", self.hapus_preview_permanen, "#F3D8D4", INK, width=110).pack(side="left", expand=True, fill="x")
         self.tombol_ringkas(baris, "Hapus rekaman", self.hapus_sesi_permanen, RED, width=110).pack(side="left", expand=True, fill="x", padx=(3, 0))
+        self.tombol_ringkas(i, "♻ Tempat sampah Studio…", self.buka_tempat_sampah, "#E8DDD5", INK,
+                            width=220).pack(fill="x", pady=(3, 0))
+        self.tombol_ringkas(i, "📊 Jumlah data berlabel", self.buka_jumlah_data, "#E8DDD5", INK,
+                            width=220).pack(fill="x", pady=(3, 0))
         tk.Checkbutton(i, text="\U0001f5d1 Tampilkan isi tempat sampah", variable=self.tampil_sampah,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.muat_daftar).pack(anchor="w", pady=(4, 0))
@@ -2017,12 +2023,21 @@ class Studio(tk.Tk):
                                     "#E8DDD5", INK, width=100).pack(side="left", padx=(6, 0))
         # Tangga fisik: rekaman yang merekam tangga yang sama diberi ID sama, agar
         # pembagian train/val/test bisa per tangga (tab Split).
-        tk.Label(i, text="Tangga fisik (rekaman dengan tangga sama = ID sama)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
+        tk.Label(i, text="Tangga fisik: ketik nama lalu Enter (nama sama = otomatis terhubung)", bg=PANEL,
+                 fg=MUTED).pack(anchor="w", pady=(6, 0))
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x")
-        self.pilih_tangga = ttk.Combobox(baris, state="readonly", width=24)
+        # Bisa diketik: nama yang sudah ada dipakai ulang (tanpa beda huruf besar/spasi),
+        # nama baru otomatis menjadi tangga baru. Dulu hanya bisa memilih dari daftar
+        # atau "+ Baru", yang membuat ID ganda bila namanya diketik ulang.
+        self.pilih_tangga = ttk.Combobox(baris, width=24)
         self.pilih_tangga.pack(side="left", fill="x", expand=True)
         self.pilih_tangga.bind("<<ComboboxSelected>>", lambda _e: self.atur_tangga_sesi(self.pilih_tangga.get()))
+        self.pilih_tangga.bind("<Return>", lambda _e: self.tangga_dari_ketikan())
+        self.pilih_tangga.bind("<KP_Enter>", lambda _e: self.tangga_dari_ketikan())
+        self.pilih_tangga.bind("<FocusOut>", lambda _e: self.tangga_dari_ketikan())
         self.tombol_ringkas(baris, "+ Baru", self.tangga_baru, GREEN, width=60).pack(side="left", padx=(3, 0))
+        self.tombol_ringkas(i, "🪜 Kelompokkan rekaman per tangga…", self.buka_kelompok_tangga, "#E8DDD5", INK,
+                            width=240).pack(fill="x", pady=(3, 0))
         tk.Label(i, text="Catatan / lokasi (tersimpan otomatis)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
         self.teks_catatan = tk.Text(i, height=3, wrap="word", bg="#FFF9F4", fg=INK, relief="flat",
                                     font=("Segoe UI", 9), undo=True)
@@ -2198,21 +2213,59 @@ class Studio(tk.Tk):
     def atur_tangga_sesi(self, label: str) -> None:
         self._ubah_catatan(lambda d: d.update(tangga=self._id_dari_label(label)))
 
+    def tangga_dari_ketikan(self) -> None:
+        """Kaitkan rekaman ke tangga bernama sesuai ketikan; nama baru menjadi tangga baru."""
+        if not self.sesi:
+            return
+        teks = " ".join(self.pilih_tangga.get().split())
+        daftar = CR.baca_tangga(self.root_data)
+        lama = CR.baca(self.sesi).get("tangga") or ""
+        if teks == (CR.label_tangga(lama, daftar) if lama else self.TANPA_TANGGA):
+            return                                       # tidak berubah (mis. fokus pindah saja)
+        if not teks or teks.startswith("—"):
+            self._ubah_catatan(lambda d: d.update(tangga=""))
+            self.status.set("Tangga fisik dilepas dari rekaman ini.")
+            return
+        tid, baru = CR.tangga_dari_nama(self.root_data, teks)
+        self._ubah_catatan(lambda d: d.update(tangga=tid))
+        label = CR.label_tangga(tid, CR.baca_tangga(self.root_data))
+        if baru:
+            self.status.set(f"Tangga baru {label} dibuat dan dipasang. Ketik nama yang sama di rekaman lain "
+                            "untuk menghubungkannya.")
+        else:
+            n = sum(1 for p in getattr(self, "_map_sesi", []) if CR.baca(p).get("tangga") == tid)
+            self.status.set(f"Terhubung ke {label} ({n} rekaman).")
+
     def tangga_baru(self) -> None:
         """Daftarkan tangga fisik baru lalu pasang ke rekaman terpilih."""
         if not self.sesi:
             messagebox.showinfo("Pilih rekaman", "Pilih rekaman dahulu.", parent=self); return
         daftar = CR.baca_tangga(self.root_data)
-        tid = CR.id_tangga_baru(daftar)
-        nama = simpledialog.askstring("Tangga baru", f"Nama tangga {tid}\n(mis. Rusunawa tangga 1, Gedung F tangga darurat):",
-                                      parent=self)
+        nama = simpledialog.askstring("Tangga baru", f"Nama tangga {CR.id_tangga_baru(daftar)}\n"
+                                      "(mis. Rusunawa tangga 1, Gedung F tangga darurat):", parent=self)
         if not nama or not nama.strip():
             return
-        lokasi = simpledialog.askstring("Tangga baru", "Lokasi/keterangan (boleh kosong):", parent=self) or ""
-        daftar[tid] = {"nama": nama.strip(), "lokasi": lokasi.strip(), "warna": CR.warna_tangga_baru(daftar)}
-        CR.tulis_tangga(self.root_data, daftar)
+        if CR.cari_tangga(daftar, nama) is None:
+            lokasi = simpledialog.askstring("Tangga baru", "Lokasi/keterangan (boleh kosong):", parent=self) or ""
+        else:
+            lokasi = ""
+        tid, baru = CR.tangga_dari_nama(self.root_data, nama, lokasi)
         self._ubah_catatan(lambda d: d.update(tangga=tid))
-        self.status.set(f"Tangga {tid} · {nama.strip()} dibuat dan dipasang ke rekaman ini.")
+        label = CR.label_tangga(tid, CR.baca_tangga(self.root_data))
+        self.status.set(f"Tangga {label} dibuat dan dipasang ke rekaman ini." if baru
+                        else f"Nama itu sudah dipakai {label}; rekaman ini dihubungkan ke sana, bukan tangga baru.")
+
+    def buka_kelompok_tangga(self) -> None:
+        """Jendela kartu bergambar untuk menandai banyak rekaman sekaligus sebagai tangga fisik yang sama."""
+        lama = getattr(self, "_jendela_kelompok", None)
+        if lama is not None and lama.winfo_exists():
+            lama.lift(); lama.muat(); return
+        try:
+            from .kelompok_tangga import JendelaKelompokTangga
+        except ImportError:
+            from kelompok_tangga import JendelaKelompokTangga
+        kat = self.filter_sesi.get() if self.filter_sesi.get() in KATEGORI else "tangga_naik"
+        self._jendela_kelompok = JendelaKelompokTangga(self, kat)
 
     def tangga_scene(self) -> None:
         """Tangga untuk scene terpilih (satu rekaman bisa melewati beberapa tangga)."""
@@ -2439,6 +2492,7 @@ class Studio(tk.Tk):
         f = tk.Frame(self.tab_label, bg=BG); f.pack(fill="both", expand=True, padx=14, pady=14)
         left = tk.Frame(f, bg=BG); left.pack(side="left", fill="both", expand=True, padx=(0, 12))
         self.kanvas = KanvasLabel(left, self.hitung_ukuran, self._aktif_mask_berubah); self.kanvas.pack(fill="both", expand=True)
+        self.kanvas.saat_undo_habis = self._undo_frame_lain
         self.kanvas.penyedia_peta = self._peta_model_kini
         self.kanvas.lapor_blok = self._lapor_blok
         self.kanvas.touchpad = bool(self.mode_touchpad.get())
@@ -2546,16 +2600,26 @@ class Studio(tk.Tk):
         self.tombol_ringkas(nav, "↻ Muat ulang gambar", self.kanvas.muat_ulang_gambar, "#E8DDD5", INK,
                              width=180).pack(fill="x")
         kelola = tk.Frame(i, bg=PANEL); kelola.pack(fill="x", pady=(4, 0))
-        self.tombol_ringkas(kelola, "Sampahkan", self.toggle_sampah_frame, "#E8DDD5", INK).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        self.tombol_ringkas(kelola, "Hapus permanen", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        tk.Checkbutton(i, text="\U0001f5d1 Tampilkan sampah frame", variable=self.tampil_sampah_frame,
+        self.btn_sampah_frame = self.tombol_ringkas(kelola, "🗑 Sampahkan", self.toggle_sampah_frame, "#E8DDD5", INK)
+        self.btn_sampah_frame.pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.tombol_ringkas(kelola, "Hapus", self.hapus_frame_permanen, "#F3D8D4", INK).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        tk.Checkbutton(i, text="\U0001f5d1 Tampilkan sampah frame (lalu ♻ Pulihkan)", variable=self.tampil_sampah_frame,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
-                       command=self.muat_frame).pack(anchor="w", pady=(6, 0))
+                       command=self._ganti_tampilan_sampah_frame).pack(anchor="w", pady=(6, 0))
         b, i = self.card(right, "Label dan depth") ; b.pack(fill="x", pady=(0, 7))
         panel_label = ttk.Notebook(i); panel_label.pack(fill="both", expand=True)
         edit_i = tk.Frame(panel_label, bg=PANEL); otomatis_i = tk.Frame(panel_label, bg=PANEL)
         panel_label.add(edit_i, text="Edit mask")
         panel_label.add(otomatis_i, text="Otomatis")
+        gpu = tk.Frame(otomatis_i, bg=PANEL, highlightthickness=1, highlightbackground=LINE, padx=6, pady=4)
+        gpu.pack(fill="x", pady=(6, 2))
+        tk.Checkbutton(gpu, text="Auto-label & model GPU", variable=self.model_gpu, command=self.ganti_model_gpu,
+                       bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
+                       font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self.info_model_gpu = tk.Label(gpu, text="", bg=PANEL, fg=MUTED, wraplength=290, justify="left",
+                                       font=("Segoe UI", 8))
+        self.info_model_gpu.pack(anchor="w")
+        self._perbarui_info_model_gpu()
         kontrol = tk.Frame(otomatis_i, bg=PANEL); kontrol.pack(fill="x", pady=(6, 2))
         tk.Label(kontrol, text="PILIH KONTROL", bg=PANEL, fg=ACCENT, font=("Segoe UI", 8, "bold")).pack(anchor="w")
         tk.Radiobutton(kontrol, text="Mudah: A/S/Space", variable=self.kontrol_label, value="mudah",
@@ -2763,13 +2827,26 @@ class Studio(tk.Tk):
                                           "depth_mode": self.depth_mode.get(),
                                           "pakai_ir": bool(self.pakai_ir.get()),
                                           "warna_bidang": float(self.warna_bidang.get()),
-                                          "garis_3d": bool(self.garis_3d.get())})
+                                          "garis_3d": bool(self.garis_3d.get()),
+                                          "model_gpu": bool(self.model_gpu.get())})
 
     def ganti_tab(self, _event=None):
         """Matikan stream yang tidak diperlukan agar labeling tetap ringan."""
         # Catatan/scene dan label bisa berubah di tab lain; tab Split memuat ulang sendiri.
         if self.tabs.select() == str(getattr(self, "tab_split", "")) and getattr(self, "panel_split", None):
             self.panel_split.muat_ulang()
+        # Rekaman yang terakhir dipilih di tab Split ikut terpilih di Tinjau/Label/Ekspor,
+        # agar ✔-nya bisa langsung diubah tanpa mencari ulang di daftar.
+        dari_split = getattr(self, "_sesi_dari_split", None)
+        if (dari_split is not None and self.tabs.select() != str(getattr(self, "tab_split", ""))
+                and dari_split != self.sesi and dari_split in getattr(self, "_map_sesi", [])):
+            i = self._map_sesi.index(dari_split)
+            self.list_sesi.selection_clear(0, "end"); self.list_sesi.selection_set(i)
+            self.list_sesi.activate(i); self.list_sesi.see(i)
+            self.pilih_sesi()
+            if self.tabs.select() == str(self.tab_label):
+                self.muat_frame()
+        self._sesi_dari_split = None
         # Uji realtime memakai kamera secara eksklusif; hentikan begitu pengguna
         # pindah ke tab lain agar device tidak diperebutkan dengan preview/rekam.
         if self.tabs.select() != str(self.tab_uji) and getattr(self, 'panel_uji', None) is not None:
@@ -3397,16 +3474,18 @@ class Studio(tk.Tk):
         rekaman = (self.root_data / "rekaman").resolve()
         if rekaman not in target.parents:
             messagebox.showerror("Target tidak aman", "Folder terpilih bukan sesi rekaman yang valid.", parent=self); return
-        if not messagebox.askyesno("Hapus rekaman permanen", f"Hapus PERMANEN seluruh sesi ini?\n\n{target.name}\n\nRAW, preview, ekspor frame, gambar, mask, dan label akan hilang dan tidak dapat dipulihkan.", icon="warning", parent=self):
+        if not messagebox.askyesno("Hapus rekaman", f"Hapus seluruh sesi ini?\n\n{target.name}\n\nFoldernya (RAW, preview, ekspor, label) "
+                                   "dipindah ke Tempat sampah Studio dan masih bisa dipulihkan. Ruang disk baru kembali "
+                                   "setelah tempat sampah dikosongkan.", icon="warning", parent=self):
             return
         self._tutup_video()
         try:
-            shutil.rmtree(target)
+            TS.buang(self.root_data, target, "rekaman")
             self.sesi = None; self.indeks = []; self.frame_paths = []; self.label_path = None; self.label_info = None
             self.list_frame.delete(0, "end"); self.kanvas.delete("all")
             self.kategori_sesi.set("(rekaman dihapus)")
             self.muat_daftar()
-            self.status.set("Rekaman dan seluruh turunannya dihapus permanen.")
+            self.status.set(f"{target.name} dipindah ke Tempat sampah Studio (bisa dipulihkan).")
         except OSError as e:
             messagebox.showerror("Hapus rekaman", str(e), parent=self)
 
@@ -3481,6 +3560,21 @@ class Studio(tk.Tk):
             self._video_cap = None
         self._n_frame = 0
         self._depth_frame_cache = (None, None)
+
+    def buka_tempat_sampah(self):
+        """Frame/rekaman yang dihapus: pulihkan, hapus selamanya, atau kosongkan."""
+        lama = getattr(self, "_jendela_sampah", None)
+        if lama is not None and lama.winfo_exists():
+            lama.lift(); lama.muat(); return
+        self._jendela_sampah = TS.JendelaTempatSampah(self)
+
+    def buka_jumlah_data(self):
+        """Jendela jumlah frame berlabel per rekaman dan perkiraan data train/val/test."""
+        lama = getattr(self, "_jendela_jumlah", None)
+        if lama is not None and lama.winfo_exists():
+            lama.lift(); lama.hitung(); return
+        kat = self.filter_sesi.get() if self.filter_sesi.get() in KATEGORI else "tangga_naik"
+        self._jendela_jumlah = JendelaJumlahData(self, kat, KATEGORI)
 
     def buka_pemutar_ukur(self, sesi: Path | None = None, mulai: int | None = None):
         """Jendela "Putar & isi meteran": rekaman diputar dengan nomor anak tangga dari pelacak."""
@@ -3893,13 +3987,15 @@ class Studio(tk.Tk):
             messagebox.showinfo("Belum ada ekspor", "Sesi ini belum memiliki hasil ekspor.", parent=self); return
         if getattr(self, "_ekspor_thread", None) and self._ekspor_thread.is_alive():
             messagebox.showinfo("Ekspor berjalan", "Tunggu ekspor yang sedang berjalan selesai.", parent=self); return
-        if not messagebox.askyesno("Hapus semua ekspor", "Hapus SEMUA frame ekspor, gambar, depth, IR, mask, label, dan video ekspor sesi ini?\n\nRekaman RAW tidak dihapus. Anda dapat mengekspor ulang dari awal.", icon="warning", parent=self):
+        if not messagebox.askyesno("Hapus semua ekspor", "Hapus SEMUA frame ekspor, gambar, depth, IR, mask, label, dan video ekspor sesi ini?\n\n"
+                                   "Foldernya dipindah ke Tempat sampah Studio dan masih bisa dipulihkan. Rekaman RAW tidak "
+                                   "dihapus.", icon="warning", parent=self):
             return
         try:
-            shutil.rmtree(root)
+            TS.buang(self.root_data, root, "ekspor")
             self.frame_paths = []; self.label_path = None; self.label_info = None
             self.list_frame.delete(0, "end"); self.kanvas.delete("all")
-            self.status.set("Semua hasil ekspor dihapus. RAW tetap aman dan siap diekspor ulang.")
+            self.status.set("Semua hasil ekspor dipindah ke Tempat sampah Studio (bisa dipulihkan). RAW tetap aman.")
         except OSError as e:
             messagebox.showerror("Hapus ekspor", str(e), parent=self)
 
@@ -4156,11 +4252,13 @@ class Studio(tk.Tk):
             self.simpan_draft_label()
         data = self._baca_frame(p)
         if data is None: return
+        self._simpan_riwayat_frame()
         bgr, dep = data["bgr"], data["dep"]
         # Pilihan A/S dipertahankan antar-frame. Penguncian hanya
         # diperlukan sebelum navigasi pertama, bukan setiap kali frame baru
         # dibuka; jika tidak tombol panah berhenti setelah satu perpindahan.
         self.label_path=p; self.label_info=baca_json(p/"frame.json")
+        self._usulan_aktif = None                     # riwayat undo frame lama tidak berlaku lagi
         try:
             self.kanvas.intrinsik = self._intrinsics(self.label_info)
         except (KeyError, TypeError, ValueError):
@@ -4175,7 +4273,8 @@ class Studio(tk.Tk):
             self.kanvas.reset_riwayat()
             self.kanvas.fit()                           # sekali, sudah dengan mask (lihat set_frame)
             self.status.set(f"Draft mask {p.name} dipulihkan otomatis.")
-        elif not self._punya_label(p):
+        self._pulihkan_riwayat_frame(p)
+        if not draft.get("poligon") and not self._punya_label(p):
             # Frame baru selalu mendapat usulan terlebih dahulu. Pengguna lalu
             # tinggal mengoreksi; draft/label yang sudah ada tidak ditimpa.
             self.after(180, lambda target=p: self._auto_segmentasi(target))
@@ -4293,8 +4392,8 @@ class Studio(tk.Tk):
     def _peta_model_kini(self) -> np.ndarray | None:
         """Peta kelas model untuk frame aktif (penyedia pemandu kanvas)."""
         p = self.label_path
-        if p is None or self.kanvas.rgb is None:
-            return None
+        if p is None or self.kanvas.rgb is None or not self._model_gpu_aktif:
+            return None                              # kanvas memakai arah normal depth (CPU)
         if (self.label_info or {}).get("kategori", "tangga_naik") != "tangga_naik":
             return None
         with self._kunci_cache:
@@ -4347,7 +4446,8 @@ class Studio(tk.Tk):
                 # Peta model hanya untuk lapisan Bantu arah; saat lapisan itu mati
                 # menghitungnya membuang ~30 ms per tetangga dan membuat frame
                 # berikutnya belum siap ketika next ditekan (thread UI lalu menghitung sendiri).
-                if data.get("peta") is None and self.kanvas.bantu_arah > 0 and model_convnext_siap():
+                if (data.get("peta") is None and self.kanvas.bantu_arah > 0 and self._model_gpu_aktif
+                        and model_convnext_siap()):
                     info = baca_json(p / "frame.json", {})
                     if info.get("kategori", "tangga_naik") == "tangga_naik" and "intrinsics_rgb_native" in info:
                         data["peta"] = peta_kelas_convnext(data["bgr"], data["dep"], self._intrinsics(info))
@@ -4355,10 +4455,55 @@ class Studio(tk.Tk):
                 continue                                    # prefetch hanya percepatan; jalur utama tetap membaca sendiri
 
     def _auto_segmentasi(self, target: Path):
-        if target != self.label_path or self._punya_label(target):
+        if target != self.label_path or self._punya_label(target) or not self._model_gpu_aktif:
             return
         self.status.set(f"Auto-segmentasi ConvNeXt RGB-D untuk {target.name}…")
         self.usulkan_segmentasi()
+
+    def _perbarui_info_model_gpu(self) -> None:
+        if not hasattr(self, "info_model_gpu"):
+            return
+        if self._model_gpu_aktif:
+            teks = ("Nyala: frame tanpa label langsung diberi usulan, Bantu arah memakai peta model. "
+                    + ("Model sudah di GPU." if model_convnext_siap() else "Model dimuat saat diperlukan."))
+        else:
+            teks = ("Mati: tidak ada auto-label saat membuka frame, Rekomendasi/Batch menunggu dinyalakan, "
+                    "Bantu arah memakai depth (CPU). Model tidak di GPU.")
+        self.info_model_gpu.configure(text=teks)
+
+    def ganti_model_gpu(self) -> None:
+        """Sakelar Auto-label & model GPU: mati melepas model dari GPU, nyala memuatnya lagi."""
+        if not self.model_gpu.get() and getattr(self, "_batch_thread", None) and self._batch_thread.is_alive():
+            self.model_gpu.set(True)
+            messagebox.showinfo("Batch berjalan", "Tunggu auto-label batch selesai sebelum mematikan model GPU.",
+                                parent=self)
+            return
+        self._model_gpu_aktif = bool(self.model_gpu.get())
+        self.simpan_preferensi()
+        self.kanvas._peta_arah_key = None            # pemandu dihitung ulang dari sumber yang berlaku
+        self.kanvas.render()
+        if self._model_gpu_aktif:
+            self.status.set("Auto-label & model GPU dinyalakan; memuat model…")
+            self._hangatkan_model_async()
+            if self.label_path is not None and not self._punya_label(self.label_path):
+                self.after(180, lambda target=self.label_path: self._auto_segmentasi(target))
+        else:
+            # Thread terpisah: lepas() menunggu inferensi prefetch yang sedang berjalan.
+            threading.Thread(target=lambda: (lepas_convnext(), self.q.put(("model_dilepas", None))),
+                             daemon=True).start()
+        self._perbarui_info_model_gpu()
+
+    def _pastikan_model_gpu(self) -> bool:
+        """Untuk tombol yang memakai model: tawarkan menyalakan bila sakelar mati."""
+        if self._model_gpu_aktif:
+            return True
+        if not messagebox.askyesno("Model GPU mati",
+                                   "Auto-label & model GPU sedang dimatikan (tab Otomatis).\n\n"
+                                   "Nyalakan sekarang untuk menjalankan model?", parent=self):
+            return False
+        self.model_gpu.set(True)
+        self.ganti_model_gpu()
+        return True
 
     def _hangatkan_model_async(self):
         def kerja():
@@ -4381,6 +4526,7 @@ class Studio(tk.Tk):
         # terperiksa 211803, SAM 2 + verifikasi depth menurunkan Dice usulan
         # dari 0,887 ke 0,841 (bukti/final_d435/eksperimen_semua_data_20260925/auto_label).
         hasil = usulkan_convnext_depth(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), depth, k)
+        self._sumber_batch = hasil.get("sumber", "ConvNeXt RGB-D")
         return {"acuan": hasil["tapakan"], "objek": hasil["bidang_tegak"]}
 
     def batch_auto_label(self):
@@ -4388,6 +4534,8 @@ class Studio(tk.Tk):
             messagebox.showinfo("Pilih sesi", "Pilih sesi pada tab Tinjau dahulu.", parent=self); return
         if getattr(self, "_batch_thread", None) and self._batch_thread.is_alive():
             messagebox.showinfo("Batch berjalan", "Tunggu auto-label batch selesai.", parent=self); return
+        if not self._pastikan_model_gpu():
+            return
         if getattr(self, "_model_warm_thread", None) and self._model_warm_thread.is_alive():
             self.status.set("Model ConvNeXt sedang dimuat ke GPU; batch akan tersedia sesaat lagi."); return
         target = [p for p in self.daftar_frame_ekspor() if not self._punya_label(p)]
@@ -4421,7 +4569,8 @@ class Studio(tk.Tk):
                             baris.append(str(cls) + " " + " ".join(f"{v:.6f}" for x, y in poly for v in (x / w, y / h)))
                 tulis_json(p / "label_draft.json", {"versi": 2, "otomatis": True,
                                                     "diperiksa_manual": False,
-                                                    "sumber": "batch ConvNeXt RGB-D + SAM2 + depth",
+                                                    # Dulu tertulis "+ SAM2 + depth" walau SAM 2 sudah tidak dipakai.
+                                                    "sumber": "batch " + getattr(self, "_sumber_batch", "ConvNeXt RGB-D"),
                                                        "disimpan_iso": datetime.now().isoformat(timespec="seconds"), "poligon": poligon})
                 if baris:
                     (p / "label_yolo_seg.txt").write_text("\n".join(baris) + "\n", encoding="utf-8")
@@ -4701,10 +4850,96 @@ class Studio(tk.Tk):
                 lbl.config(text="⚠  masih usulan otomatis", bg="#FBEEDA", fg="#8A5A12")
         self._segarkan_item_frame()
 
+    BERKAS_LABEL = ("label_draft.json", "label_yolo_seg.txt", "mask_objek.png", "mask_acuan.png")
+    MAKS_RIWAYAT_FRAME = 10
+
+    # Riwayat Ctrl+Z lintas frame. Dulu riwayat kanvas direset setiap frame
+    # dibuka, jadi usulan auto-label atau suntingan di frame yang sudah
+    # ditinggalkan tidak bisa dibatalkan lagi. Sekarang riwayat 10 frame
+    # terakhir yang disunting disimpan di memori: kembali ke frame itu,
+    # Ctrl+Z melanjutkan riwayatnya; Ctrl+Z di frame yang tidak punya langkah
+    # lagi membuka frame yang terakhir disunting lalu membatalkan langkahnya.
+    def _simpan_riwayat_frame(self) -> None:
+        if self.label_path is None or not hasattr(self, "_riwayat_frame"):
+            return
+        k = self.kanvas
+        kunci = str(self.label_path)
+        self._riwayat_frame.pop(kunci, None)
+        if len(getattr(k, "_riwayat", [])) <= 1:
+            return
+        self._riwayat_frame[kunci] = {"riwayat": list(k._riwayat), "pos": k._riwayat_pos,
+                                      "usulan": getattr(self, "_usulan_aktif", None)}
+        while len(self._riwayat_frame) > self.MAKS_RIWAYAT_FRAME:
+            self._riwayat_frame.popitem(last=False)
+
+    def _pulihkan_riwayat_frame(self, p: Path) -> None:
+        r = getattr(self, "_riwayat_frame", {}).get(str(p))
+        if r is not None and r["riwayat"][r["pos"]] != self.kanvas._salin_poligon():
+            self._riwayat_frame.pop(str(p), None)          # label berubah di luar kanvas: riwayatnya basi
+            r = None
+        if r is None:
+            # Potret saat dibuka: Ctrl+Z sampai keadaan ini memulihkan berkas label
+            # persis (status ✔/otomatis/Claude), bukan menyimpannya sebagai suntingan.
+            self._usulan_aktif = {"frame": p, "sebelum": self.kanvas._salin_poligon(),
+                                  "berkas": self._potret_berkas_label(p), "usulan": None}
+            return
+        self.kanvas._riwayat, self.kanvas._riwayat_pos = list(r["riwayat"]), r["pos"]
+        self._usulan_aktif = r["usulan"]
+
+    def _undo_frame_lain(self) -> None:
+        """Ctrl+Z tanpa langkah di frame ini: buka frame yang terakhir disunting dan batalkan langkahnya."""
+        kini = str(self.label_path) if self.label_path else None
+        posisi = {str(q): i for i, q in enumerate(self.frame_paths)}
+        for kunci in reversed(list(getattr(self, "_riwayat_frame", {}))):
+            r = self._riwayat_frame[kunci]
+            if kunci == kini or r["pos"] <= 0 or kunci not in posisi:
+                continue
+            self._pilih_indeks_frame(posisi[kunci])
+            if str(self.label_path) == kunci and self.kanvas._riwayat_pos > 0:
+                self.kanvas.undo_riwayat()
+                self.status.set(f"Ctrl+Z: kembali ke {Path(kunci).name} dan membatalkan langkah terakhirnya.")
+            return
+        self.status.set("Tidak ada lagi yang bisa dibatalkan (riwayat menyimpan 10 frame terakhir yang disunting).")
+
+    def _potret_berkas_label(self, frame: Path | None) -> dict:
+        """Isi berkas label sebuah frame (None = berkas belum ada), untuk dipulihkan persis."""
+        if frame is None:
+            return {}
+        return {n: ((frame / n).read_bytes() if (frame / n).exists() else None) for n in self.BERKAS_LABEL}
+
+    @staticmethod
+    def _pulihkan_berkas_label(frame: Path, potret: dict) -> None:
+        for nama, isi in potret.items():
+            if isi is None:
+                (frame / nama).unlink(missing_ok=True)     # dibuat oleh usulan yang dibatalkan
+            else:
+                (frame / nama).write_bytes(isi)
+
     def simpan_draft_label(self):
         self._autosave_setelah = None
         if not self.label_path or self.kanvas.rgb is None:
             return
+        u = getattr(self, "_usulan_aktif", None)
+        if u is not None and u["frame"] == self.label_path:
+            kini = self.kanvas._salin_poligon()
+            if kini == u["sebelum"]:
+                # Ctrl+Z sampai sebelum usulan: berkas label kembali persis, termasuk statusnya.
+                self._pulihkan_berkas_label(self.label_path, u["berkas"])
+                self.perbarui_lencana_periksa()
+                self.status.set(f"{'Suntingan' if u['usulan'] is None else 'Usulan'} dibatalkan; "
+                                f"label sebelumnya dipulihkan: {self.label_path.name}")
+                return
+            if kini == u["usulan"]:
+                # Usulan mesin yang belum disentuh bukan label diperiksa.
+                tulis_json(self.label_path / "label_draft.json", {
+                    "versi": 3, "otomatis": True, "diperiksa_manual": False, "diperiksa_iso": None,
+                    "disimpan_iso": datetime.now().isoformat(timespec="seconds"), "poligon": self.kanvas.poligon,
+                })
+                self.perbarui_lencana_periksa()
+                if self._ada_poligon():
+                    self.simpan_label(senyap=True)
+                self.status.set(f"Usulan disimpan sebagai belum diperiksa (Ctrl+Z membatalkan): {self.label_path.name}")
+                return
         # Menyunting poligon berarti manusia sudah memeriksanya. Penanda
         # otomatis karena itu dicabut sendiri, bukan menunggu tombol ditekan:
         # kalau menunggu, sebagian besar frame akan tetap bertanda otomatis
@@ -4786,9 +5021,16 @@ class Studio(tk.Tk):
         self.status.set(f"Disalin ke papan klip: {nama}")
         return "break"
 
+    def _ganti_tampilan_sampah_frame(self):
+        """Di tampilan sampah tombol yang sama memulihkan; labelnya ikut berganti agar tidak menyesatkan."""
+        self.btn_sampah_frame.configure(text="♻ Pulihkan" if self.tampil_sampah_frame.get() else "🗑 Sampahkan")
+        self.muat_frame()
+
     def toggle_sampah_frame(self):
         pilihan = [self.frame_paths[i] for i in self.list_frame.curselection() if i < len(self.frame_paths)]
-        target = pilihan if len(pilihan) > 1 else ([self.label_path] if self.label_path else [])
+        # Frame yang dipilih di daftar diutamakan: setelah tampilan diganti, label_path
+        # masih bisa menunjuk frame dari tampilan sebelumnya.
+        target = pilihan or ([self.label_path] if self.label_path else [])
         if not target:
             messagebox.showinfo("Pilih frame", "Pilih frame yang ingin dipindahkan atau dipulihkan.", parent=self)
             return
@@ -4805,7 +5047,7 @@ class Studio(tk.Tk):
             self.simpan_draft_label()
         for f in target:
             state = baca_json(f / "frame_state.json", {"di_sampah": False})
-            state["di_sampah"] = ke_sampah if len(target) > 1 else not state.get("di_sampah", False)
+            state["di_sampah"] = ke_sampah
             state["waktu_ubah_iso"] = datetime.now().isoformat(timespec="seconds")
             tulis_json(f / "frame_state.json", state)
         # Hanya frame INI yang ditandai - folder dan isinya tidak dipindah,
@@ -4836,7 +5078,8 @@ class Studio(tk.Tk):
         exports = (self.sesi / "exports").resolve() if self.sesi else None
         if exports is None or exports not in p.resolve().parents:
             messagebox.showerror("Target tidak aman", "Frame bukan bagian dari exports sesi aktif.", parent=self); return
-        if not messagebox.askyesno("Hapus frame permanen", f"Hapus seluruh paket turunan {p.name}?\n\nRGB, depth, IR, mask, dan label pada frame ini akan hilang. RAW tidak dihapus.", parent=self):
+        if not messagebox.askyesno("Hapus frame", f"Hapus {p.name} dari daftar?\n\nFoldernya dipindah ke Tempat sampah Studio "
+                                   "(kartu Rekaman, tab Tinjau) dan masih bisa dipulihkan sampai dikosongkan.", parent=self):
             return
         try:
             # Simpan kandidat sesudah frame kini SEBELUM folder dihapus. Dengan
@@ -4847,7 +5090,7 @@ class Studio(tk.Tk):
                 posisi = -1
             berikut = self.frame_paths[posisi + 1] if 0 <= posisi < len(self.frame_paths) - 1 else None
             sebelum = self.frame_paths[posisi - 1] if posisi > 0 else None
-            shutil.rmtree(p)
+            TS.buang(self.root_data, p, "frame")
             self.label_path = None; self.label_info = None
             self.kanvas.rgb = self.kanvas.depth = None; self.kanvas.delete("all")
             self.muat_frame()
@@ -4857,9 +5100,9 @@ class Studio(tk.Tk):
                 # ikut tergulir ke frame terpilih, bukan hanya menyorotinya di
                 # luar layar.
                 self._pilih_indeks_frame(self.frame_paths.index(tujuan))
-                self.status.set(f"Frame dihapus. Lanjut ke {tujuan.name}.")
+                self.status.set(f"{p.name} dipindah ke Tempat sampah Studio (bisa dipulihkan). Lanjut ke {tujuan.name}.")
             else:
-                self.status.set("Frame ekspor dihapus permanen. Rekaman RAW tetap aman.")
+                self.status.set(f"{p.name} dipindah ke Tempat sampah Studio (bisa dipulihkan).")
         except OSError as e:
             messagebox.showerror("Hapus frame", str(e), parent=self)
 
@@ -4872,6 +5115,8 @@ class Studio(tk.Tk):
         """
         if self.kanvas.rgb is None or self.kanvas.depth is None:
             messagebox.showinfo("Pilih frame", "Pilih satu frame ekspor dahulu.", parent=self); return
+        if not self._pastikan_model_gpu():
+            return
         info = self.label_info or {}
         if "intrinsics_rgb_native" not in info:
             messagebox.showinfo("Intrinsics tidak ada",
@@ -4915,11 +5160,21 @@ class Studio(tk.Tk):
         # Urutan visual bawah->atas juga dipakai untuk riser agar konsisten.
         tapakan = [t["poligon"] for t in hasil.get("tapakan_terurut", [])] or hasil["tapakan"]
         urut_bawah = lambda daftar: sorted(daftar, key=lambda poly: -sum(p[1] for p in poly) / max(1, len(poly)))
+        # Simpanan tertunda dituntaskan dulu, lalu berkas label sebelum usulan dipotret:
+        # Ctrl+Z sampai ke poligon sebelum usulan memulihkan berkas itu persis
+        # (status ✔ diperiksa / 🤖 Claude / perlu dicek ikut kembali).
+        if self._autosave_setelah is not None:
+            self.after_cancel(self._autosave_setelah)
+            self.simpan_draft_label()
+        self._usulan_aktif = {"frame": self.label_path, "sebelum": self.kanvas._salin_poligon(),
+                              "berkas": self._potret_berkas_label(self.label_path)}
         self.kanvas.poligon["acuan"] = [list(map(tuple, p)) for p in urut_bawah(tapakan)]
         self.kanvas.poligon["objek"] = [list(map(tuple, p)) for p in urut_bawah(hasil["bidang_tegak"])]
+        self._usulan_aktif["usulan"] = self.kanvas._salin_poligon()
         self.kanvas.aktif_indeks = {nama: (len(daftar) - 1 if daftar else None)
                                     for nama, daftar in self.kanvas.poligon.items()}
-        self.kanvas.reset_riwayat()
+        # Satu langkah riwayat, bukan reset: Ctrl+Z mengembalikan label sebelum usulan.
+        self.kanvas.catat_riwayat()
         self._aktif_mask_berubah(self.mode_label.get(), self.kanvas.aktif_indeks[self.mode_label.get()])
         self.kanvas.render(); self.kanvas.on_change()
         urut = hasil.get("tapakan_terurut", [])
@@ -4928,7 +5183,7 @@ class Studio(tk.Tk):
         self.ukur_status.set(
             f"Rekomendasi {hasil.get('sumber', 'depth')}: {len(hasil['tapakan'])} tapakan (biru), {len(hasil['bidang_tegak'])} riser (merah). "
             + (f"Beda tinggi antar tapakan: {beda} cm." if beda else "")
-            + " Periksa lalu koreksi sebelum menyimpan.")
+            + " Periksa lalu koreksi sebelum menyimpan. Ctrl+Z membatalkan usulan ini.")
 
     def ganti_mode(self):
         self.kanvas.mode = self.mode_label.get()
@@ -5082,6 +5337,10 @@ class Studio(tk.Tk):
         if not self.sesi:
             messagebox.showinfo("Pilih sesi", "Pilih sesi pada tab Tinjau dahulu.", parent=self)
             return
+        if not CR.baca(self.sesi).get("selesai"):
+            messagebox.showinfo("Rekaman belum ✔", "Rekaman ini belum ditandai ✔ (sudah benar semua) di tab Tinjau, "
+                                "jadi tidak dipakai untuk melatih. Tandai dulu bila labelnya sudah benar.", parent=self)
+            return
         meta_sesi = baca_json(self.sesi / "source" / "session.json")
         split = meta_sesi.get("split", "train")
         root = self.root_data / "dataset_yolo_seg"
@@ -5222,10 +5481,18 @@ class Studio(tk.Tk):
                     if v[0] == self.sesi:
                         self.info_progres.config(text=v[1])
                 elif k=="model_siap":
-                    self.status.set(f"Pengusul label siap di GPU: {v}")
-                    # Handle cuDNN milik thread; panaskan juga thread UI sekarang
-                    # agar auto-label frame pertama tidak membeku ~0,35 s.
-                    self.after(100, panaskan_utas_ini)
+                    if not self._model_gpu_aktif:          # dimatikan selagi pemanasan berjalan
+                        threading.Thread(target=lepas_convnext, daemon=True).start()
+                    else:
+                        self.status.set(f"Pengusul label siap di GPU: {v}")
+                        # Handle cuDNN milik thread; panaskan juga thread UI sekarang
+                        # agar auto-label frame pertama tidak membeku ~0,35 s.
+                        self.after(100, lambda: self._model_gpu_aktif and panaskan_utas_ini())
+                    self._perbarui_info_model_gpu()
+                elif k=="model_dilepas":
+                    self._perbarui_info_model_gpu()
+                    self.status.set("Model GPU dilepas. Auto-label, Rekomendasi, dan peta model Bantu arah mati; "
+                                    "Bantu arah memakai arah normal depth (CPU).")
                 elif k=="model_gagal":
                     self.status.set(f"Pengusul label belum siap: {v}")
                 elif k=="info_frame":

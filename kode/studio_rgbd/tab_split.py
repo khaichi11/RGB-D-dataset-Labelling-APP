@@ -9,7 +9,7 @@ yang sudah diperiksa), dan mask pratinjau dibentuk seperti ``FrameD435``
 
 Pintasan saat tab ini aktif: 1 Train, 2 Val, 3 Test, 0 Abaikan, Backspace
 kosongkan (berlaku pada daftar yang terakhir diklik: rekaman atau frame);
-panah kanan/Space frame berikutnya, panah kiri sebelumnya.
+panah kanan/Space frame berikutnya, panah kiri/D sebelumnya (sama dengan tab Label).
 """
 from __future__ import annotations
 
@@ -91,6 +91,7 @@ class TabSplit:
         self._q: queue.Queue = queue.Queue()
         self._foto = None
         self._sibuk = False
+        self._sesi_awal: str | None = None
 
         self.hanya_diperiksa = tk.BooleanVar(value=True)
         self.filter_set = tk.StringVar(value="semua")
@@ -138,6 +139,9 @@ class TabSplit:
         tk.Checkbutton(i, text="Hanya label yang sudah divalidasi manual (disarankan)", variable=self.hanya_diperiksa,
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=self.muat_ulang).pack(anchor="w", pady=(6, 0))
+        tk.Label(i, text="Hanya rekaman bertanda ✔ di tab 2. Tinjau yang dipakai melatih; rekaman lain tidak punya "
+                         "frame siap latih, tidak ikut dibagi, dan masuk 'unassigned' di dataset HF.",
+                 bg=PANEL, fg=MUTED, wraplength=470, justify="left", font=("Segoe UI", 8)).pack(anchor="w")
 
         # --- rekaman & scene
         b, i = st.card(kiri, "Rekaman & scene  (Shift/Ctrl+klik memblok)"); b.pack(fill="x", pady=(0, 8))
@@ -154,10 +158,11 @@ class TabSplit:
         for nama, w in CR.WARNA.items():
             self.tree.tag_configure(f"stabilo_{nama}", background=w)
         self.tree.tag_configure("scene", font=("Segoe UI", 9, "italic"))
+        self.tree.tag_configure("belum_selesai", foreground=MUTED)
         gulir = ttk.Scrollbar(f2, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=gulir.set)
         self.tree.pack(side="left", fill="both", expand=True); gulir.pack(side="left", fill="y")
-        self.tree.bind("<<TreeviewSelect>>", lambda e: (self._isi_daftar(), self._tampil_catatan()))
+        self.tree.bind("<<TreeviewSelect>>", lambda e: (self._isi_daftar(), self._tampil_catatan(), self._catat_pilihan()))
         self.tree.bind("<Button-1>", lambda e: self._set_fokus("rekaman"), add="+")
         self.info_rek = tk.Label(i, text="", bg=PANEL, fg=INK, justify="left", anchor="w", wraplength=470,
                                  font=("Segoe UI", 9))
@@ -166,6 +171,11 @@ class TabSplit:
                        bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
                        command=lambda: (self._isi_tree(), self._isi_daftar())).pack(anchor="w", pady=(4, 0))
         self._baris_tombol(i, "Atur rekaman / scene / tangga terpilih", self.atur_rekaman)
+        baris_ok = tk.Frame(i, bg=PANEL); baris_ok.pack(fill="x", pady=(3, 0))
+        st.tombol_ringkas(baris_ok, "✔ Tandai selesai", lambda: self.atur_selesai(True), "#6B8B63", "white",
+                          width=150).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        st.tombol_ringkas(baris_ok, "✖ Batalkan ✔", lambda: self.atur_selesai(False), "#E8DDD5", INK,
+                          width=150).pack(side="left", fill="x", expand=True, padx=(2, 0))
 
         # --- frame
         b, i = st.card(kiri, "Frame siap latih"); b.pack(fill="x", pady=(0, 8))
@@ -183,6 +193,12 @@ class TabSplit:
         self.lb.configure(yscrollcommand=gulir.set)
         self.lb.pack(side="left", fill="both", expand=True); gulir.pack(side="left", fill="y")
         self.lb.bind("<<ListboxSelect>>", lambda e: self._pilih_frame())
+        # Pengikatan bawaan Listbox untuk Spasi/panah memilih item aktif lebih dulu, sehingga frame
+        # lama digambar sekali lagi sebelum frame berikutnya (tampak berkedip). Ditangani di sini saja.
+        for tombol, arah in (("<space>", 1), ("<Right>", 1), ("<Left>", -1), ("<KeyPress-d>", -1), ("<KeyPress-D>", -1)):
+            self.lb.bind(tombol, lambda e, a=arah: (self.geser(a), "break")[1])
+            # Pohon rekaman: Spasi bawaan Treeview memilih/membuka item, bukan pindah frame.
+            self.tree.bind(tombol, lambda e, a=arah: (self.geser(a), "break")[1])
         self.lb.bind("<Button-1>", lambda e: self._set_fokus("frame"), add="+")
         self._baris_tombol(i, "Atur frame terpilih (pengecualian)", self.atur_frame, ikut=True)
 
@@ -233,6 +249,14 @@ class TabSplit:
             self.studio.tombol_ringkas(baris, teks, lambda s_=s_: aksi(s_), WARNA_SET[s_],
                                        "white" if s_ else INK, width=86).pack(side="left", expand=True, fill="x", padx=1)
 
+    def _catat_pilihan(self) -> None:
+        """Rekaman terpilih di sini diteruskan ke tab lain (dipilih saat tab berganti)."""
+        pilih = self.tree.selection()
+        if len(pilih) == 1 and not pilih[0].startswith("tg::"):
+            r = pilih[0].split("::")[0]
+            self.studio._sesi_dari_split = self.akar / r
+            self._sesi_awal = r
+
     def _set_fokus(self, nama: str) -> None:
         self._fokus = nama
 
@@ -240,6 +264,9 @@ class TabSplit:
     def muat_ulang(self) -> None:
         """Hitung frame siap latih tiap rekaman di thread latar (disk dataset lambat)."""
         if self._sibuk:
+            # Pekerjaan lain (QA, push/tarik HF, CSV) sedang berjalan: muat ulang begitu selesai,
+            # agar ✔ yang diubah di tab Tinjau tidak tertinggal.
+            self.induk.after(1000, self.muat_ulang)
             return
         self._sibuk = True
         self.ringkas.config(text="Membaca daftar frame…")
@@ -253,7 +280,8 @@ class TabSplit:
                     catatan[r] = CR.baca(self.akar / r)
                     w = CR.waktu_rekaman(self.akar / r)
                     waktu[r] = w[0] if w else None
-                    frames[r] = [d for d in self.frame_bersih(self.akar, [r], hanya_diperiksa=hanya)
+                    # Rekaman yang belum ✔ di tab 2. Tinjau tidak dipakai melatih: tanpa frame siap latih.
+                    frames[r] = [d for d in self.frame_bersih(self.akar, [r], hanya_diperiksa=hanya, hanya_selesai=True)
                                  if d.parent.parent.parent.name == r]
                     ek = self.akar / r / "exports" / "frames"
                     n_ekspor[r] = sum(1 for d in ek.iterdir() if d.is_dir()) if ek.exists() else 0
@@ -271,6 +299,11 @@ class TabSplit:
                     self.rekaman, self.frames, self.n_ekspor, self.catatan, self.waktu = isi
                     self._sibuk = False
                     self._isi_tree()
+                    kini = getattr(getattr(self.studio, "sesi", None), "name", None)
+                    if kini in self.rekaman and self.tree.exists(kini) and self._sesi_awal != kini:
+                        # Rekaman yang sedang dibuka di tab Tinjau/Label ikut terpilih di sini.
+                        self._sesi_awal = kini
+                        self.tree.selection_set([kini]); self.tree.see(kini)
                     if not self.tree.selection() and self.rekaman:
                         self.tree.selection_set([self.rekaman[0]])     # pratinjau tidak kosong saat tab dibuka
                     self._isi_daftar()
@@ -380,8 +413,9 @@ class TabSplit:
             c = self.catatan.get(r) or {}
             s = self.data["rekaman"].get(r)
             w = CR.warna_rekaman(c, self.daftar_tangga)
-            tag = [str(s)] + ([f"stabilo_{w}"] if w else [])
-            teks = ("✔ " if c.get("selesai") else "") + r.replace("TANGGA_NAIK_", "") + ("  📝" if c.get("catatan") else "")
+            tag = [str(s)] + ([f"stabilo_{w}"] if w else []) + ([] if c.get("selesai") else ["belum_selesai"])
+            teks = (("✔ " if c.get("selesai") else "") + r.replace("TANGGA_NAIK_", "") + ("  📝" if c.get("catatan") else "")
+                    + ("" if c.get("selesai") else "  · belum ✔, tidak dilatih"))
             self.tree.insert("", "end", iid=r, text=teks, values=self._nilai_baris(r), tags=tag,
                              open=r in buka)
             for i, sc in enumerate(self._scene(r)):
@@ -448,6 +482,8 @@ class TabSplit:
             teks += "\nScene: " + "; ".join(f"{sc['nama']} ({sc['awal']}–{sc['akhir']})" for sc in self._scene(r))
         if c.get("selesai"):
             teks = "✔ Rekaman ditandai sudah benar semua.\n" + teks
+        else:
+            teks = "Belum ✔ di tab 2. Tinjau: frame rekaman ini tidak dipakai melatih.\n" + teks
         self.info_rek.config(text=teks, bg=CR.WARNA.get(CR.warna_rekaman(c, self.daftar_tangga)) or BG)
 
     def _isi_daftar(self, pertahankan: bool = False) -> None:
@@ -691,6 +727,43 @@ class TabSplit:
         self._gambar()
 
     # ------------------------------------------------------------ aksi
+    def _rekaman_iid(self, iid: str) -> list[str]:
+        """Rekaman yang diwakili satu baris pohon (rekaman, scene, atau tangga fisik)."""
+        if iid.startswith("tg::"):
+            return sorted({d.parent.parent.parent.name for d in self._frames_iid(iid)}
+                          | {x.split("::")[-1] for x in self.tree.get_children(iid)})
+        return [iid.split("::")[0]]
+
+    def atur_selesai(self, nilai: bool) -> None:
+        """✔ rekaman terpilih langsung dari tab ini (sama dengan centang di tab Tinjau)."""
+        rek = sorted({r for iid in self.tree.selection() for r in self._rekaman_iid(iid) if r in self.rekaman})
+        if not rek:
+            messagebox.showinfo("Pilih rekaman", "Pilih satu atau beberapa rekaman dahulu."); return
+        if nilai and not messagebox.askyesno("Tandai selesai", f"Tandai {len(rek)} rekaman ✔ (label sudah benar semua)?\n"
+                                             "Frame terperiksanya akan dipakai melatih."):
+            return
+        if not nilai and not messagebox.askyesno("Batalkan ✔", f"Cabut ✔ dari {len(rek)} rekaman?\n"
+                                                 "Framenya tidak lagi dipakai melatih."):
+            return
+        for r in rek:
+            sesi = self.akar / r
+            c = CR.baca(sesi)
+            c["selesai"] = nilai
+            c["selesai_iso"] = datetime.now().isoformat(timespec="seconds") if nilai else ""
+            CR.tulis(sesi, c)
+            if hasattr(self.studio, "_segarkan_item_sesi"):
+                self.studio._segarkan_item_sesi(sesi)
+        if getattr(self.studio, "sesi", None) in {self.akar / r for r in rek} and hasattr(self.studio, "_muat_catatan_ui"):
+            self.studio._muat_catatan_ui()
+        self.muat_ulang()
+
+    def _peringatan_belum_selesai(self, rek: list[str]) -> None:
+        belum = [r for r in rek if not (self.catatan.get(r) or {}).get("selesai")]
+        if belum:
+            self.ringkas.config(text=f"Set dicatat, tetapi {len(belum)} rekaman belum ✔ ("
+                                + ", ".join(r.replace("TANGGA_NAIK_", "") for r in belum[:3]) + ("…" if len(belum) > 3 else "")
+                                + "): framenya tidak dilatih sampai ditandai ✔ (tombol ✔ Tandai selesai di atas atau tab Tinjau).")
+
     def atur_rekaman(self, s: str | None) -> None:
         """Set untuk rekaman terpilih; untuk baris scene, set dicatat per frame di rentangnya."""
         pilih = list(self.tree.selection())
@@ -716,6 +789,7 @@ class TabSplit:
         self._isi_daftar(pertahankan=True)
         self._perbarui_ringkas()
         self._gambar()
+        self._peringatan_belum_selesai(sorted({r for iid in pilih for r in self._rekaman_iid(iid)}))
 
     def _terapkan_set(self, frames: list[Path], s: str | None) -> None:
         """Set untuk sekumpulan frame: rekaman yang seluruh framenya terpilih diberi set
@@ -766,7 +840,7 @@ class TabSplit:
             return "break"
         if e.keysym in ("Right", "space"):
             self.geser(1); return "break"
-        if e.keysym == "Left":
+        if e.keysym in ("Left", "d", "D"):              # D = sebelumnya, sama dengan tab Label
             self.geser(-1); return "break"
         return None
 
@@ -784,7 +858,7 @@ class TabSplit:
 
     def _pilih_frame(self) -> None:
         s = self.lb.curselection()
-        if len(s) == 1:
+        if len(s) == 1 and self.daftar[s[0]] is not self.kini:     # frame yang sama tidak digambar ulang
             self.kini = self.daftar[s[0]]
             self._gambar()
 
@@ -813,6 +887,9 @@ class TabSplit:
         sem = np.zeros(riser.shape, np.uint8)
         sem[tread > 0] = 2
         sem[riser > 0] = 1                                 # sama dengan FrameD435
+        if not sem.any():
+            # Contoh latar yang disengaja (frame tanpa tangga): mask kosong itu benar, bukan hilang.
+            self.lencana.config(text=self.lencana.cget("text") + " · TANPA TANGGA (contoh latar)")
         if self.cerah.get():
             rgb = _cerahkan(rgb)
         if self.seperti_model.get():

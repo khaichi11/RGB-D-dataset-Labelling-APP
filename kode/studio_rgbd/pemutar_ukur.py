@@ -42,11 +42,11 @@ from PIL import Image, ImageTk
 try:
     from . import catatan_rekaman as CR
     from . import ukuran_meteran as UM
-    from .panel_ukuran import WARNA_R, WARNA_T, _cm, _modul_ukuran
+    from .panel_ukuran import WARNA_R, WARNA_T, _cm, _modul_ukuran, bobot_nomor
 except ImportError:
     import catatan_rekaman as CR
     import ukuran_meteran as UM
-    from panel_ukuran import WARNA_R, WARNA_T, _cm, _modul_ukuran
+    from panel_ukuran import WARNA_R, WARNA_T, _cm, _modul_ukuran, bobot_nomor
 
 BG, PANEL, INK, MUTED, LINE, ACCENT, GREEN = ("#F3EEE7", "#FFFDFC", "#382D29", "#786962", "#DED2C8",
                                              "#754C3B", "#6B8B63")
@@ -951,7 +951,8 @@ class PemutarUkur(tk.Toplevel):
 
         def kerja():
             try:
-                _modul_ukuran().hitung(sesi, video=False, progres=lambda n: setattr(self, "_progres", n),
+                _modul_ukuran().hitung(sesi, video=False, bobot=bobot_nomor(),
+                                       progres=lambda n: setattr(self, "_progres", n),
                                        henti=lambda: self._tutup)
             except Exception as e:                                  # noqa: BLE001
                 baris = [b for b in str(e).strip().splitlines() if b.strip()]
