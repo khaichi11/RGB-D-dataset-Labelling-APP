@@ -16,8 +16,10 @@ Studio tetap bisa dipakai melabeli di mesin tanpa GPU.
 """
 from __future__ import annotations
 try:
+    from .daftar_model import label_dan_jalur
     from .ui_bantu import kolom_gulir
 except ImportError:
+    from daftar_model import label_dan_jalur
     from ui_bantu import kolom_gulir
 
 import collections
@@ -28,7 +30,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, ttk
 
 import cv2
 import numpy as np
@@ -95,7 +97,11 @@ class UjiRealtime:
         self._status_baru = None
         self._simpanan = None
 
-        self.bobot = tk.StringVar(value=str(BOBOT_BAWAAN) if BOBOT_BAWAAN.exists() else "")
+        # Bawaan = model pengusul Studio (dulu rujukan lama final_d435, 5 rekaman latih).
+        self._label_model, self._jalur_model, bawaan = label_dan_jalur()
+        self.pilihan_model = tk.StringVar(value=bawaan)
+        self.bobot = tk.StringVar(value=str(self._jalur_model[bawaan]) if bawaan
+                                  else (str(BOBOT_BAWAAN) if BOBOT_BAWAAN.exists() else ""))
         self.presisi = tk.StringVar(value="fp16")
         self.sumber = tk.StringVar(value="rekaman")
         self.rekaman = tk.StringVar(value="")
@@ -144,6 +150,11 @@ class UjiRealtime:
 
         b, i = self._kartu(kanan, "Model")
         b.pack(fill="x")
+        tk.Label(i, text="Pilih model (terbaru di atas):", bg=PANEL, fg=MUTED, anchor="w").pack(fill="x")
+        self.kotak_model = ttk.Combobox(i, textvariable=self.pilihan_model, values=self._label_model,
+                                        state="readonly", postcommand=self._segarkan_daftar_model)
+        self.kotak_model.pack(fill="x", pady=(0, 4))
+        self.kotak_model.bind("<<ComboboxSelected>>", self._model_dipilih)
         tk.Entry(i, textvariable=self.bobot, bg="#FAF7F5", fg=INK,
                  relief="flat", highlightbackground=LINE, highlightthickness=1).pack(fill="x", pady=(0, 6))
         self._tombol(i, "Pilih berkas bobot (.pt)", self.pilih_bobot, "#E8DDD5", INK).pack(fill="x", pady=2)
@@ -195,12 +206,24 @@ class UjiRealtime:
 
     # -------------------------------------------------------------- aksi
 
+    def _segarkan_daftar_model(self) -> None:
+        """Isi ulang daftar saat dibuka: model yang baru selesai dilatih langsung muncul."""
+        self._label_model, self._jalur_model, _ = label_dan_jalur()
+        self.kotak_model.configure(values=self._label_model)
+
+    def _model_dipilih(self, _event=None) -> None:
+        jalur = self._jalur_model.get(self.pilihan_model.get())
+        if jalur is not None:
+            self.bobot.set(str(jalur))
+            self.status.set("Model dipilih; tekan Mulai (bila sedang berjalan: Berhenti lalu Mulai lagi).")
+
     def pilih_bobot(self) -> None:
         p = filedialog.askopenfilename(title="Pilih bobot model",
                                        filetypes=[("PyTorch", "*.pt"), ("Semua", "*.*")],
                                        initialdir=str(BOBOT_BAWAAN.parent if BOBOT_BAWAAN.exists() else AKAR))
         if p:
             self.bobot.set(p)
+            self.pilihan_model.set("")
 
     def pakai_sesi_aktif(self) -> None:
         sesi = getattr(self.studio, "sesi", None)

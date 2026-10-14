@@ -34,8 +34,10 @@ import cv2
 import numpy as np
 
 try:
+    from .daftar_model import label_dan_jalur
     from .ui_bantu import kolom_gulir
 except ImportError:
+    from daftar_model import label_dan_jalur
     from ui_bantu import kolom_gulir
 
 BG, PANEL, INK, MUTED, ACCENT, LINE = "#F7F3F0", "#FFFFFF", "#2B2622", "#7A6E66", "#C1613C", "#E4DAD3"
@@ -52,6 +54,8 @@ class UjiBerkas:
         self.model = None
         self.nama_bobot = tk.StringVar(value="belum dimuat")
         self.jalur_bobot: Path | None = None
+        self._label_model, self._jalur_model, bawaan = label_dan_jalur()
+        self.pilihan_model = tk.StringVar(value=bawaan)
         self.sumber = tk.StringVar(value="belum ada berkas dipilih")
         self.jenis = tk.StringVar(value="-")
         self.info = tk.StringVar(value="Pilih bobot lalu pilih berkas untuk diuji.")
@@ -85,7 +89,11 @@ class UjiBerkas:
         k = self._kartu(kiri, "1. Bobot model")
         tk.Label(k, textvariable=self.nama_bobot, bg=PANEL, fg=MUTED, wraplength=300,
                  justify="left").pack(anchor="w", pady=(0, 6))
-        self._tombol(k, "Muat model akhir (sama dengan tangga)", self.muat_otomatis).pack(fill="x", pady=(0, 4))
+        tk.Label(k, text="Pilih model (terbaru di atas):", bg=PANEL, fg=MUTED, anchor="w").pack(fill="x")
+        self.kotak_model = ttk.Combobox(k, textvariable=self.pilihan_model, values=self._label_model,
+                                        state="readonly", postcommand=self._segarkan_daftar_model)
+        self.kotak_model.pack(fill="x", pady=(0, 4))
+        self._tombol(k, "Muat model terpilih", self.muat_otomatis).pack(fill="x", pady=(0, 4))
         self._tombol(k, "Pilih berkas bobot…", self.pilih_bobot, "#6E8CA8").pack(fill="x")
 
         k = self._kartu(kiri, "2. Berkas yang diuji")
@@ -112,7 +120,16 @@ class UjiBerkas:
         self.bar = ttk.Progressbar(kanan, mode="determinate"); self.bar.pack(fill="x", pady=(8, 0))
 
     # --------------------------------------------------------------- bobot
+    def _segarkan_daftar_model(self) -> None:
+        """Isi ulang daftar saat dibuka: model yang baru selesai dilatih langsung muncul."""
+        self._label_model, self._jalur_model, _ = label_dan_jalur()
+        self.kotak_model.configure(values=self._label_model)
+
     def muat_otomatis(self) -> None:
+        jalur = self._jalur_model.get(self.pilihan_model.get())
+        if jalur is not None:
+            self._muat(jalur, f"ConvNeXt V2 Atto RGB-D 384\n{self.pilihan_model.get()}")
+            return
         try:
             from .uji_realtime import BOBOT_BAWAAN
         except ImportError:
