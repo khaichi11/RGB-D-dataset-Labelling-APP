@@ -4806,7 +4806,11 @@ class Studio(tk.Tk):
         d["diperiksa_iso"] = datetime.now().isoformat(timespec="seconds") if nilai else None
         tulis_json(j, d)
         # Frame tanpa poligon: mask kosong ditulis atau dicabut mengikuti penanda.
-        if baru or not self._ada_poligon():
+        # Frame berpoligon yang ditandai diperiksa: mask PNG dan label YOLO ditulis ulang
+        # dari poligon. Dulu hanya penanda di label_draft.json yang berubah, sehingga label
+        # usulan yang tersimpan tanpa mask PNG (mis. label Claude 5 Oktober) tetap tidak
+        # punya mask dan diam-diam tidak ikut dilatih (15 frame terperiksa di rekaman ✔).
+        if baru or not self._ada_poligon() or (nilai and self.kanvas.rgb is not None):
             self.simpan_label(senyap=True)
         self.perbarui_lencana_periksa()
         if not senyap:
