@@ -27,9 +27,12 @@ cd paket_ubuntu_zenexo
    <https://huggingface.co/settings/tokens/new?tokenType=write> lalu tempel.
    Token disimpan di `~/.cache/huggingface/`, di luar repo. Boleh dilewati
    (Enter kosong); login juga bisa dilakukan nanti dari tombol Push di aplikasi.
-6. Mengunduh model pengusul label terbaru dari registri model Hugging Face.
-   Tanpa login, Studio memakai bobot rujukan yang sudah ada di repo Train.
-7. Menambahkan ikon **Studio Dataset RGB-D** ke menu aplikasi, lalu menguji
+6. Mengunduh model pengusul label yang dipakai Studio di laptop pengembang
+   (penanda DIPAKAI STUDIO di registri model Hugging Face). Tanpa login, Studio
+   memakai bobot rujukan lama yang ada di repo Train dan usulannya lebih buruk.
+7. Memasang aturan udev RealSense (`desktop/99-realsense-libusb.rules`, salinan
+   aturan resmi Intel) agar D435 terbaca tanpa sudo; cabut lalu colok ulang kamera.
+8. Menambahkan ikon **Studio Dataset RGB-D** ke menu aplikasi, lalu menguji
    impor semua pustaka dan GPU.
 
 Setelah itu buka dari menu aplikasi, atau `desktop/jalankan-studio.sh`.

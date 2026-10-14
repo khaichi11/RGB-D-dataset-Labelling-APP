@@ -12,7 +12,7 @@ cd "$AKAR"
 langkah() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 PY_VENV="$AKAR/kode/.venv/bin/python"
 
-langkah "1/7 Paket sistem (python3-venv, python3-tk, git)"
+langkah "1/8 Paket sistem (python3-venv, python3-tk, git)"
 if command -v apt-get >/dev/null 2>&1; then
   perlu=()
   for p in python3-venv python3-tk git; do dpkg -s "$p" >/dev/null 2>&1 || perlu+=("$p"); done
@@ -24,7 +24,7 @@ PY="${PYTHON:-python3}"
 versi=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 case "$versi" in 3.10|3.11|3.12) echo "  Python $versi" ;; *) echo "  PERINGATAN: Python $versi belum diuji (disarankan 3.10-3.12)";; esac
 
-langkah "2/7 Repo Train-RGB-D-Model (model dan pustaka rgbd_convnext; repo privat)"
+langkah "2/8 Repo Train-RGB-D-Model (model dan pustaka rgbd_convnext; repo privat)"
 if [ -d Train-RGB-D-Model/.git ]; then
   echo "  sudah ada"
 elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
@@ -34,12 +34,12 @@ else
   git clone https://github.com/khaichi11/Train-RGB-D-Model.git
 fi
 
-langkah "3/7 Virtualenv kode/.venv dan pustaka Python (beberapa menit; torch ~2-3 GB)"
+langkah "3/8 Virtualenv kode/.venv dan pustaka Python (beberapa menit; torch ~2-3 GB)"
 [ -x "$PY_VENV" ] || "$PY" -m venv kode/.venv
 "$PY_VENV" -m pip install -q -U pip wheel
 "$PY_VENV" -m pip install -r kode/requirements.txt
 
-langkah "4/7 Penjaga rahasia Git (hook + email noreply)"
+langkah "4/8 Penjaga rahasia Git (hook + email noreply)"
 for r in . Train-RGB-D-Model; do
   git -C "$r" config core.hooksPath .githooks
   case "$(git -C "$r" config user.email || true)" in
@@ -49,7 +49,7 @@ for r in . Train-RGB-D-Model; do
 done
 echo "  commit dari laptop ini tidak memuat email pribadi; token/email/.env ditolak hook"
 
-langkah "5/7 Masuk Hugging Face (model terbaru + tombol push; Enter kosong = lewati)"
+langkah "5/8 Masuk Hugging Face (model terbaru + tombol push; Enter kosong = lewati)"
 if "$PY_VENV" -c 'import sys; from huggingface_hub import get_token; sys.exit(0 if get_token() else 1)'; then
   echo "  sudah masuk"
 elif [ -t 0 ]; then
@@ -58,7 +58,7 @@ elif [ -t 0 ]; then
   "$AKAR/kode/.venv/bin/hf" auth login || echo "  dilewati; bisa masuk nanti dari tombol Push di tab 7"
 fi
 
-langkah "6/7 Model pengusul label terbaru dari registri Hugging Face"
+langkah "6/8 Model pengusul label terbaru dari registri Hugging Face"
 "$PY_VENV" - <<'PYEOF' || echo "  dilewati: Studio memakai model rujukan yang ada di repo Train"
 import json, shutil
 from pathlib import Path
@@ -81,7 +81,17 @@ for jalur, m in reg.items():
             print(f"  diunduh: {jalur}")
 PYEOF
 
-langkah "7/7 Ikon menu aplikasi dan uji cepat"
+langkah "7/8 Izin USB kamera RealSense D435 (aturan udev; tanpa ini kamera hanya terbaca dengan sudo)"
+if [ -e /etc/udev/rules.d/99-realsense-libusb.rules ] || [ -e /lib/udev/rules.d/99-realsense-libusb.rules ]; then
+  echo "  sudah ada"
+elif command -v udevadm >/dev/null 2>&1; then
+  # Salinan aturan resmi Intel (librealsense config/99-realsense-libusb.rules), sama dengan laptop pengembang.
+  sudo cp desktop/99-realsense-libusb.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules \
+    && sudo udevadm trigger && echo "  dipasang; cabut lalu colok ulang D435" || echo "  gagal; salin desktop/99-realsense-libusb.rules ke /etc/udev/rules.d/ dengan sudo"
+else
+  echo "  udevadm tidak ada: lewati"
+fi
+langkah "8/8 Ikon menu aplikasi dan uji cepat"
 bash desktop/pasang-ikon.sh || true
 "$PY_VENV" -c 'import cv2, numpy, PIL, torch, timm, pyrealsense2, huggingface_hub, pyarrow, tkinter
 print(f"  torch {torch.__version__} | GPU CUDA: {torch.cuda.is_available()}")'
