@@ -4582,6 +4582,17 @@ class Studio(tk.Tk):
         self.q.put(("batch_auto_selesai", (jadi, gagal)))
 
     def pindah_frame_label(self, arah: int):
+        # Menahan Space/D mengirim tekan-ulang lebih cepat dari frame dimuat; antrean itu dulu
+        # terus menggeser frame setelah tombol dilepas. Tekan-ulang < 60 ms sesudah frame
+        # terakhir selesai dibuka dibuang.
+        if time.monotonic() - getattr(self, "_pindah_terakhir", 0.0) < 0.06:
+            return
+        try:
+            self._pindah_frame_label(arah)
+        finally:
+            self._pindah_terakhir = time.monotonic()
+
+    def _pindah_frame_label(self, arah: int):
         if not self.frame_paths:
             self.muat_frame()
         if not self.frame_paths:

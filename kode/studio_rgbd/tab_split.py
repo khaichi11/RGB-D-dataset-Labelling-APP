@@ -17,6 +17,7 @@ import json
 import queue
 import sys
 import threading
+import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -93,6 +94,8 @@ class TabSplit:
         self._sibuk = False
         self._sesi_awal: str | None = None
         self._ke_akhir = False                           # rekaman sebelumnya dibuka dari frame terakhirnya
+        self._pilihan_lalu: tuple = ()                   # pilihan pohon terakhir (pilihan sama = posisi frame dipertahankan)
+        self._geser_terakhir = 0.0                       # waktu navigasi selesai digambar (lihat geser)
 
         self.hanya_diperiksa = tk.BooleanVar(value=True)
         self.filter_set = tk.StringVar(value="semua")
@@ -163,7 +166,7 @@ class TabSplit:
         gulir = ttk.Scrollbar(f2, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=gulir.set)
         self.tree.pack(side="left", fill="both", expand=True); gulir.pack(side="left", fill="y")
-        self.tree.bind("<<TreeviewSelect>>", lambda e: (self._isi_daftar(), self._tampil_catatan(), self._catat_pilihan()))
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._pilihan_berubah())
         self.tree.bind("<Button-1>", lambda e: self._set_fokus("rekaman"), add="+")
         self.info_rek = tk.Label(i, text="", bg=PANEL, fg=INK, justify="left", anchor="w", wraplength=470,
                                  font=("Segoe UI", 9))
@@ -194,8 +197,8 @@ class TabSplit:
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x")
         tk.Label(baris, text="Tampilkan", bg=PANEL, fg=MUTED).pack(side="left")
         cb = ttk.Combobox(baris, textvariable=self.filter_set, state="readonly", width=10,
-                          values=("semua", "train", "val", "test", "abaikan", "belum", "perlu dicek"))
-        cb.pack(side="left", padx=4); cb.bind("<<ComboboxSelected>>", lambda e: self._isi_daftar())
+                          values=("semua", "train", "val", "test", "abaikan", "belum", "perlu dicek", "disampahkan"))
+        cb.pack(side="left", padx=4); cb.bind("<<ComboboxSelected>>", lambda e: self._filter_berubah())
         st.tombol_ringkas(baris, "🔎 Periksa label", self.periksa_label, "#E8DDD5", INK, width=120).pack(side="right")
         f2 = tk.Frame(i, bg=PANEL); f2.pack(fill="both", expand=True, pady=(4, 0))
         self.lb = tk.Listbox(f2, height=9, selectmode="extended", exportselection=False, activestyle="none",
@@ -244,6 +247,8 @@ class TabSplit:
         st.tombol_ringkas(kontrol, "◀ Sebelumnya", lambda: self.geser(-1), "#E8DDD5", INK, width=110).pack(side="left")
         st.tombol_ringkas(kontrol, "Berikutnya ▶", lambda: self.geser(1), "#E8DDD5", INK, width=110).pack(side="left", padx=4)
         st.tombol_ringkas(kontrol, "✏ Buka di tab Label", self.buka_di_label, GREEN, width=150).pack(side="left", padx=4)
+        self.btn_sampah = st.tombol_ringkas(kontrol, "🗑 Sampahkan (Del)", self.sampahkan, "#F3D8D4", INK, width=150)
+        self.btn_sampah.pack(side="left", padx=4)
         tk.Scale(kontrol, from_=0, to=1, resolution=.05, orient="horizontal", variable=self.opasitas,
                  label="Opacity mask", length=170, bg=PANEL, fg=INK, highlightthickness=0,
                  command=lambda _: self._gambar()).pack(side="left", padx=8)
@@ -260,6 +265,16 @@ class TabSplit:
         for teks, s_ in pilihan:
             self.studio.tombol_ringkas(baris, teks, lambda s_=s_: aksi(s_), WARNA_SET[s_],
                                        "white" if s_ else INK, width=86).pack(side="left", expand=True, fill="x", padx=1)
+
+    def _pilihan_berubah(self) -> None:
+        """Pohon memilih ulang baris yang sama setiap kali dibangun ulang (mis. kembali dari tab Label):
+        frame yang sedang dilihat dipertahankan, bukan kembali ke frame pertama."""
+        pilih = tuple(self.tree.selection())
+        sama = pilih == self._pilihan_lalu
+        self._pilihan_lalu = pilih
+        self._isi_daftar(pertahankan=sama)
+        self._tampil_catatan()
+        self._catat_pilihan()
 
     def _catat_pilihan(self) -> None:
         """Rekaman terpilih di sini diteruskan ke tab lain (dipilih saat tab berganti)."""
@@ -318,7 +333,7 @@ class TabSplit:
                         self.tree.selection_set([kini]); self.tree.see(kini)
                     if not self.tree.selection() and self.rekaman:
                         self.tree.selection_set([self.rekaman[0]])     # pratinjau tidak kosong saat tab dibuka
-                    self._isi_daftar()
+                    self._isi_daftar(pertahankan=self.kini is not None)
                     self._perbarui_ringkas()
                 elif jenis == "status":
                     self.ringkas.config(text=isi)
@@ -562,14 +577,74 @@ class TabSplit:
             teks = "Belum ✔ di tab 2. Tinjau: frame rekaman ini tidak dipakai melatih.\n" + teks
         self.info_rek.config(text=teks, bg=CR.WARNA.get(CR.warna_rekaman(c, self.daftar_tangga)) or BG)
 
+    def _filter_berubah(self) -> None:
+        sampah = self.filter_set.get() == "disampahkan"
+        self.btn_sampah.configure(text="♻ Pulihkan (Del)" if sampah else "🗑 Sampahkan (Del)")
+        self._isi_daftar()
+
+    def _frame_sampah(self, rek: list[str] | None = None) -> list[Path]:
+        """Frame bertanda sampah pada rekaman terpilih (tidak ada di daftar siap latih)."""
+        if rek is None:
+            rek = sorted({r for iid in self.tree.selection() for r in self._rekaman_iid(iid) if r in self.rekaman})
+        out = []
+        for r in rek:
+            ek = self.akar / r / "exports" / "frames"
+            for d in sorted(ek.glob("frame_*")) if ek.exists() else []:
+                try:
+                    if json.loads((d / "frame_state.json").read_text()).get("di_sampah") and (d / "color_raw.png").exists():
+                        out.append(d)
+                except (OSError, ValueError):
+                    pass
+        return out
+
+    def sampahkan(self) -> None:
+        """Sampahkan frame terpilih (atau frame yang dilihat); di tampilan "disampahkan", pulihkan.
+
+        Sama dengan Sampahkan di tab Label: hanya frame_state.json yang ditandai, folder
+        dan labelnya tetap, jadi bisa dipulihkan kapan saja.
+        """
+        pilih = [self.daftar[i] for i in self.lb.curselection() if i < len(self.daftar)]
+        target = pilih if len(pilih) > 1 else ([self.kini] if self.kini is not None else pilih)
+        if not target:
+            return
+        ke_sampah = self.filter_set.get() != "disampahkan"
+        if len(target) > 1 and not messagebox.askyesno(
+                "Sampah frame", f"{'Sampahkan' if ke_sampah else 'Pulihkan'} {len(target)} frame terpilih?"):
+            return
+        sekarang = datetime.now().isoformat(timespec="seconds")
+        for d in target:
+            f = d / "frame_state.json"
+            try:
+                st_ = json.loads(f.read_text()) if f.exists() else {}
+            except (OSError, ValueError):
+                st_ = {}
+            st_["di_sampah"] = ke_sampah
+            st_["waktu_ubah_iso"] = sekarang
+            f.write_text(json.dumps(st_, indent=1, ensure_ascii=False), encoding="utf-8")
+        i = min(self.daftar.index(d) for d in target if d in self.daftar) if any(d in self.daftar for d in target) else 0
+        for r in {d.parent.parent.parent.name for d in target}:
+            self.frames[r] = [d for d in self.frame_bersih(self.akar, [r], hanya_diperiksa=self.hanya_diperiksa.get(),
+                                                           hanya_selesai=True) if d.parent.parent.parent.name == r]
+        self.kini = None
+        self._isi_daftar()
+        if self.daftar:
+            self._buka(min(i, len(self.daftar) - 1))
+        self._perbarui_tree()
+        self._perbarui_ringkas()
+        self.ringkas.config(text=f"{len(target)} frame " + ("disampahkan (pulihkan lewat Tampilkan: disampahkan)."
+                                                          if ke_sampah else "dipulihkan."))
+
     def _isi_daftar(self, pertahankan: bool = False) -> None:
         kini = self.kini
         filt = self.filter_set.get()
         self.daftar = []
         dilihat = set()
+        if filt == "disampahkan":
+            self.daftar = self._frame_sampah()
+            dilihat = set(self.daftar)
         # "perlu dicek" tanpa pilihan rekaman = daftar periksa dari semua rekaman.
         sumber = self.tree.selection() or (tuple(self.rekaman) if filt == "perlu dicek" else ())
-        for iid in sumber:
+        for iid in (() if filt == "disampahkan" else sumber):
             for d in self._frames_iid(iid):
                 if d in dilihat:
                     continue
@@ -592,11 +667,12 @@ class TabSplit:
             tanda = f" ⚠{q['skor']:.1f}" if q and q["alasan"] else ""
             self.lb.insert("end", f"{LABEL_SET[s]:>7}{ciri} {d.parent.parent.parent.name[-6:]} {d.name}{tanda}")
             self.lb.itemconfig(i, fg=WARNA_SET[s])
-        if pertahankan:
+        if pertahankan and kini in self.daftar:
             self.lb.yview_moveto(pos[0])
-            if kini in self.daftar:
-                i = self.daftar.index(kini)
-                self.lb.selection_set(i); self.lb.activate(i)
+            i = self.daftar.index(kini)
+            self.lb.selection_set(i); self.lb.activate(i); self.lb.see(i)
+            self.kini = kini
+            self._gambar()
         elif self.daftar:
             # Masuk dari rekaman berikutnya lewat "sebelumnya": mulai dari frame terakhirnya.
             self._buka(len(self.daftar) - 1 if self._ke_akhir else 0)
@@ -912,6 +988,8 @@ class TabSplit:
             return None
         if isinstance(self.studio.focus_get(), (tk.Entry, ttk.Entry, ttk.Combobox)):
             return None
+        if e.keysym == "Delete":
+            self.sampahkan(); return "break"
         peta = {"1": "train", "2": "val", "3": "test", "0": "abaikan", "BackSpace": None}
         if e.keysym in peta:
             (self.atur_frame if self._fokus == "frame" else self.atur_rekaman)(peta[e.keysym])
@@ -923,6 +1001,17 @@ class TabSplit:
         return None
 
     def geser(self, arah: int) -> None:
+        # Menahan Space/D mengirim tekan-ulang ~30 kali per detik, lebih cepat dari frame
+        # digambar; antrean itu dulu terus menggeser frame setelah tombol dilepas. Tekan-ulang
+        # yang tiba < 60 ms setelah frame terakhir selesai digambar dibuang.
+        if time.monotonic() - self._geser_terakhir < 0.06:
+            return
+        try:
+            self._geser(arah)
+        finally:
+            self._geser_terakhir = time.monotonic()
+
+    def _geser(self, arah: int) -> None:
         if self.daftar:
             i = self.daftar.index(self.kini) + arah if self.kini in self.daftar else 0
             if 0 <= i < len(self.daftar):
@@ -961,7 +1050,9 @@ class TabSplit:
                 self.ringkas.config(text="Sudah rekaman " + ("terakhir." if arah > 0 else "pertama."))
                 return
             frames = self._frames_iid(baris[i])
-            if filt == "semua":
+            if filt == "disampahkan":
+                ada = bool(self._frame_sampah(self._rekaman_iid(baris[i])))
+            elif filt == "semua":
                 ada = bool(frames)
             elif filt == "perlu dicek":
                 ada = any((self._qa(d) or {}).get("alasan") for d in frames)
