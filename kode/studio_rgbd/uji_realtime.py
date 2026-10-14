@@ -26,6 +26,7 @@ import collections
 import json
 import math
 import sys
+import textwrap
 import threading
 import time
 import tkinter as tk
@@ -95,6 +96,9 @@ class UjiRealtime:
         self._terbaru = None               # (tampilan BGR, teks laju, teks tahap, teks ukuran)
         self._galat = None
         self._status_baru = None
+        self._t_mulai = 0.0                # monotonic saat Mulai; untuk pesan "belum ada frame"
+        self._ada_frame = False
+        self._sudah_diingatkan = False
         self._simpanan = None
 
         # Bawaan = model pengusul Studio (dulu rujukan lama final_d435, 5 rekaman latih).
@@ -265,10 +269,14 @@ class UjiRealtime:
                 self.pakai_sesi_aktif()
             if not self.rekaman.get() or not Path(self.rekaman.get()).exists():
                 self.status.set("Pilih rekaman dulu (Sesi aktif / Pilih rekaman…).")
+                self._pesan("Sumber masih 'Rekaman', tetapi belum ada rekaman yang dipilih.\n\n"
+                            "Untuk kamera: pilih 'Kamera D435 langsung' di kartu Sumber, lalu Mulai.\n"
+                            "Untuk rekaman: klik 'Sesi aktif' atau 'Pilih rekaman…'.")
                 return
         else:
             if getattr(self.studio, "sedang_rekam", False):
                 self.status.set("Sedang merekam dataset. Hentikan dulu agar kamera tidak berebut.")
+                self._pesan("Studio sedang merekam dataset.\nHentikan rekaman dulu agar kamera tidak berebut.")
                 return
             # Studio memakai kamera untuk preview/rekam; keduanya tidak boleh
             # membuka device yang sama bersamaan.
@@ -277,6 +285,7 @@ class UjiRealtime:
                     self.studio.preview_diminta = False
                     self.studio._hentikan_render()
                     self.studio.cam.hentikan()
+                    self.studio.btn_preview_kamera.configure(text="Aktifkan preview kamera")
             except Exception:
                 pass
         atur = {"bobot": bobot, "presisi": self.presisi.get(), "sumber": self.sumber.get(),
@@ -289,6 +298,10 @@ class UjiRealtime:
         self.ukuran.set("-")
         self.status.set("Memulai…")
         self.btn_mulai.configure(text="■  Hentikan", bg=RED)
+        self._t_mulai, self._ada_frame, self._sudah_diingatkan = time.monotonic(), False, False
+        asal = "kamera D435" if atur["sumber"] == "kamera" else Path(atur["rekaman"]).parent.parent.name
+        self._pesan(f"Memuat model dan memanaskan graf CUDA…\nSumber: {asal}\n\n"
+                    "Gambar biasanya muncul 7-10 detik setelah Mulai.")
         self.thread = threading.Thread(target=self._loop, args=(atur,), daemon=True)
         self.thread.start()
         self.induk.after(50, self._segarkan)
@@ -390,6 +403,7 @@ class UjiRealtime:
         with self._kunci:
             terbaru, self._terbaru = self._terbaru, None
         if terbaru is not None:
+            self._ada_frame = True
             tampilan, teks_fps, tahap, ukuran = terbaru
             self.fps.set(teks_fps)
             self.statistik.set(tahap)
@@ -400,7 +414,20 @@ class UjiRealtime:
             self._status_baru = None
         if self._galat:
             self.status.set(f"Berhenti karena galat: {self._galat}")
+            self.fps.set("-")
+            sibuk = "busy" in self._galat.lower() or "sibuk" in self._galat.lower()
+            self._pesan("Berhenti karena galat:\n" + self._galat
+                        + ("\n\nKamera sedang dipakai program lain (realsense-viewer, Studio lain,\n"
+                           "atau sisa jalannya sebelumnya). Tutup program itu atau cabut-colok\n"
+                           "kamera, lalu tekan Mulai lagi." if sibuk else ""), (90, 90, 235))
             self._galat = None
+        elif (self.jalan and not self._ada_frame and not self._sudah_diingatkan
+              and time.monotonic() - self._t_mulai > 25):
+            self._sudah_diingatkan = True
+            self._pesan("Belum ada frame setelah 25 detik.\n\n"
+                        "Pemanasan model pertama kali bisa sampai ±1 menit. Bila tetap kosong:\n"
+                        "kamera mungkin dipakai program lain, atau kabel USB bukan USB 3.\n"
+                        "Tekan Hentikan, cabut-colok kamera, lalu Mulai lagi.", (80, 190, 235))
         if self.jalan or (self.thread is not None and self.thread.is_alive()):
             self.induk.after(33, self._segarkan)                 # tampilan paling banyak ~30 kali/detik
             return
@@ -409,6 +436,19 @@ class UjiRealtime:
             simpan = self._simpanan
             self.status.set(f"Selesai.{f' Video dan JSON: {simpan}' if simpan else ''}")
         self._simpanan = None
+
+    def _pesan(self, teks: str, warna=(210, 210, 210)) -> None:
+        """Tulis keadaan di kanvas tampilan, agar kanvas tidak pernah hitam tanpa keterangan."""
+        lebar = max(640, self.kanvas.winfo_width())
+        tinggi = max(360, self.kanvas.winfo_height())
+        img = np.full((tinggi, lebar, 3), 17, np.uint8)
+        # Huruf Hershey OpenCV hanya ASCII; baris panjang (pesan galat) dipatahkan.
+        teks = teks.replace("…", "...").replace("±", "sekitar ").replace("'", '"')
+        baris = [b for bt in teks.splitlines() for b in (textwrap.wrap(bt, 88) or [""])]
+        for k, b in enumerate(baris):
+            cv2.putText(img, b.encode("ascii", "replace").decode(), (24, 48 + 30 * k), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.62, warna, 1, cv2.LINE_AA)
+        self._tampilkan(img)
 
     def _tampilkan(self, bgr: np.ndarray) -> None:
         try:
