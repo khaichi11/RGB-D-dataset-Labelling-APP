@@ -186,6 +186,12 @@ class TabSplit:
             self.pilih_tangga.bind(ev, lambda _e: self.atur_tangga())
         st.tombol_ringkas(baris_tg, "Lepas", lambda: self.atur_tangga(lepas=True), "#E8DDD5", INK,
                           width=60).pack(side="left", padx=(3, 0))
+        try:
+            from .atribut_tangga import AtributTangga
+        except ImportError:
+            from atribut_tangga import AtributTangga
+        self.atribut_tangga = AtributTangga(i, st.root_data, sesudah=self._atribut_berubah, bg=PANEL, fg_muted=MUTED)
+        self.atribut_tangga.pack(fill="x", pady=(3, 0))
         self._baris_tombol(i, "Atur rekaman / scene / tangga terpilih", self.atur_rekaman)
         baris_ok = tk.Frame(i, bg=PANEL); baris_ok.pack(fill="x", pady=(3, 0))
         st.tombol_ringkas(baris_ok, "✔ Tandai selesai", lambda: self.atur_selesai(True), "#6B8B63", "white",
@@ -469,7 +475,10 @@ class TabSplit:
         urut = sorted(k for k in isi if k) + ([None] if None in isi else [])
         for tid in urut:
             iid = f"tg::{tid or '-'}"
-            teks = ("🪜 " + CR.label_tangga(tid, self.daftar_tangga)) if tid else "❔ Belum ada tangga"
+            info = self.daftar_tangga.get(tid or "", {})
+            atr = " · ".join(x for x in (info.get("lokasi"), info.get("lingkungan"), info.get("bahan")) if x)
+            teks = (("🪜 " + CR.label_tangga(tid, self.daftar_tangga) + (f"  [{atr}]" if atr else ""))
+                    if tid else "❔ Belum ada tangga")
             w_t = CR.warna_untuk_tangga(tid, self.daftar_tangga)
             tag_t = [f"stabilo_{w_t}"] if w_t else []
             self.tree.insert("", "end", iid=iid, text=teks, values=self._nilai_baris(iid), open=True, tags=tag_t)
@@ -503,6 +512,13 @@ class TabSplit:
             tid.add((self._scene(r)[i].get("tangga") if i is not None else c.get("tangga")) or "")
         self.pilih_tangga.set(CR.label_tangga(next(iter(tid)), self.daftar_tangga) if len(tid) == 1 and "" not in tid
                               else "")
+        # Atribut (lokasi, luar/dalam, bahan) hanya bisa diubah bila baris terpilih bertangga sama.
+        self.atribut_tangga.tampilkan(next(iter(tid)) if len(tid) == 1 and "" not in tid else None)
+
+    def _atribut_berubah(self) -> None:
+        self.daftar_tangga = CR.baca_tangga(self.studio.root_data)
+        if self.per_tangga.get():
+            self._isi_tree()
 
     def _sasaran_tangga(self) -> list[tuple[str, int | None]]:
         """(rekaman, indeks scene atau None) untuk setiap baris terpilih."""

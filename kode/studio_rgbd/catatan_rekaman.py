@@ -182,6 +182,7 @@ def baca_tangga(akar_data: Path) -> dict[str, dict]:
     # nama/warna tangga disunting lalu ditulis ulang lewat tulis_tangga().
     return {k: {"nama": str(v.get("nama", "")), "lokasi": str(v.get("lokasi", "")),
                 "warna": v.get("warna") if v.get("warna") in WARNA else None,
+                "lingkungan": str(v.get("lingkungan", "")), "bahan": str(v.get("bahan", "")),
                 **({"ukuran_meteran": v["ukuran_meteran"]} if isinstance(v.get("ukuran_meteran"), dict) else {})}
             for k, v in sorted(d.items()) if isinstance(v, dict)}
 
@@ -191,6 +192,26 @@ def tulis_tangga(akar_data: Path, data: dict) -> None:
     tmp = f.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(dict(sorted(data.items())), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     tmp.replace(f)
+
+
+LINGKUNGAN = ("dalam ruang", "luar ruang", "semi-terbuka")
+BAHAN = ("keramik", "beton", "granit/marmer", "kayu", "besi/logam", "batu alam", "lainnya")
+
+
+def atur_atribut_tangga(akar_data: Path, tid: str, **atribut) -> None:
+    """Ubah lokasi / lingkungan (luar/dalam) / bahan satu tangga fisik di tangga.json.
+
+    Lokasi = tempat/bangunan (mis. Masjid A): satuan pembagian latih-uji yang adil,
+    karena tangga-tangga satu bangunan saling mirip. Lingkungan dan bahan adalah
+    kondisi untuk melaporkan hasil per kelompok, bukan pemisah data.
+    """
+    daftar = baca_tangga(akar_data)
+    if tid not in daftar:
+        return
+    for k, v in atribut.items():
+        if k in ("lokasi", "lingkungan", "bahan") and v is not None:
+            daftar[tid][k] = " ".join(str(v).split())
+    tulis_tangga(akar_data, daftar)
 
 
 def id_tangga_baru(data: dict) -> str:

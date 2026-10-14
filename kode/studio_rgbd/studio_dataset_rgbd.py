@@ -59,6 +59,7 @@ if __package__:
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
+    from .atribut_tangga import AtributTangga
     from . import tempat_sampah as TS
     from .hitung_data import JendelaJumlahData, status_label
     from .ui_bantu import kolom_gulir
@@ -76,6 +77,7 @@ else:
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
+    from studio_rgbd.atribut_tangga import AtributTangga
     from studio_rgbd import tempat_sampah as TS
     from studio_rgbd.hitung_data import JendelaJumlahData, status_label
     from studio_rgbd.ui_bantu import kolom_gulir
@@ -2036,6 +2038,10 @@ class Studio(tk.Tk):
         self.pilih_tangga.bind("<KP_Enter>", lambda _e: self.tangga_dari_ketikan())
         self.pilih_tangga.bind("<FocusOut>", lambda _e: self.tangga_dari_ketikan())
         self.tombol_ringkas(baris, "+ Baru", self.tangga_baru, GREEN, width=60).pack(side="left", padx=(3, 0))
+        # Atribut tangga fisik: lokasi (pembagian latih/uji yang adil), luar/dalam ruang, bahan.
+        self.atribut_tangga = AtributTangga(i, self.root_data, sesudah=lambda: self._segarkan_item_sesi(self.sesi)
+                                            if self.sesi else None, bg=PANEL, fg_muted=MUTED)
+        self.atribut_tangga.pack(fill="x", pady=(3, 0))
         self.tombol_ringkas(i, "🪜 Kelompokkan rekaman per tangga…", self.buka_kelompok_tangga, "#E8DDD5", INK,
                             width=240).pack(fill="x", pady=(3, 0))
         tk.Label(i, text="Catatan / lokasi (tersimpan otomatis)", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(6, 0))
@@ -2205,6 +2211,8 @@ class Studio(tk.Tk):
         daftar = CR.baca_tangga(self.root_data)
         self.pilih_tangga.configure(values=[self.TANPA_TANGGA] + [CR.label_tangga(k, daftar) for k in daftar])
         self.pilih_tangga.set(CR.label_tangga(tid, daftar) if tid else self.TANPA_TANGGA)
+        if getattr(self, "atribut_tangga", None) is not None:
+            self.atribut_tangga.tampilkan(tid)
 
     @staticmethod
     def _id_dari_label(label: str) -> str:
