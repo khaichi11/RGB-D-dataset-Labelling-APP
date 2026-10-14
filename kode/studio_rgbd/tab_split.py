@@ -1070,12 +1070,14 @@ class TabSplit:
     def _buka(self, i: int) -> None:
         self.lb.selection_clear(0, "end"); self.lb.selection_set(i); self.lb.activate(i); self.lb.see(i)
         self.kini = self.daftar[i]
+        self.studio._frame_dari_split = self.kini      # tab Label membuka frame yang sama
         self._gambar()
 
     def _pilih_frame(self) -> None:
         s = self.lb.curselection()
         if len(s) == 1 and self.daftar[s[0]] is not self.kini:     # frame yang sama tidak digambar ulang
             self.kini = self.daftar[s[0]]
+            self.studio._frame_dari_split = self.kini
             self._gambar()
 
     # ------------------------------------------------------------ pratinjau

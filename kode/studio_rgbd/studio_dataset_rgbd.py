@@ -2846,6 +2846,16 @@ class Studio(tk.Tk):
             self.pilih_sesi()
             if self.tabs.select() == str(self.tab_label):
                 self.muat_frame()
+        elif (self.tabs.select() == str(self.tab_label) and self.sesi is not None
+              and self.label_path not in getattr(self, "frame_paths", [])):
+            self.muat_frame()                           # tab Label tidak boleh kosong saat dibuka
+        # Frame yang terakhir dilihat di tab Split dibuka di tab Label (rekaman yang sama).
+        frame_split = getattr(self, "_frame_dari_split", None)
+        if (frame_split is not None and self.tabs.select() == str(self.tab_label)
+                and frame_split != self.label_path and frame_split in getattr(self, "frame_paths", [])):
+            self._pilih_indeks_frame(self.frame_paths.index(frame_split))
+        if self.tabs.select() != str(getattr(self, "tab_split", "")):
+            self._frame_dari_split = None
         self._sesi_dari_split = None
         # Uji realtime memakai kamera secara eksklusif; hentikan begitu pengguna
         # pindah ke tab lain agar device tidak diperebutkan dengan preview/rekam.
@@ -4194,6 +4204,20 @@ class Studio(tk.Tk):
         self.status.set(f"{len(self.frame_paths)} frame ekspor dimuat.")
         if lanjut_ke is not None:
             self._pilih_indeks_frame(lanjut_ke)
+        elif self.label_path in self.frame_paths:
+            i = self.frame_paths.index(self.label_path)          # frame yang sedang dibuka tetap tersorot
+            self.list_frame.selection_clear(0, "end"); self.list_frame.selection_set(i)
+            self.list_frame.activate(i); self.list_frame.see(i)
+        elif self.frame_paths and self.tabs.select() == str(self.tab_label):
+            # Dulu daftar dimuat tanpa membuka frame apa pun, sehingga tab Label kosong
+            # sampai frame diklik atau Enter ditekan. Kini frame terakhir yang dibuka di
+            # rekaman ini (atau frame pertama) langsung dibuka. Hanya saat tab Label
+            # terlihat: membuka frame bisa memicu usulan otomatis di GPU.
+            self._buka_frame_ingatan()
+
+    def _buka_frame_ingatan(self) -> None:
+        ingat = getattr(self, "_frame_terakhir", {}).get(str(self.sesi))
+        self._pilih_indeks_frame(self.frame_paths.index(ingat) if ingat in self.frame_paths else 0)
 
     def _teks_item_frame(self, p: Path, ikon: str = "", catatan_sesi: dict | None = None) -> str:
         if catatan_sesi is None:
@@ -4258,6 +4282,9 @@ class Studio(tk.Tk):
         # diperlukan sebelum navigasi pertama, bukan setiap kali frame baru
         # dibuka; jika tidak tombol panah berhenti setelah satu perpindahan.
         self.label_path=p; self.label_info=baca_json(p/"frame.json")
+        if not hasattr(self, "_frame_terakhir"):
+            self._frame_terakhir = {}
+        self._frame_terakhir[str(self.sesi)] = p        # dibuka lagi saat kembali ke rekaman ini
         self._usulan_aktif = None                     # riwayat undo frame lama tidak berlaku lagi
         try:
             self.kanvas.intrinsik = self._intrinsics(self.label_info)
