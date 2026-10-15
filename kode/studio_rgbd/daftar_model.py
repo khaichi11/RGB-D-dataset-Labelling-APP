@@ -1,8 +1,9 @@
 """Daftar checkpoint model tangga di laptop ini, terbaru dulu, untuk pilihan di tab Uji sistem / Uji berkas.
 
 Yang didaftar: ``aplikasi_tangga/runs/<run>/deployment_penuh.pt`` dan
-``runs/<kelompok>/<run>/deployment_penuh.pt``, ditambah checkpoint rujukan lama
-``bobot/final_d435``. Model lipatan cross-validation (folder ``lipat*``) tidak
+``runs/<kelompok>/<run>/deployment_penuh.pt``, manifes ensembel ``bobot/*.json``
+yang semua anggotanya ada (waktu = anggota terbaru), ditambah checkpoint rujukan
+lama ``bobot/final_d435``. Model lipatan cross-validation (folder ``lipat*``) tidak
 didaftar: masing-masing sengaja tidak dilatih sepertiga rekaman, jadi bukan model
 pakai. Waktu = waktu berkas checkpoint ditulis (akhir pelatihan; di laptop lain
 waktu unduhan). Checkpoint di ``runs/`` tidak masuk Git, jadi isi daftar
@@ -23,7 +24,8 @@ BULAN = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "
 RUJUKAN = "bobot/final_d435/cnx_atto_in1k_384.pt"
 # Folder relatif runs/ -> keterangan singkat. Folder lain tetap didaftar tanpa keterangan.
 KETERANGAN = {
-    "cv_robust/akhir_kuat": "augmentasi kuat, rekaman ✔ + publik (CV belum tuntas)",
+    "cv_robust/akhir_kuat": "augmentasi kuat (sendirian di bawah standar; anggota ensembel)",
+    "cv_robust/akhir_standar": "resep standar, 59 rekaman ✔ + publik",
     "cv_publik_gabung/akhir_baru": "rekaman ✔ + publik",
     "pengusul_20261013_selesai": "rekaman ✔ saja",
     "pengusul_20261004_semua": "semua label terperiksa",
@@ -60,6 +62,16 @@ def daftar_model(akar: Path | None = None) -> list[Model]:
         if any(b.startswith("lipat") for b in rel.split("/")):
             continue
         hasil.append(Model(p, rel, dt.datetime.fromtimestamp(p.stat().st_mtime), KETERANGAN.get(rel, "")))
+    for m in sorted((akar / "bobot").glob("*.json")):
+        try:
+            if not SC._lengkap(m):
+                continue
+            anggota = SC._ensembel().anggota_bobot(m)
+        except (OSError, ValueError, KeyError):
+            continue
+        nama = " + ".join(a.parent.name for a in anggota)
+        hasil.append(Model(m, f"ensembel {m.stem}", max(dt.datetime.fromtimestamp(a.stat().st_mtime) for a in anggota),
+                           f"rerata {nama}"))
     rujukan = akar / RUJUKAN
     if rujukan.exists():
         hasil.append(Model(rujukan, "rujukan final_d435", dt.datetime.fromtimestamp(rujukan.stat().st_mtime),

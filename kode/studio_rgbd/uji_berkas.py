@@ -153,10 +153,12 @@ class UjiBerkas:
             from uji_realtime import _impor_tangga
         try:
             _impor_tangga()                                       # rgbd_convnext ke sys.path
-            from rgbd_convnext.konfigurasi_utama import muat_model_utama
-            mu = muat_model_utama(jalur)
-            self.model, self.jalur_bobot, self.dev, self._utama = mu, jalur, mu.device, True
-            n = sum(p.numel() for p in mu.model.parameters()) / 1e6
+            from rgbd_convnext.konfigurasi_utama import anggota_bobot, muat_model_utama
+            # Manifes ensembel (.json): semua anggota dimuat, peta kelas = rerata softmax.
+            mus = [muat_model_utama(a) for a in anggota_bobot(jalur)]
+            mu = mus[0]
+            self.model, self.jalur_bobot, self.dev, self._utama = mus, jalur, mu.device, True
+            n = sum(p.numel() for m in mus for p in m.model.parameters()) / 1e6
             self.nama_bobot.set(f"{nama}\n{n:.2f} juta parameter · masukan {mu.ukuran} · {mu.device.type}")
             self.info.set("Bobot dimuat. Pilih berkas yang akan diuji.")
             return
@@ -312,10 +314,10 @@ class UjiBerkas:
     def _prediksi(self, bgr: np.ndarray, dm: np.ndarray | None) -> np.ndarray:
         import torch
         if getattr(self, "_utama", False):
-            from rgbd_convnext.konfigurasi_utama import prediksi_kelas
+            from rgbd_convnext.konfigurasi_utama import prediksi_kelas_ensembel
             # Tanpa kedalaman: depth nol = peta validitas nol (keadaan depth dropout).
             depth = dm if dm is not None else np.zeros(bgr.shape[:2], np.float32)
-            return prediksi_kelas(self.model, bgr, depth)
+            return prediksi_kelas_ensembel(self.model, bgr, depth)
         h, w = bgr.shape[:2]
         s = UKURAN / max(h, w)
         nw, nh = int(round(w * s)), int(round(h * s))

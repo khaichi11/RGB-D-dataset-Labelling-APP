@@ -111,11 +111,29 @@ BOBOT_USULAN = [
 # riser+tread berformat D435 + 56 rekaman ✔). Pada 703 frame terperiksa dari 8 rekaman yang belum
 # ✔ (tak dilatih kedua model), Dice usulan riser/tread 0,951/0,952 lawan 0,951/0,944 pengusul
 # siang ini; frame < 0,7: 33 -> 26. Bukti: Train-RGB-D-Model/bukti/final_d435/cv_publik_gabung/.
+# 16 Oktober 2026: ensembel (rerata softmax) model 13 Okt + model augmentasi kuat 15 Okt
+# lebih baik di CV (+0,004 citra asli, +0,031 depth berlubang), tetapi dua kali kerja GPU
+# per frame; atas permintaan pemakai TIDAK dipakai (dikhawatirkan berat di Jetson). Manifes
+# bobot/ensembel_studio.json tetap dapat dipilih manual di tab Uji.
 BOBOT_USULAN_UTAMA = [
     ('rekaman ✔ + publik 2026-10-13', 'runs/cv_publik_gabung/akhir_baru/deployment_penuh.pt'),
     ('latih rekaman ✔ 2026-10-13', 'runs/pengusul_20261013_selesai/deployment_penuh.pt'),
     ('latih semua label 2026-10-04', 'runs/pengusul_20261004_semua/deployment_penuh.pt'),   # cadangan
 ]
+
+
+def _ensembel():
+    """Modul manifes ensembel dari rgbd_convnext (tanpa torch)."""
+    akar = str(akar_aplikasi())
+    if akar not in sys.path:
+        sys.path.insert(0, akar)
+    from rgbd_convnext import ensembel
+    return ensembel
+
+
+def _lengkap(jalur: Path) -> bool:
+    """Checkpoint ada, atau manifes ensembel beserta semua anggotanya ada."""
+    return _ensembel().lengkap(jalur) if jalur.suffix.lower() == '.json' else jalur.exists()
 
 
 def pilih_bobot_usulan() -> tuple[str, list[Path]]:
@@ -128,7 +146,7 @@ def pilih_bobot_usulan() -> tuple[str, list[Path]]:
         return f'ConvNeXt RGB-D ({p.name}, dari STUDIO_BOBOT_USULAN)', [p]
     for nama, rel in BOBOT_USULAN_UTAMA:              # yang pertama tersedia dipakai SENDIRIAN
         utama = akar_aplikasi() / rel
-        if utama.exists():
+        if _lengkap(utama):
             return f'ConvNeXt V2 Atto RGB-D 384 ({nama})', [utama]
     ada = [(nama, akar_aplikasi() / rel) for nama, rel in BOBOT_USULAN if (akar_aplikasi() / rel).exists()]
     if not ada:
@@ -159,7 +177,7 @@ def _muat():
             if akar not in sys.path:
                 sys.path.insert(0, akar)
             from rgbd_convnext.konfigurasi_utama import muat_model_utama
-            _MODEL = [muat_model_utama(j) for j in jalur]
+            _MODEL = [muat_model_utama(a) for j in jalur for a in _ensembel().anggota_bobot(j)]
     return _MODEL
 
 
