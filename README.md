@@ -80,7 +80,7 @@ skripsi_tangga/                 <- repo ini (RGB-D-dataset-Labelling-APP)
 ├── ukur_tangga/                <- repo ukur-tangga: PWA iPad isian meteran
 ├── dataset/                    <- rekaman D435 dan data publik (lokal, tidak masuk Git)
 ├── bobot/                      <- checkpoint besar (pra_latih, kandidat, aktif)
-├── naskah/                     <- dokumentasi, sumber draw.io, alat & audit naskah proposal
+├── naskah -> model/naskah      <- proposal, slide, gambar, judul & keputusan (repo privat Train)
 ├── referensi/                  <- paper, repo pembanding, catatan telaah
 ├── perangkat/                  <- setup Ubuntu/Jetson, peluncur desktop Studio
 └── arsip/                      <- hasil, keluaran, laporan, eksperimen U-Net, brief GPT lama
