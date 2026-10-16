@@ -20,11 +20,11 @@ lapor() {
 }
 
 if [ ! -x "$VENV" ]; then
-  lapor "Virtualenv tidak ditemukan di:\n$VENV\n\nJalankan dulu: bash env/setup_ubuntu.sh"
+  lapor "Virtualenv tidak ditemukan di:\n$VENV\n\nJalankan dulu: ./pasang.sh (di $AKAR)"
   exit 1
 fi
 
-cd "$AKAR/kode" || exit 1
+cd "$AKAR/studio" || { lapor "Folder Studio tidak ditemukan: $AKAR/studio"; exit 1; }
 if ! "$VENV" -m studio_rgbd.studio_dataset_rgbd "$@" >"$LOG" 2>&1; then
   lapor "Studio berhenti dengan galat. Log:\n$LOG\n\n$(tail -n 12 "$LOG")"
   exit 1
