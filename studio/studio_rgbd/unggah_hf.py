@@ -13,7 +13,7 @@ Video mentah hanya diperlukan untuk mengekspor frame baru, jadi tidak diunggah.
 Kolom gambar memakai bentuk ``{"bytes", "path"}`` yang dikenali penampil
 dataset Hugging Face; PNG asli disalin apa adanya, jadi lossless.
 
-Token dan tujuan dibaca dari ``.env`` di akar proyek (``paket_ubuntu_zenexo/.env``,
+Token dan tujuan dibaca dari ``.env`` di akar proyek (``skripsi_tangga/.env``,
 diabaikan Git) atau dari variabel lingkungan::
 
     HF_TOKEN=hf_xxx            # token tulis dari huggingface.co/settings/tokens

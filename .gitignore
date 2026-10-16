@@ -3,24 +3,30 @@
 !/.gitignore
 !/README.md
 !/pasang.sh
-!/BRIEF_UNTUK_GPT.md
-!/kode/
-/kode/*
-!/kode/requirements.txt
-!/kode/README.md
-!/kode/studio_rgbd/
-!/kode/studio_rgbd/**
-!/desktop/
-!/desktop/**
-!/unet-new/
-!/unet-new/**
-!/artefak_unet/
-!/artefak_unet/**
-/artefak_unet/*.mp4
-/artefak_unet/*.mp4.json
-/desktop/studio.log
-/kode/.venv/
-/kode/__pycache__/
+!/studio/
+/studio/*
+!/studio/requirements.txt
+!/studio/README.md
+!/studio/studio_rgbd/
+!/studio/studio_rgbd/**
+!/perangkat/
+/perangkat/*
+!/perangkat/desktop/
+!/perangkat/desktop/**
+/perangkat/desktop/studio.log
+!/arsip/
+/arsip/*
+!/arsip/catatan_gpt/
+/arsip/catatan_gpt/*
+!/arsip/catatan_gpt/BRIEF_UNTUK_GPT.md
+!/arsip/unet_baru/
+!/arsip/unet_baru/**
+!/arsip/artefak_unet/
+!/arsip/artefak_unet/**
+/arsip/artefak_unet/*.mp4
+/arsip/artefak_unet/*.mp4.json
+/studio/.venv/
+/studio/__pycache__/
 
 # Data yang dibuat aplikasi selalu lokal dan dapat sangat besar.
 /.venv/
@@ -36,7 +42,7 @@ __pycache__/
 
 # Artefak eksperimen U-Net yang dipilih secara eksplisit untuk reproduksi.
 # Dataset, checkpoint sementara, dan artefak model lain tetap diabaikan.
-!/artefak_unet/*.pt
+!/arsip/artefak_unet/*.pt
 
 # Rahasia (token, kredensial) tidak pernah masuk Git, di folder mana pun.
 # Aturan ini sengaja paling bawah agar mengalahkan pengecualian di atasnya.

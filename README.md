@@ -7,8 +7,8 @@ auto-label ConvNeXt RGB-D.
 ## Pasang di laptop baru (satu perintah)
 
 ```bash
-git clone https://github.com/khaichi11/RGB-D-dataset-Labelling-APP.git paket_ubuntu_zenexo
-cd paket_ubuntu_zenexo
+git clone https://github.com/khaichi11/RGB-D-dataset-Labelling-APP.git skripsi_tangga
+cd skripsi_tangga
 ./pasang.sh
 ```
 
@@ -16,10 +16,10 @@ cd paket_ubuntu_zenexo
 
 1. Memasang paket sistem `python3-venv`, `python3-tk`, dan `git` (meminta sudo sekali).
 2. Mengambil repo **Train-RGB-D-Model** (privat; berisi pustaka model dan bobot
-   rujukan) ke `paket_ubuntu_zenexo/Train-RGB-D-Model`. Bila diminta masuk GitHub,
+   rujukan) ke `skripsi_tangga/model`. Bila diminta masuk GitHub,
    isi username dan *Personal Access Token*, bukan password. Bila `gh` sudah
    login, langkah ini otomatis.
-3. Membuat virtualenv `kode/.venv` dan memasang `kode/requirements.txt`
+3. Membuat virtualenv `studio/.venv` dan memasang `studio/requirements.txt`
    (torch sekitar 2–3 GB).
 4. Memasang penjaga rahasia Git: hook yang menolak token, kunci API, email, dan
    berkas `.env`, serta email commit noreply GitHub.
@@ -30,12 +30,12 @@ cd paket_ubuntu_zenexo
 6. Mengunduh model pengusul label yang dipakai Studio di laptop pengembang
    (penanda DIPAKAI STUDIO di registri model Hugging Face). Tanpa login, Studio
    memakai bobot rujukan lama yang ada di repo Train dan usulannya lebih buruk.
-7. Memasang aturan udev RealSense (`desktop/99-realsense-libusb.rules`, salinan
+7. Memasang aturan udev RealSense (`perangkat/desktop/99-realsense-libusb.rules`, salinan
    aturan resmi Intel) agar D435 terbaca tanpa sudo; cabut lalu colok ulang kamera.
 8. Menambahkan ikon **Studio Dataset RGB-D** ke menu aplikasi, lalu menguji
    impor semua pustaka dan GPU.
 
-Setelah itu buka dari menu aplikasi, atau `desktop/jalankan-studio.sh`.
+Setelah itu buka dari menu aplikasi, atau `perangkat/desktop/jalankan-studio.sh`.
 
 ### Apakah jalan di semua laptop?
 
@@ -58,25 +58,36 @@ bukan pengganti rekaman mentah.
 ### Pasang manual (Windows atau tanpa skrip)
 
 ```bash
-git clone https://github.com/khaichi11/RGB-D-dataset-Labelling-APP.git paket_ubuntu_zenexo
-cd paket_ubuntu_zenexo
-git clone https://github.com/khaichi11/Train-RGB-D-Model.git
-python -m venv kode/.venv
-kode/.venv/bin/python -m pip install -r kode/requirements.txt      # Windows: kode\.venv\Scripts\python
+git clone https://github.com/khaichi11/RGB-D-dataset-Labelling-APP.git skripsi_tangga
+cd skripsi_tangga
+git clone https://github.com/khaichi11/Train-RGB-D-Model.git model
+python -m venv studio/.venv
+studio/.venv/bin/python -m pip install -r studio/requirements.txt    # Windows: studio\.venv\Scripts\python
 git config core.hooksPath .githooks
-git -C Train-RGB-D-Model config core.hooksPath .githooks
-kode/.venv/bin/hf auth login                                       # opsional
-cd kode && .venv/bin/python -m studio_rgbd.studio_dataset_rgbd --preset jangan
+git -C model config core.hooksPath .githooks
+studio/.venv/bin/hf auth login                                     # opsional
+cd studio && .venv/bin/python -m studio_rgbd.studio_dataset_rgbd --preset jangan
 ```
 
-Susunan folder wajib seperti ini, karena Studio mencari model di sebelahnya:
+Susunan folder (16 Oktober 2026). Studio mencari model di `model/` di sebelahnya:
 
 ```
-paket_ubuntu_zenexo/            <- repo ini
-├── kode/studio_rgbd/           <- aplikasi
-├── Train-RGB-D-Model/          <- repo Train (pustaka rgbd_convnext + bobot)
-└── dataset/studio_rgbd/        <- data lokal, tidak masuk Git
+skripsi_tangga/                 <- repo ini (RGB-D-dataset-Labelling-APP)
+├── README.md, pasang.sh        <- panduan dan pemasang
+├── studio/studio_rgbd/         <- aplikasi Studio (BRIEF.md: tab -> berkas -> letak masalah)
+├── model/                      <- repo Train-RGB-D-Model: rgbd_convnext, pelatihan, bukti, naskah
+│   └── aplikasi_tangga/rgbd_convnext/BRIEF.md   <- peta kode dan tabel gejala -> letak
+├── ukur_tangga/                <- repo ukur-tangga: PWA iPad isian meteran
+├── dataset/                    <- rekaman D435 dan data publik (lokal, tidak masuk Git)
+├── bobot/                      <- checkpoint besar (pra_latih, kandidat, aktif)
+├── naskah/                     <- dokumentasi, sumber draw.io, alat & audit naskah proposal
+├── referensi/                  <- paper, repo pembanding, catatan telaah
+├── perangkat/                  <- setup Ubuntu/Jetson, peluncur desktop Studio
+└── arsip/                      <- hasil, keluaran, laporan, eksperimen U-Net, brief GPT lama
 ```
+
+Folder `~/paket_ubuntu_zenexo` (nama lama) kini hanya berisi tautan ke folder di atas agar
+jalur lama di bukti dan data tetap berjalan; lihat README di sana.
 
 ## Alur kerja di aplikasi
 
@@ -90,7 +101,7 @@ paket_ubuntu_zenexo/            <- repo ini
 | 6. Uji Model pada Berkas | Uji model pada gambar, video, atau folder frame. |
 | 7. Split Dataset | Bagi rekaman, scene, atau frame ke train/val/test dengan kalkulator rasio dan rekomendasi; pratinjau mask persis seperti yang dilatih; salin perintah latih/uji; **push dataset ke Hugging Face**. |
 
-Panduan lengkap: [PANDUAN_STUDIO_DATASET_RGBD.md](kode/studio_rgbd/PANDUAN_STUDIO_DATASET_RGBD.md).
+Panduan lengkap: [PANDUAN_STUDIO_DATASET_RGBD.md](studio/studio_rgbd/PANDUAN_STUDIO_DATASET_RGBD.md).
 
 Setelah membagi dataset di tab 7, pelatihan tinggal satu perintah dari tombol
 **📋 Perintah latih** (tempel di terminal). Model hasil latih otomatis masuk
@@ -117,7 +128,7 @@ di disk eksternal sebagai arsip.
 ## Keamanan data
 
 - Token hanya di `~/.cache/huggingface/` (hasil login) atau di
-  `paket_ubuntu_zenexo/.env` (lihat `kode/studio_rgbd/.env.example`). Semua
+  `skripsi_tangga/.env` (lihat `studio/studio_rgbd/.env.example`). Semua
   `.env` diabaikan Git di folder mana pun.
 - Hook `.githooks/cek_rahasia.sh` menolak commit yang menambahkan token atau
   kunci API, alamat email, berkas `.env`, atau commit dengan email non-noreply.
@@ -126,7 +137,7 @@ di disk eksternal sebagai arsip.
   pernah masuk Git karena besar dan dapat memuat lokasi atau orang.
 - Repo dataset dan model di Hugging Face dibuat **privat**.
 
-Pengecualian terbatas ada pada [artefak U-Net](artefak_unet/): satu checkpoint
+Pengecualian terbatas ada pada [artefak U-Net](arsip/artefak_unet/): satu checkpoint
 terbaik hasil *fine-tuning*, contoh gambar, dan catatan eksperimen. Artefak ini
 membantu pemeriksaan decoder U-Net; ia bukan pengganti dataset dan bukan bukti
 evaluasi akhir.

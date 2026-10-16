@@ -4,7 +4,7 @@ Motif: tangga naik dengan riser merah dan tread biru (warna mask di aplikasi),
 titik sudut poligon label, dan latar titik-titik seperti pola proyektor IR yang
 diwarnai gradasi jarak.
 
-    kode/.venv/bin/python desktop/buat_ikon.py
+    studio/.venv/bin/python perangkat/desktop/buat_ikon.py
 """
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def gambar() -> Image.Image:
 
 if __name__ == "__main__":
     besar = gambar()
-    for ukuran, tujuan in ((512, AKAR / "desktop" / "studio-rgbd.png"),
-                           (256, AKAR / "kode" / "studio_rgbd" / "ikon_studio.png")):
+    for ukuran, tujuan in ((512, AKAR / "perangkat" / "desktop" / "studio-rgbd.png"),
+                           (256, AKAR / "studio" / "studio_rgbd" / "ikon_studio.png")):
         besar.resize((ukuran, ukuran), Image.LANCZOS).save(tujuan, optimize=True)
         print("ditulis", tujuan)

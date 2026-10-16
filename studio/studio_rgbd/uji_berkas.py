@@ -17,7 +17,7 @@ ketepatan. Keadaan itu ditandai jelas pada tampilan agar hasilnya tidak
 disalahartikan sebagai kinerja penuh.
 
 Sejak 3 Oktober 2026 bobot bawaan ("Muat model akhir") adalah model akhir
-ConvNeXt V2 Atto RGB-D 384 dari ``Train-RGB-D-Model/aplikasi_tangga``, dengan
+ConvNeXt V2 Atto RGB-D 384 dari ``model/aplikasi_tangga``, dengan
 praproses dan peta kelas yang sama dengan perintah ``tangga``
 (``rgbd_convnext.konfigurasi_utama.prediksi_kelas``). Checkpoint StairFusion
 lama masih bisa dipilih manual untuk pembanding.

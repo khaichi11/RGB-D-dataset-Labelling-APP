@@ -6,9 +6,9 @@
 # Kalau gagal, pesannya ditampilkan lewat dialog supaya tetap terlihat walaupun
 # diluncurkan dari ikon (tanpa terminal).
 set -u
-AKAR="$(cd "$(dirname "$0")/.." && pwd)"
-VENV="$AKAR/kode/.venv/bin/python"
-LOG="$AKAR/desktop/studio.log"
+AKAR="$(cd "$(dirname "$0")/../.." && pwd)"
+VENV="$AKAR/studio/.venv/bin/python"
+LOG="$AKAR/perangkat/desktop/studio.log"
 
 lapor() {
   if command -v zenity >/dev/null 2>&1; then

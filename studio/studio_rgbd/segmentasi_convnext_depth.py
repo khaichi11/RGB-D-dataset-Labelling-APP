@@ -12,7 +12,7 @@ langsung dari peta kelas; SAM 2 tidak lagi dipakai (lihat
 Perubahan 15 September 2026:
 
 - **Model.** Pengusul kini memakai checkpoint rujukan aplikasi aktif
-  (`Train-RGB-D-Model/aplikasi_tangga/bobot/final_d435/cnx_atto_in1k_384.pt`,
+  (`model/aplikasi_tangga/bobot/final_d435/cnx_atto_in1k_384.pt`,
   ConvNeXt V2 Atto RGB-D, fine-tune D435, masukan letterbox 384) lewat
   `rgbd_convnext.konfigurasi_utama`. Sebelumnya dipakai bobot pra-latih publik
   saja (Femto 512). Peta kelas diperbesar dari logit secara bilinear, sama
@@ -58,13 +58,13 @@ RISER, TREAD = 1, 2
 
 
 def akar_proyek() -> Path:
-    """Akar paket_ubuntu_zenexo, dihitung dari letak berkas ini."""
+    """Akar proyek skripsi_tangga, dihitung dari letak berkas ini."""
     return Path(__file__).resolve().parents[2]
 
 
 def akar_aplikasi() -> Path:
     """Folder aplikasi aktif yang memuat paket `rgbd_convnext` dan checkpoint rujukan."""
-    return akar_proyek() / 'Train-RGB-D-Model' / 'aplikasi_tangga'
+    return akar_proyek() / 'model' / 'aplikasi_tangga'
 
 
 def cari_bobot() -> tuple[str, Path]:
@@ -100,17 +100,17 @@ BOBOT_USULAN = [
 # rekaman-rekaman baru, Dice riser/tread 0,905/0,899 lawan 0,671/0,591 ensembel di
 # atas; frame jelek (< 0,7) 23 -> 5; menggabungkannya dengan ensembel lama justru
 # menurunkan (0,890/0,857). Bila berkasnya ada, model ini dipakai SENDIRIAN.
-# Bukti: Train-RGB-D-Model/bukti/final_d435/label_claude_20261004/.
+# Bukti: model/bukti/final_d435/label_claude_20261004/.
 # 13 Oktober 2026: pengusul dilatih HANYA dari rekaman bertanda ✔ di tab Tinjau
 # (53 rekaman, 3.862 label terperiksa). Pada 879 frame terperiksa dari 9 rekaman
 # yang belum ✔ (tidak satu pun dilatih model ini), Dice usulan riser/tread
 # 0,972/0,967 lawan 0,924/0,953 pengusul 2026-10-04; frame < 0,7: 75 -> 26.
 # Pada 46 frame uji lama sedikit lebih rendah (0,892/0,891 lawan 0,904/0,916).
-# Bukti: Train-RGB-D-Model/bukti/final_d435/pengusul_20261013/.
+# Bukti: model/bukti/final_d435/pengusul_20261013/.
 # 13 Oktober 2026 (sore): model akhir resep gabung (ConvNeXt Atto ImageNet + 1.314 gambar publik
 # riser+tread berformat D435 + 56 rekaman ✔). Pada 703 frame terperiksa dari 8 rekaman yang belum
 # ✔ (tak dilatih kedua model), Dice usulan riser/tread 0,951/0,952 lawan 0,951/0,944 pengusul
-# siang ini; frame < 0,7: 33 -> 26. Bukti: Train-RGB-D-Model/bukti/final_d435/cv_publik_gabung/.
+# siang ini; frame < 0,7: 33 -> 26. Bukti: model/bukti/final_d435/cv_publik_gabung/.
 # 16 Oktober 2026: ensembel (rerata softmax) model 13 Okt + model augmentasi kuat 15 Okt
 # lebih baik di CV (+0,004 citra asli, +0,031 depth berlubang), tetapi dua kali kerja GPU
 # per frame; atas permintaan pemakai TIDAK dipakai (dikhawatirkan berat di Jetson). Manifes

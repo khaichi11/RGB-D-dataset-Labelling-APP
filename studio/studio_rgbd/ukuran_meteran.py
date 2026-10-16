@@ -1,6 +1,6 @@
 """Ukuran meteran per anak tangga fisik, dibandingkan dengan ukuran sistem dari pelacakan video.
 
-Ukuran sistem dihitung ``rgbd_convnext.ukuran_sesi`` (Train-RGB-D-Model) dan
+Ukuran sistem dihitung ``rgbd_convnext.ukuran_sesi`` (model/, repo Train-RGB-D-Model) dan
 disimpan per sesi di ``<sesi>/derived/ukuran_sistem.json``: nomor anak tangga
 diambil dari pelacak yang berjalan pada SETIAP frame rekaman, karena pada frame
 ekspor saja anak tangga ke-1, 2, 3 sulit dibedakan.

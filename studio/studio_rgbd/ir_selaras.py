@@ -192,7 +192,7 @@ def ukur_geser(ir: np.ndarray, rgb_abu: np.ndarray, ry: int = 10, rx: int = 4,
     jauh dari IR daripada baris atas. Terukur pada 604 frame terang berlabel:
     geser vertikal pita atas/tengah/bawah rerata 0,7 / 2,0 / 3,9 px; menurut
     model ini baris bawah median 5 px lebih jauh daripada baris atas (bukti:
-    Train-RGB-D-Model/bukti/final_d435/eksperimen_semua_data_20260925/auto_label/
+    model/bukti/final_d435/eksperimen_semua_data_20260925/auto_label/
     hasil_uji_geser_per_baris.txt).
 
     Cara ukur: peta gradien RGB dan IR (setengah resolusi) dicocokkan per pita

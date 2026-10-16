@@ -6,7 +6,7 @@ atau rekaman, untuk memeriksa mask, pelacakan, ukuran anak tangga, dan
 kestabilan lajunya.
 
 Sejak 3 Oktober 2026 tab ini memakai mekanisme yang SAMA dengan perintah
-``tangga`` di ``Train-RGB-D-Model/aplikasi_tangga`` (paket ``rgbd_convnext``):
+``tangga`` di ``model/aplikasi_tangga`` (repo Train-RGB-D-Model) (paket ``rgbd_convnext``):
 empat proses paralel (``paralel.jalankan_paralel``), model akhir ConvNeXt V2
 Atto RGB-D 384 (FP16 + graf CUDA bila ada GPU), pelacak geometri, dan render
 yang sama. Model StairFusion lama (kepala garis, 512) tidak dipakai lagi.
@@ -40,13 +40,13 @@ BG, PANEL, INK, MUTED, ACCENT, LINE = "#F7F3F0", "#FFFFFF", "#2B2622", "#7A6E66"
 GREEN, BLUE, RED = "#3C7A5A", "#3C5F7A", "#A6452F"
 
 AKAR = Path(__file__).resolve().parents[2]
-AKAR_APLIKASI = AKAR / "Train-RGB-D-Model" / "aplikasi_tangga"
+AKAR_APLIKASI = AKAR / "model" / "aplikasi_tangga"
 BOBOT_BAWAAN = AKAR_APLIKASI / "bobot" / "final_d435" / "cnx_atto_in1k_384.pt"
 JENDELA_STAT = 90                      # frame terakhir untuk median waktu per tahap
 
 
 def _impor_tangga():
-    """Paket ``rgbd_convnext`` dari Train-RGB-D-Model (atau yang sudah terpasang lewat pip)."""
+    """Paket ``rgbd_convnext`` dari model/ (repo Train-RGB-D-Model; atau yang sudah terpasang lewat pip)."""
     try:
         import rgbd_convnext  # noqa: F401
     except ImportError:

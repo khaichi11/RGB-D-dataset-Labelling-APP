@@ -275,7 +275,7 @@ class JendelaKurasi(tk.Toplevel):
         self.status.set(f"Menghitung kurasi {len(frames)} frame…")
         # Dice out-of-fold CV terakhir (bila ada) untuk menandai "perlu dilihat".
         dice = KU.dice_cv_dari(Path(__file__).resolve().parents[2]
-                               / "Train-RGB-D-Model/aplikasi_tangga/runs/cv_publik_gabung/hasil_cv.json")
+                               / "model/aplikasi_tangga/runs/cv_publik_gabung/hasil_cv.json")
 
         def kerja():
             try:
