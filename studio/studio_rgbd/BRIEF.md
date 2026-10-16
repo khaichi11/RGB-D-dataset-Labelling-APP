@@ -1,8 +1,8 @@
 # BRIEF Studio RGB-D: peta tab dan letak masalah
 
-Studio ada di repo ini (`kode/studio_rgbd`); model, pelacak, dan ukuran ada di repo
-`Train-RGB-D-Model/aplikasi_tangga/rgbd_convnext` (peta kodenya:
-`Train-RGB-D-Model/aplikasi_tangga/rgbd_convnext/BRIEF.md`). Riwayat masalah Studio yang
+Studio ada di repo ini (`studio/studio_rgbd`); model, pelacak, dan ukuran ada di repo
+`model/aplikasi_tangga/rgbd_convnext` (repo Train-RGB-D-Model; peta kodenya:
+`model/aplikasi_tangga/rgbd_convnext/BRIEF.md`). Riwayat masalah Studio yang
 sudah dipecahkan ada di tabel "Catatan integrasi dan jejak masalah"
 [PANDUAN_STUDIO_DATASET_RGBD.md](PANDUAN_STUDIO_DATASET_RGBD.md).
 
@@ -17,7 +17,7 @@ sudah dipecahkan ada di tabel "Catatan integrasi dan jejak masalah"
 | 5. Uji Sistem Tangga | `uji_realtime.py` | `daftar_model.py` (pilihan model), rgbd_convnext `paralel.py`/`sumber.py` |
 | 6. Uji Model pada Berkas | `uji_berkas.py` | `daftar_model.py` |
 | 7. Split Dataset | `tab_split.py` | `kurasi.py`, `jendela_kurasi.py`, `atribut_tangga.py` |
-| Hugging Face | `unggah_hf.py` (dataset) | model: `Train-RGB-D-Model/aplikasi_tangga/skrip/utama/unggah_model_hf.py` |
+| Hugging Face | `unggah_hf.py` (dataset) | model: `model/aplikasi_tangga/skrip/utama/unggah_model_hf.py` |
 
 ## Gejala -> letak
 

@@ -7,7 +7,7 @@ eksperimen tetap lokal.
 ## Menjalankan
 
 ```bash
-cd ~/paket_ubuntu_zenexo/kode
+cd ~/skripsi_tangga/studio
 source .venv/bin/activate
 python -m studio_rgbd.studio_dataset_rgbd --preset jangan
 ```
