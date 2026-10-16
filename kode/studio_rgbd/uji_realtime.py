@@ -387,6 +387,9 @@ class UjiRealtime:
     @staticmethod
     def _teks_ukuran(h) -> str:
         baris = []
+        kpt = getattr(h, "keputusan", None)
+        if kpt is not None:                 # mode untuk pengendali kaki palsu (rgbd_convnext/keputusan.py)
+            baris.append(f"MODE {kpt.mode}" + (f"  ({kpt.alasan})" if kpt.alasan else ""))
         for s in h.langkah:
             jarak = f"{s.jarak_m:4.2f} m" if s.jarak_pasti and math.isfinite(s.jarak_m) else "   -  "
             baris.append(f"#{str(s.nomor or '-'):<2} riser {_cm(s.tinggi_riser_m)} tread {_cm(s.panjang_tread_m)}"
