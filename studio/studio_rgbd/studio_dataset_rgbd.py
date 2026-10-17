@@ -1857,6 +1857,9 @@ class Studio(tk.Tk):
         self.btn_rekam.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(16, 4))
         self.btn_preview_kamera = self.tombol(i, "Aktifkan preview kamera", self.toggle_preview_kamera, "#E8DDD5", INK)
         self.btn_preview_kamera.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        # Uji galat depth D435 terhadap meteran (dinding datar); memakai kamera preview ini.
+        self.tombol(i, "Uji depth dinding (meteran)…", self.buka_uji_depth, "#E8DDD5", INK).grid(
+            row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         b, i = self.card(kanan, "Preview kamera dan data") ; b.pack(fill="both", expand=True)
         # Preview diutamakan: ia yang paling sering dilihat, jadi ditaruh
         # paling atas dan diberi seluruh sisa ruang kartu.
@@ -2878,6 +2881,17 @@ class Studio(tk.Tk):
             self.preview_info = None
             self.btn_preview_kamera.configure(text="Aktifkan preview kamera")
             self.status.set("Kamera dihentikan saat labeling/tinjau agar aplikasi tetap ringan.")
+
+    def buka_uji_depth(self):
+        if self.sedang_rekam:
+            self.status.set("Selesaikan rekaman dulu sebelum uji depth dinding.")
+            return
+        jendela = getattr(self, "_jendela_uji_depth", None)
+        if jendela is not None and jendela.winfo_exists():
+            jendela.lift()
+            return
+        from .uji_depth_dinding import JendelaUjiDepth
+        self._jendela_uji_depth = JendelaUjiDepth(self)
 
     def toggle_preview_kamera(self):
         if self.sedang_rekam:

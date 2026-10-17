@@ -10,7 +10,7 @@ sudah dipecahkan ada di tabel "Catatan integrasi dan jejak masalah"
 
 | tab | berkas utama | pendukung |
 |---|---|---|
-| 1. Rekam | `studio_dataset_rgbd.py` (`tab_rekam`) | `kamera_rgbd.py`, `resolusi_kamera.py` |
+| 1. Rekam | `studio_dataset_rgbd.py` (`tab_rekam`) | `kamera_rgbd.py`, `resolusi_kamera.py`, `uji_depth_dinding.py` (tombol "Uji depth dinding") |
 | 2. Tinjau & Potong | `studio_dataset_rgbd.py` (`tab_tinjau`) | `catatan_rekaman.py`, `kelompok_tangga.py`, `atribut_tangga.py`, `sinkron.py`, `tempat_sampah.py`, `hitung_data.py` |
 | 3. Ekspor Frame | `studio_dataset_rgbd.py` (`_ekspor_worker`) | `sinkron.py`, `ir_selaras.py` |
 | 4. Label & Ukur | `studio_dataset_rgbd.py` (`KanvasLabel`) | `segmentasi_convnext_depth.py` (usulan label), `visual_depth.py`, `ir_selaras.py`, `qa_label.py`, `panel_ukuran.py`, `pemutar_ukur.py`, `ukuran_meteran.py` |
@@ -28,6 +28,7 @@ sudah dipecahkan ada di tabel "Catatan integrasi dan jejak masalah"
 | Usulan label buruk | `segmentasi_convnext_depth.py`; checklist di PANDUAN |
 | Nomor/ukuran anak tangga di kartu Label | `panel_ukuran.py` -> rgbd_convnext `ukuran_sesi.py` ("Hitung nomor dari video") |
 | Isian meteran | `ukuran_meteran.py`, `pemutar_ukur.py`; data dari aplikasi Ukur Tangga diimpor ke sini |
+| Depth/jarak D435 diragukan (makin jauh makin meleset) | `uji_depth_dinding.py`: dinding datar vs meteran, hasil di `<akar data>/uji_depth_dinding/`; latar: `model/bukti/final_d435/galat_ukur_20261017/` |
 | Frame hilang dari daftar latih | `tab_split.py`, `kurasi.py` (`kurasi.json`), rekaman harus ✔ dan label terperiksa |
 | Tata letak terpotong | `uji_tata_letak.py`; galat tiap tab: `uji_asap.py` |
 

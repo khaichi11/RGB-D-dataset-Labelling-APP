@@ -58,6 +58,16 @@ python -m studio_rgbd.rekonstruksi_mesh \
 
 Outputnya adalah `pointcloud_fused.ply`, `mesh_poisson.ply`, dan `laporan_mesh.json`. Hasil mesh hanya layak bila kamera bergerak perlahan dengan area tangga saling tumpang tindih antar-frame; pantulan/permukaan tanpa depth akan dicatat sebagai frame yang ditolak.
 
+## Uji depth dinding (galat depth D435 lawan meteran)
+
+Tab **Rekam** -> **Uji depth dinding (meteran)…**. Nyalakan preview kamera, hadapkan kamera tegak
+lurus ke dinding datar (bagian tengah citra dinding saja), ukur jarak **kaca depan kamera** ke
+dinding dengan meteran, isi (cm), tekan **Ukur**. Ulangi pada ~0,5 / 1 / 1,5 / 2 / 2,5 / 3 m, lalu
+**Salin hasil**. Studio memasang bidang pada 40 % bagian tengah depth asli (median 30 frame),
+menambah 0,42 cm (titik nol depth D435 di belakang kaca), dan menghitung k pada
+z_benar = z / (1 + k z), sama dengan `TANGGA_KOREKSI_DEPTH` pelacak (tangga bermeteran 17 Okt:
+k ~0,05). Hasil juga tersimpan di `<akar data>/uji_depth_dinding/<waktu>.json`.
+
 ## Catatan integrasi dan jejak masalah
 
 Catatan masalah yang pernah terjadi beserta aturan yang dipakai sekarang.
