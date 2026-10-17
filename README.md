@@ -4,6 +4,12 @@ Aplikasi desktop Tkinter untuk merekam, memilah, melabeli, dan membagi dataset
 RGB-D dari Intel RealSense D435 (tangga naik, batu, ramp naik), dengan
 auto-label ConvNeXt RGB-D.
 
+## Windows
+
+`pasang.sh` untuk Linux. Di Windows clone repo ini ke `C:\skripsi_tangga` (dengan
+`-c core.autocrlf=false`), lalu repo model ke `C:\skripsi_tangga\model` dan ikuti `model/WINDOWS.md`
+(pemasangan, data, notebook skripsi).
+
 ## Pasang di laptop baru (satu perintah)
 
 ```bash
