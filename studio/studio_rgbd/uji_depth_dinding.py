@@ -163,7 +163,7 @@ class JendelaUjiDepth(tk.Toplevel):
         self.tabel = ttk.Treeview(kanan, columns=kolom, show="headings", height=8)
         for k, j in zip(kolom, judul):
             self.tabel.heading(k, text=j)
-            self.tabel.column(k, width=82, anchor="e")
+            self.tabel.column(k, width=70, minwidth=50, anchor="e", stretch=True)
         self.tabel.pack(fill="x")
         self.var_k = tk.StringVar(value="")
         tk.Label(kanan, textvariable=self.var_k, bg=BG, fg=INK, font=("Segoe UI", 11, "bold"),

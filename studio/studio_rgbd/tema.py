@@ -59,6 +59,7 @@ PETA_LATAR = {
 # Warna terang -> gelap untuk TINTA (foreground, insertbackground ...).
 PETA_TINTA = {
     "#382D29": "#ECE5DF",   # INK
+    "#2B2622": "#ECE5DF",   # INK tab Uji, Uji Berkas, panel ukuran, uji depth dinding
     "#786962": "#ABA097",   # MUTED
     "#7A6E66": "#A69B93",
     "#754C3B": "#E2A889",   # ACCENT sebagai teks
