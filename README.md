@@ -83,6 +83,7 @@ skripsi_tangga/                 <- repo ini (RGB-D-dataset-Labelling-APP)
 ├── studio/studio_rgbd/         <- aplikasi Studio (BRIEF.md: tab -> berkas -> letak masalah)
 ├── model/                      <- repo Train-RGB-D-Model: rgbd_convnext, pelatihan, bukti, naskah
 │   └── aplikasi_tangga/rgbd_convnext/BRIEF.md   <- peta kode dan tabel gejala -> letak
+├── jetson/                     <- repo Jetson-Inference: inferensi khusus Jetson + skrip uji (BRIEF.md: hasil uji)
 ├── ukur_tangga/                <- repo ukur-tangga: PWA iPad isian meteran
 ├── dataset/                    <- rekaman D435 dan data publik (lokal, tidak masuk Git)
 ├── bobot/                      <- checkpoint besar (pra_latih, kandidat, aktif)
