@@ -1557,7 +1557,9 @@ class Studio(tk.Tk):
     def __init__(self, args):
         # className = StartupWMClass di desktop/studio-rgbd.desktop: dock mengelompokkan
         # jendela ini dengan ikon peluncurnya, bukan sebagai jendela "Tk" tanpa ikon.
-        super().__init__(className="StudioRGBD")
+        # Tk 8.6.17 (Ubuntu 26.04) menulis kelas WM_CLASS hanya huruf pertama kapital
+        # ("StudioRGBD" -> "Studiorgbd"), jadi nama kelas ditulis dalam bentuk itu.
+        super().__init__(className="Studiorgbd")
         try:
             # Ikon orisinal (desktop/buat_ikon.py), bukan tangkapan layar aplikasi.
             self._ikon = tk.PhotoImage(file=str(Path(__file__).with_name("ikon_studio.png")))
