@@ -146,6 +146,100 @@ def baris_label_yolo(poligon: dict, kategori: str, w: int, h: int) -> tuple[list
     return baris, jumlah
 
 
+# ------------------------------------------------------------ alat potong
+# Penghalang (tiang, pegangan, kaki orang) yang menutupi tangga dibuang dari
+# mask dengan menarik satu pita di atasnya. Pita dikurangkan dari setiap
+# poligon secara raster (resolusi SKALA_POTONG kali) lalu dikembalikan ke
+# poligon; shapely tidak tersedia di .venv, OpenCV sudah.
+SKALA_POTONG = 4
+LUAS_MIN_POTONGAN = 12.0      # px^2 citra; serpihan lebih kecil dari ini dibuang
+
+
+def pita_potong(p0, p1, lebar: float) -> np.ndarray | None:
+    """Empat sudut pita selebar `lebar` piksel citra dengan sumbu p0->p1."""
+    a, b = np.asarray(p0, float), np.asarray(p1, float)
+    arah = b - a
+    panjang = float(np.hypot(*arah))
+    if panjang < 2 or lebar <= 0:
+        return None
+    n = np.array([-arah[1], arah[0]]) / panjang * (lebar / 2)
+    return np.array([a + n, b + n, b - n, a - n])
+
+
+def _sambung_cincin(cincin: list[list[tuple[float, float]]]) -> list[tuple[float, float]]:
+    """Gabung beberapa cincin jadi SATU poligon lewat jembatan selebar nol.
+
+    Cara yang sama dipakai Ultralytics (merge_multi_segment) untuk mask COCO
+    yang terdiri dari beberapa bagian: format YOLO-seg hanya mengenal satu
+    poligon per instance. Jembatan ditarik antara pasangan titik terdekat.
+    """
+    hasil = list(cincin[0])
+    sisa = [list(c) for c in cincin[1:]]
+    while sisa:
+        terbaik = None
+        A = np.asarray(hasil)
+        for k, c in enumerate(sisa):
+            C = np.asarray(c)
+            d = ((A[:, None, :] - C[None, :, :]) ** 2).sum(-1)
+            i, j = np.unravel_index(int(d.argmin()), d.shape)
+            if terbaik is None or d[i, j] < terbaik[0]:
+                terbaik = (d[i, j], k, int(i), int(j))
+        _, k, i, j = terbaik
+        c = sisa.pop(k)
+        hasil = hasil[:i + 1] + c[j:] + c[:j + 1] + hasil[i:]
+    return hasil
+
+
+def kurangi_pita(poly, pita: np.ndarray, satukan: bool = True):
+    """Kurangkan pita dari satu poligon.
+
+    Mengembalikan None bila poligon tidak tersentuh (titiknya dibiarkan persis),
+    atau daftar poligon hasil: kosong bila habis terpotong, satu poligon, atau
+    beberapa bila terbelah dan `satukan` False. Lubang (pita yang tidak sampai
+    menembus tepi) selalu disambung ke cincin luarnya agar potongan tetap ada.
+    """
+    if len(poly) < 3:
+        return None
+    P = np.asarray(poly, float)
+    S = SKALA_POTONG
+    x0, y0 = np.floor(P.min(0)) - 2
+    x1, y1 = np.ceil(P.max(0)) + 2
+    w, h = int((x1 - x0) * S) + 1, int((y1 - y0) * S) + 1
+    asal = np.array([x0, y0])
+    ke_raster = lambda Q: np.round((np.asarray(Q, float) - asal) * S).astype(np.int32)
+    m = np.zeros((h, w), np.uint8)
+    cv2.fillPoly(m, [ke_raster(P)], 255)
+    b = np.zeros_like(m)
+    cv2.fillPoly(b, [ke_raster(pita)], 255)
+    if not cv2.countNonZero(cv2.bitwise_and(m, b)):
+        return None
+    m[b > 0] = 0
+    kontur, hirarki = cv2.findContours(m, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    if not kontur:
+        return []
+    hirarki = hirarki[0]
+    ke_citra = lambda c: [tuple(map(float, np.round(q / S + asal, 2))) for q in c.reshape(-1, 2)]
+    sederhana = lambda c: cv2.approxPolyDP(c, 0.6 * S, True)
+    bagian = []
+    for i, c in enumerate(kontur):
+        if hirarki[i][3] != -1 or cv2.contourArea(c) < LUAS_MIN_POTONGAN * S * S:
+            continue
+        cincin = [ke_citra(sederhana(c))]
+        anak = hirarki[i][2]
+        while anak != -1:                                   # lubang di dalam cincin ini
+            if cv2.contourArea(kontur[anak]) >= LUAS_MIN_POTONGAN * S * S:
+                cincin.append(ke_citra(sederhana(kontur[anak])))
+            anak = hirarki[anak][0]
+        if len(cincin[0]) >= 3:
+            bagian.append((cv2.contourArea(c), cincin))
+    if not bagian:
+        return []
+    bagian.sort(key=lambda t: -t[0])                       # bagian terbesar jadi pangkal jembatan
+    if satukan:
+        return [_sambung_cincin([r for _, cin in bagian for r in cin])]
+    return [_sambung_cincin(cin) for _, cin in bagian]
+
+
 def baca_json(path: Path, default: dict | None = None) -> dict:
     if not path.exists():
         return {} if default is None else default.copy()
@@ -560,6 +654,18 @@ class KanvasLabel(tk.Canvas):
         self._blok_awal = None
         self._blok_kotak = None
         self.lapor_blok = None
+        # Alat potong: pita di atas penghalang dikurangkan dari semua mask.
+        self.lebar_potong = 14.0          # piksel citra
+        self.satukan_potongan = True      # anak tangga yang terbelah tetap 1 mask
+        self._potong_awal = None          # titik awal pita, koordinat citra
+        self._potong_item = None
+        self.lapor_potong = None
+        # Alat masker penghalang: garis bentuk penghalang sembarang (klik titik
+        # atau tarik bebas), lalu bentuk itu dikurangkan dari semua mask.
+        self._penghalang: list[tuple[float, float]] = []
+        self._penghalang_tarik = None     # None | {"mode": "titik", "i"} | {"mode": "laso", "layar"}
+        self.saat_ganti_alat = None       # Studio menyelaraskan tombol alat bila kanvas berpindah alat sendiri
+        self.bind("<Double-Button-1>", self._klik_ganda)
         # Dipanggil saat Ctrl+Z tidak punya langkah lagi di frame ini; Studio
         # memakainya untuk kembali ke frame yang baru disunting (riwayat lintas frame).
         self.saat_undo_habis = None
@@ -642,6 +748,8 @@ class KanvasLabel(tk.Canvas):
         self.aktif_indeks = {nama: None for nama in MODE_MASK}
         self._mask_dipilih_eksplisit = False
         self.titik_dipilih.clear()
+        self._penghalang = []                     # garis penghalang frame lama tidak berlaku
+        self._penghalang_tarik = None
         self._photo = self._photo_key = self._tampil_cache = self._tampil_key = None
         self._canvas_background_key = None
         self.reset_riwayat()
@@ -690,6 +798,11 @@ class KanvasLabel(tk.Canvas):
         return self.redo_riwayat() if (e.state & 0x1) else self.undo_riwayat()
 
     def undo_riwayat(self, _e=None):
+        # Selama garis penghalang sedang dibuat, Ctrl+Z mundur satu titik garis
+        # itu, bukan membatalkan suntingan mask di belakangnya.
+        if self.alat == "penghalang" and self._penghalang:
+            self.mundur_penghalang()
+            return "break"
         if self._riwayat_pos <= 0:
             if self.saat_undo_habis is not None:
                 self.saat_undo_habis()
@@ -967,6 +1080,8 @@ class KanvasLabel(tk.Canvas):
                 self.create_text(cx + dx, cy + dy, text=teks, fill="#000000",
                                  font=("Segoe UI", 12, "bold"), tags=("overlay",))
             self.create_text(cx, cy, text=teks, fill=warna, font=("Segoe UI", 12, "bold"), tags=("overlay",))
+        if self._penghalang:
+            self._gambar_penghalang()
         if self._drag_titik is not None:
             self._gambar_lup(*self._drag_titik["layar"])
 
@@ -1175,6 +1290,10 @@ class KanvasLabel(tk.Canvas):
             return self.pan_mulai(e)
         if self.alat == "blok":
             return self.mulai_blok_hapus(e)
+        if self.alat == "potong":
+            return self.mulai_potong(e)
+        if self.alat == "penghalang":
+            return self.titik_penghalang(e)
         dekat = self._titik_dekat(e.x, e.y, nama=self.mode)
         if dekat is not None:
             nama, ip, it = dekat
@@ -1237,6 +1356,10 @@ class KanvasLabel(tk.Canvas):
         # diteruskan ke pemiliknya, bukan diperlakukan sebagai geser titik.
         if self._blok_awal is not None:
             return self.ubah_blok_hapus(e)
+        if self._potong_awal is not None:
+            return self.ubah_potong(e)
+        if self._penghalang_tarik is not None:
+            return self.tarik_penghalang(e)
         if self._seleksi_awal is not None:
             return self.ubah_seleksi_titik(e)
         if self._drag_titik is None:
@@ -1273,6 +1396,10 @@ class KanvasLabel(tk.Canvas):
         # kanvas, seleksi tidak jadi, dan blok hapus tampak tidak bekerja.
         if _e is not None and self._blok_awal is not None:
             return self.selesai_blok_hapus(_e)
+        if _e is not None and self._potong_awal is not None:
+            return self.selesai_potong(_e)
+        if self._penghalang_tarik is not None:
+            return self.lepas_penghalang(_e)
         if _e is not None and self._seleksi_awal is not None:
             return self.selesai_seleksi_titik(_e)
         if self.alat == "geser":
@@ -1380,6 +1507,257 @@ class KanvasLabel(tk.Canvas):
             self.lapor_blok(n_poly, n_titik)
         return "break"
 
+    # ------------------------------------------------------------ potong
+    def mulai_potong(self, e):
+        """Alat potong: tarik garis di sepanjang penghalang (mis. tiang)."""
+        self.focus_set()
+        self._potong_awal = self.canvas_ke_gambar_bebas(e.x, e.y)
+        self._gambar_pita(self._potong_awal)
+        return "break"
+
+    def ubah_potong(self, e):
+        if self._potong_awal is not None:
+            self._gambar_pita(self.canvas_ke_gambar_bebas(e.x, e.y))
+        return "break"
+
+    def _gambar_pita(self, ujung):
+        if self._potong_item is not None:
+            self.delete(self._potong_item)
+            self._potong_item = None
+        pita = pita_potong(self._potong_awal, ujung, self.lebar_potong)
+        if pita is None:
+            # Belum ada arah: tampilkan lingkaran selebar pita sebagai pratinjau ukuran.
+            x, y = self._potong_awal[0] * self.scale + self.ox, self._potong_awal[1] * self.scale + self.oy
+            r = max(2.0, self.lebar_potong * self.scale / 2)
+            self._potong_item = self.create_oval(x - r, y - r, x + r, y + r, outline="#FFD400", width=2)
+            return
+        titik = [v for x, y in pita for v in (x * self.scale + self.ox, y * self.scale + self.oy)]
+        self._potong_item = self.create_polygon(*titik, fill="#FFD400", stipple="gray50",
+                                                outline="#FFD400", width=2)
+
+    def atur_lebar_potong(self, faktor: float):
+        self.lebar_potong = float(min(200.0, max(2.0, self.lebar_potong * faktor)))
+        if self._potong_awal is not None:
+            self._gambar_pita(self._potong_awal)
+        return self.lebar_potong
+
+    def selesai_potong(self, e):
+        """Kurangkan pita dari SEMUA mask (merah dan biru) yang dilewatinya.
+
+        Satu tarikan menggantikan menghapus titik satu per satu di sekitar
+        penghalang. Anak tangga yang terbelah dua oleh tiang tetap satu mask
+        (disambung jembatan selebar nol) kecuali `satukan_potongan` dimatikan.
+        """
+        if self._potong_awal is None:
+            return "break"
+        awal, self._potong_awal = self._potong_awal, None
+        if self._potong_item is not None:
+            self.delete(self._potong_item)
+            self._potong_item = None
+        pita = pita_potong(awal, self.canvas_ke_gambar_bebas(e.x, e.y), self.lebar_potong)
+        if pita is None:                                   # klik tanpa tarikan
+            return "break"
+        # Pita tidak langsung memotong: ia menjadi garis penghalang 4 titik
+        # yang masih bisa disunting (geser titik, sisip titik di sisi, klik
+        # kanan hapus) lalu diterapkan dengan Enter, sama seperti alat Halang.
+        self._penghalang = [tuple(map(float, p)) for p in pita]
+        self.alat = "penghalang"
+        self.config(cursor="pencil")
+        if self.saat_ganti_alat:
+            self.saat_ganti_alat("penghalang", "pita")
+        self.render()
+        return "break"
+
+    # ------------------------------------------------- masker penghalang
+    def _klik_ganda(self, e):
+        # Klik ganda menutup garis penghalang. Pada alat lain klik kedua tetap
+        # diperlakukan sebagai klik biasa, karena Tk menggantikan Button-1
+        # kedua dengan Double-Button-1.
+        if self.alat == "penghalang":
+            return self.selesai_penghalang()
+        return self.tambah(e)
+
+    def _layar(self, p):
+        return p[0] * self.scale + self.ox, p[1] * self.scale + self.oy
+
+    def _titik_penghalang_dekat(self, x, y, batas=9) -> int | None:
+        terbaik = None
+        for i, p in enumerate(self._penghalang):
+            px, py = self._layar(p)
+            d = math.hypot(px - x, py - y)
+            if d <= batas and (terbaik is None or d < terbaik[0]):
+                terbaik = (d, i)
+        return None if terbaik is None else terbaik[1]
+
+    def _sisi_penghalang_dekat(self, x, y, batas=6) -> tuple[int, tuple[float, float]] | None:
+        """Sisi garis penghalang terdekat (termasuk sisi penutup) -> (indeks awal sisi, titik proyeksi)."""
+        n = len(self._penghalang)
+        if n < 2:
+            return None
+        terbaik = None
+        for i in range(n if n >= 3 else 1):
+            a, b = self._layar(self._penghalang[i]), self._layar(self._penghalang[(i + 1) % n])
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            L2 = dx * dx + dy * dy
+            if L2 < 1e-9:
+                continue
+            t = max(0.0, min(1.0, ((x - a[0]) * dx + (y - a[1]) * dy) / L2))
+            qx, qy = a[0] + t * dx, a[1] + t * dy
+            d = math.hypot(qx - x, qy - y)
+            if d <= batas and (terbaik is None or d < terbaik[0]):
+                terbaik = (d, i, ((qx - self.ox) / self.scale, (qy - self.oy) / self.scale))
+        return None if terbaik is None else (terbaik[1], terbaik[2])
+
+    def titik_penghalang(self, e):
+        """Penyuntingan garis penghalang, sama seperti mask biasa.
+
+        Klik dekat titik = pegang dan geser titik itu; klik di sisi = sisipkan
+        titik di sisi itu (lalu bisa langsung digeser); klik di tempat kosong =
+        tambah titik di akhir, dan bila ditarik menjadi laso bebas. Potongan
+        baru diterapkan dengan Enter / klik ganda / tombol Terapkan.
+        """
+        self.focus_set()
+        i = self._titik_penghalang_dekat(e.x, e.y)
+        if i is None:
+            sisi = self._sisi_penghalang_dekat(e.x, e.y)
+            if sisi is not None:
+                i = sisi[0] + 1
+                self._penghalang.insert(i, sisi[1])
+        if i is not None:
+            self._penghalang_tarik = {"mode": "titik", "i": i}
+        else:
+            self._penghalang.append(self.canvas_ke_gambar_bebas(e.x, e.y))
+            self._penghalang_tarik = {"mode": "laso", "layar": (e.x, e.y)}
+        self.render()
+        return "break"
+
+    def tarik_penghalang(self, e):
+        """Geser titik yang dipegang, atau gambar laso bebas (titik tiap ~5 px layar)."""
+        t = self._penghalang_tarik
+        if t["mode"] == "titik":
+            if 0 <= t["i"] < len(self._penghalang):
+                self._penghalang[t["i"]] = self.canvas_ke_gambar_bebas(e.x, e.y)
+                self.render_nanti()
+        elif math.hypot(e.x - t["layar"][0], e.y - t["layar"][1]) >= 5:
+            self._penghalang.append(self.canvas_ke_gambar_bebas(e.x, e.y))
+            t["layar"] = (e.x, e.y)
+            self.render_nanti()
+        return "break"
+
+    def lepas_penghalang(self, _e=None):
+        # Tidak ada yang diterapkan saat tombol dilepas: garis tetap bisa disunting.
+        self._penghalang_tarik = None
+        self.render()
+        return "break"
+
+    def hapus_titik_penghalang(self, e) -> bool:
+        """Klik kanan pada titik garis penghalang menghapus titik itu."""
+        i = self._titik_penghalang_dekat(e.x, e.y, batas=12)
+        if i is None:
+            return False
+        self._penghalang.pop(i)
+        self.render()
+        return True
+
+    def mundur_penghalang(self) -> bool:
+        """Backspace: buang titik terakhir garis penghalang."""
+        if not self._penghalang:
+            return False
+        self._penghalang.pop()
+        self.render()
+        return True
+
+    def batal_penghalang(self) -> bool:
+        if not self._penghalang:
+            return False
+        self._penghalang = []
+        self._penghalang_tarik = None
+        self.render()
+        return True
+
+    def selesai_penghalang(self):
+        titik = [p for i, p in enumerate(self._penghalang) if i == 0 or p != self._penghalang[i - 1]]
+        self._penghalang, self._penghalang_tarik = [], None
+        if len(titik) < 3:
+            self.render()
+            if self.lapor_potong:
+                self.lapor_potong(-1, 0, 0)
+            return "break"
+        self._kurangi_semua(np.asarray(titik, float))
+        return "break"
+
+    def _gambar_penghalang(self):
+        pts = [self._layar(p) for p in self._penghalang]
+        datar = [v for p in pts for v in p]
+        if len(pts) >= 3:
+            self.create_polygon(*datar, fill="#FFD400", stipple="gray25", outline="", tags=("overlay",))
+            datar = datar + list(pts[0])                   # sisi penutup ikut tampak dan bisa disisipi
+        if len(pts) >= 2:
+            self.create_line(*datar, fill="#000000", width=4, tags=("overlay",))
+            self.create_line(*datar, fill="#FFD400", width=2, dash=(6, 3), tags=("overlay",))
+        dipegang = (self._penghalang_tarik or {}).get("i") if (self._penghalang_tarik or {}).get("mode") == "titik" else None
+        for i, (x, y) in enumerate(pts):
+            r = 6 if i == dipegang else 4
+            self.create_oval(x - r, y - r, x + r, y + r, fill="#FFD400", outline="#000000", tags=("overlay",))
+
+    def _kurangi_semua(self, bentuk: np.ndarray) -> None:
+        """Kurangkan satu bentuk (pita atau garis penghalang) dari SEMUA mask."""
+        n_kena = n_belah = n_habis = 0
+        for nama, daftar in self.poligon.items():
+            baru = []
+            for poly in daftar:
+                hasil = kurangi_pita(poly, bentuk, satukan=False)
+                if hasil is None:
+                    baru.append(poly); continue
+                n_kena += 1
+                if not hasil:
+                    n_habis += 1
+                elif len(hasil) > 1:
+                    n_belah += 1
+                    if self.satukan_potongan:
+                        hasil = [_sambung_cincin(hasil)]
+                baru.extend(hasil)
+            if baru != daftar:
+                # Nomor tetap dari bawah ke atas seperti alat lain.
+                baru.sort(key=lambda q: -sum(y for _, y in q) / len(q) if q else float("inf"))
+                self.poligon[nama] = baru
+                self.aktif_indeks[nama] = (len(baru) - 1) if baru else None
+        self.titik_dipilih = set()
+        self.catat_riwayat(); self.render(); self.on_change()
+        if self.lapor_potong:
+            self.lapor_potong(n_kena, n_belah, n_habis)
+
+    def gabung_mask_dipilih(self) -> list[tuple[str, int]]:
+        """Satukan mask yang titiknya terpilih (Shift+tarik) jadi SATU mask per kelas.
+
+        Untuk memperbaiki anak tangga yang terlanjur dilabeli sebagai dua mask
+        terpisah di kiri-kanan penghalang. Hasilnya sama dengan alat potong
+        bermode "tetap 1 mask": cincin-cincin disambung jembatan selebar nol.
+        Mengembalikan [(kelas, jumlah mask yang digabung)].
+        """
+        per_kelas: dict[str, set[int]] = {}
+        for nama, ip, _it in self.titik_dipilih:
+            if 0 <= ip < len(self.poligon[nama]) and len(self.poligon[nama][ip]) >= 3:
+                per_kelas.setdefault(nama, set()).add(ip)
+        laporan = []
+        for nama, indeks in per_kelas.items():
+            if len(indeks) < 2:
+                continue
+            daftar = self.poligon[nama]
+            cincin = sorted((daftar[i] for i in indeks),
+                            key=lambda q: -abs(cv2.contourArea(np.asarray(q, np.float32))))
+            gabungan = _sambung_cincin(cincin)
+            self.poligon[nama] = [p for i, p in enumerate(daftar) if i not in indeks] + [gabungan]
+            self._urutkan_dari_bawah(nama, gabungan)
+            self.mode = nama
+            self._mask_dipilih_eksplisit = True
+            self._beritahu_aktif(nama, self.aktif_indeks[nama])
+            laporan.append((nama, len(indeks)))
+        if laporan:
+            self.titik_dipilih = set()
+            self.catat_riwayat(); self.render(); self.on_change()
+        return laporan
+
     def undo(self, _e=None):
         daftar = self.poligon[self.mode]
         if not daftar:
@@ -1397,6 +1775,10 @@ class KanvasLabel(tk.Canvas):
 
     def hapus_titik_dipilih(self, e):
         """Klik kanan hanya menghapus vertex yang dipilih, tidak yang terakhir."""
+        if self.alat == "penghalang":
+            # Di alat Halang klik kanan hanya menyentuh garis penghalang, tidak mask.
+            self.hapus_titik_penghalang(e)
+            return "break"
         dekat = self._titik_dekat(e.x, e.y, batas=14, nama=self.mode)
         if dekat is None:
             # Klik kanan kosong adalah aksi unselect yang eksplisit. Dengan
@@ -1557,8 +1939,13 @@ class KanvasLabel(tk.Canvas):
 
     def set_alat(self, nama: str) -> None:
         """Pilih alat tarik; kursor ikut berubah supaya keadaannya terlihat."""
-        self.alat = nama if nama in ("normal", "geser", "blok") else "normal"
-        self.config(cursor={"geser": "fleur", "blok": "X_cursor"}.get(self.alat, ""))
+        self.alat = nama if nama in ("normal", "geser", "blok", "potong", "penghalang") else "normal"
+        if self.alat in ("normal", "blok") and self._penghalang:
+            # Garis setengah jadi dibuang saat kembali menyunting mask; saat
+            # menggeser gambar atau membuat pita, garis tetap disimpan.
+            self.batal_penghalang()
+        self.config(cursor={"geser": "fleur", "blok": "X_cursor", "potong": "tcross",
+                            "penghalang": "pencil"}.get(self.alat, ""))
 
 
 class Studio(tk.Tk):
@@ -1665,6 +2052,8 @@ class Studio(tk.Tk):
         self.ukur_status = StringVar(value="Tandai sisi tinggi/riser (merah) dan permukaan datar/tapakan (biru).")
         self.alat_label = StringVar(value="normal")
         self.mode_touchpad = BooleanVar(value=bool(preferensi.get("mode_touchpad", True)))
+        self.lebar_potong = DoubleVar(value=float(preferensi.get("lebar_potong", 14.0)))
+        self.satukan_potongan = BooleanVar(value=bool(preferensi.get("satukan_potongan", True)))
         self.tampil_sampah = BooleanVar(value=False)
         self.tampil_sampah_frame = BooleanVar(value=False)
         self._siapkan_root(); self._buat_ui()
@@ -2516,6 +2905,10 @@ class Studio(tk.Tk):
         self.kanvas.saat_undo_habis = self._undo_frame_lain
         self.kanvas.penyedia_peta = self._peta_model_kini
         self.kanvas.lapor_blok = self._lapor_blok
+        self.kanvas.lapor_potong = self._lapor_potong
+        self.kanvas.saat_ganti_alat = self._kanvas_ganti_alat
+        self.kanvas.lebar_potong = float(self.lebar_potong.get())
+        self.kanvas.satukan_potongan = bool(self.satukan_potongan.get())
         self.kanvas.touchpad = bool(self.mode_touchpad.get())
         self.kanvas.depth_mode = self.depth_mode.get()
         self.kanvas.penyedia_depth_vis = self._depth_vis_kini
@@ -2701,7 +3094,8 @@ class Studio(tk.Tk):
                  highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
         alat_f = tk.Frame(edit_i, bg=PANEL); alat_f.pack(fill="x", pady=(4, 0))
         baris_alat = tk.Frame(alat_f, bg=PANEL); baris_alat.pack(fill="x")
-        for nilai, teks in (("normal", "✏ Titik"), ("geser", "✋ Geser (G)"), ("blok", "▭ Blok (X)")):
+        for nilai, teks in (("normal", "✏ Titik"), ("geser", "✋ Geser (G)"), ("blok", "▭ Blok (X)"),
+                            ("potong", "✂ Pita (C)"), ("penghalang", "⬠ Halang (V)")):
             tk.Radiobutton(baris_alat, text=teks, variable=self.alat_label, value=nilai, indicatoron=False,
                            command=lambda: self.pilih_alat(self.alat_label.get(), dari_tombol=True),
                            bg="#FFF9F4", selectcolor="#E8DDD5", activebackground="#E8DDD5", fg=INK,
@@ -2712,6 +3106,20 @@ class Studio(tk.Tk):
                                ("⤢ Muat ( 0 )", self.muat_pas)):
             tk.Button(zoom_f, text=teks, command=perintah, bg="#FFF9F4", fg=INK, relief="flat",
                       font=("Segoe UI", 8), pady=4).pack(side="left", expand=True, fill="x", padx=1)
+        potong_f = tk.Frame(alat_f, bg=PANEL); potong_f.pack(fill="x", pady=(2, 0))
+        tk.Scale(potong_f, from_=2, to=120, resolution=1, orient="horizontal", variable=self.lebar_potong,
+                 command=lambda _: self.ganti_lebar_potong(), label="Lebar pita potong (px citra)  [ / ]",
+                 bg=PANEL, fg=INK, highlightthickness=0, length=220).pack(fill="x")
+        tk.Checkbutton(potong_f, text="Anak tangga yang terbelah tetap 1 mask",
+                       variable=self.satukan_potongan, command=self.ganti_satukan_potongan, bg=PANEL, fg=INK,
+                       selectcolor=PANEL, activebackground=PANEL, font=("Segoe UI", 8)).pack(anchor="w")
+        terap_f = tk.Frame(potong_f, bg=PANEL); terap_f.pack(fill="x", pady=(2, 0))
+        self.tombol_ringkas(terap_f, "✂ Terapkan potongan (Enter)", self.terapkan_penghalang, "#F3D8D4", INK,
+                            width=150).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.tombol_ringkas(terap_f, "Batal (Esc)", self.batal_penghalang, "#E8DDD5", INK,
+                            width=70).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        self.tombol_ringkas(potong_f, "⧉ Gabung mask terpilih (M)", self.gabung_mask, "#E8DDD5", INK,
+                            width=220).pack(fill="x", pady=(2, 0))
         tk.Checkbutton(alat_f, text="Mode touchpad: gulir = geser, Ctrl+gulir = zoom",
                        variable=self.mode_touchpad, command=self.ganti_mode_touchpad, bg=PANEL, fg=INK,
                        selectcolor=PANEL, activebackground=PANEL, font=("Segoe UI", 8)).pack(anchor="w")
@@ -2723,7 +3131,11 @@ class Studio(tk.Tk):
                              "#E8DDD5", INK, width=138).pack(side="right")
         self.tombol(otomatis_i, "✨ Rekomendasi tangga: ConvNeXt RGB-D", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(8, 2))
         self.tombol(otomatis_i, "⚡ Batch auto-label frame baru", self.batch_auto_label, BLUE).pack(fill="x", pady=(4, 2))
-        tk.Label(otomatis_i, text="X lalu tarik = blok hapus (atau Ctrl+tarik) • G lalu tarik = geser "
+        tk.Label(otomatis_i, text="X lalu tarik = blok hapus (atau Ctrl+tarik) • C lalu tarik sepanjang "
+                                  "tiang = pita, [ ] ubah lebar • V lalu klik titik/tarik laso mengelilingi "
+                                  "penghalang • garis kuning bisa disunting: tarik titik, klik sisi = sisip, klik kanan "
+                                  "= hapus titik • Enter/klik ganda = potong, Esc batal • "
+                                  "Shift+tarik mengenai beberapa mask lalu M = gabung jadi 1 • G lalu tarik = geser "
                                   "(atau Alt+tarik / tombol tengah) • Esc kembali ke titik • "
                                   "Shift+tarik pilih titik • Ctrl+C nama frame • Ctrl+Shift+C jalur lengkap",
                  bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(4, 2))
@@ -2817,9 +3229,77 @@ class Studio(tk.Tk):
         self.status.set({
             "geser": "Alat GESER aktif: tarik satu jari untuk menggeser gambar. G atau Esc kembali ke titik.",
             "blok": "Alat BLOK HAPUS aktif: tarik kotak untuk membuang mask di dalamnya. X atau Esc kembali ke titik.",
+            "penghalang": ("Alat HALANG aktif: klik titik mengelilingi penghalang (atau tarik laso). Tarik titik "
+                           "untuk menggeser, klik sisi untuk sisip titik, klik kanan hapus titik. "
+                           "Enter / klik ganda = potong semua mask di dalamnya, Esc batal."),
+            "potong": (f"Alat PITA aktif: tarik garis di sepanjang tiang (lebar {self.kanvas.lebar_potong:.0f} px, "
+                       f"[ ] mengubah). Pita jadi garis kuning yang bisa dirapikan, lalu Enter untuk memotong."),
             "normal": "Alat titik aktif: klik menambah titik, tarik memindahkannya.",
         }[self.kanvas.alat])
         return "break"
+
+    def ganti_lebar_potong(self):
+        self.kanvas.lebar_potong = float(self.lebar_potong.get())
+        self.simpan_preferensi()
+
+    def ganti_satukan_potongan(self):
+        self.kanvas.satukan_potongan = bool(self.satukan_potongan.get())
+        self.simpan_preferensi()
+        self.status.set("Mask yang terbelah penghalang tetap 1 instance (disambung garis tipis)."
+                        if self.kanvas.satukan_potongan else
+                        "Mask yang terbelah penghalang dipecah jadi beberapa mask terpisah.")
+
+    def _lebar_potong_tombol(self, faktor: float):
+        lebar = self.kanvas.atur_lebar_potong(faktor)
+        self.lebar_potong.set(round(lebar))
+        self.simpan_preferensi()
+        self.status.set(f"Lebar pita potong {lebar:.0f} px.")
+        return "break"
+
+    def _kanvas_ganti_alat(self, nama: str, sebab: str = "") -> None:
+        self.alat_label.set(nama)
+        if sebab == "pita":
+            self.status.set("Pita jadi garis penghalang kuning: tarik titik/sisi untuk merapikan, klik kanan hapus "
+                            "titik, lalu Enter (atau klik ganda) untuk memotong. Esc batal.")
+
+    def terapkan_penghalang(self):
+        if not self.kanvas._penghalang:
+            self.status.set("Belum ada garis penghalang. Tekan V lalu klik titik mengelilingi penghalang, "
+                            "atau C lalu tarik pita.")
+        else:
+            self.kanvas.selesai_penghalang()
+        self.kanvas.focus_set()
+        return "break"
+
+    def batal_penghalang(self):
+        if self.kanvas.batal_penghalang():
+            self.status.set("Garis penghalang dibatalkan.")
+        self.kanvas.focus_set()
+        return "break"
+
+    def gabung_mask(self):
+        laporan = self.kanvas.gabung_mask_dipilih()
+        if not laporan:
+            self.status.set("Gabung mask: Shift+tarik kotak yang mengenai titik dari 2 mask atau lebih "
+                            "(kelas sama) dulu, lalu tekan M.")
+        else:
+            nama = {"objek": "merah", "acuan": "biru"}
+            self.status.set("Gabung mask: " + ", ".join(f"{n} mask {nama.get(k, k)} jadi 1" for k, n in laporan)
+                            + ". Ctrl+Z membatalkan.")
+        self.kanvas.focus_set()
+        return "break"
+
+    def _lapor_potong(self, n_kena: int, n_belah: int, n_habis: int) -> None:
+        if n_kena < 0:
+            self.status.set("Halang: butuh minimal 3 titik untuk membentuk penghalang."); return
+        if not n_kena:
+            self.status.set("Potong: pita tidak mengenai mask mana pun."); return
+        bagian = [f"{n_kena} mask dipotong"]
+        if n_belah:
+            bagian.append(f"{n_belah} terbelah" + (" (tetap 1 mask)" if self.kanvas.satukan_potongan else " jadi beberapa mask"))
+        if n_habis:
+            bagian.append(f"{n_habis} habis terbuang")
+        self.status.set("Potong: " + ", ".join(bagian) + ". Ctrl+Z membatalkan.")
 
     def ganti_mode_touchpad(self):
         self.kanvas.touchpad = bool(self.mode_touchpad.get())
@@ -2842,6 +3322,8 @@ class Studio(tk.Tk):
                                           "kode_adegan": self.kode.get().strip(),
                                           "kontrol_label": self.kontrol_label.get(),
                                           "mode_touchpad": bool(self.mode_touchpad.get()),
+                                          "lebar_potong": float(self.lebar_potong.get()),
+                                          "satukan_potongan": bool(self.satukan_potongan.get()),
                                           "kecerahan": float(self.kecerahan.get()),
                                           "ketajaman": float(self.ketajaman.get()),
                                           "bantu_arah": float(self.bantu_arah.get()),
@@ -4715,7 +5197,16 @@ class Studio(tk.Tk):
         if event.keysym in {"0", "KP_0"}:
             return self.muat_pas()
         if event.keysym == "Escape":
+            # Esc pertama membatalkan garis penghalang yang belum jadi; Esc
+            # berikutnya baru kembali ke alat titik.
+            if self.kanvas.alat == "penghalang" and self.kanvas.batal_penghalang():
+                self.status.set("Garis penghalang dibatalkan. Esc lagi kembali ke alat titik.")
+                return "break"
             return self.pilih_alat("normal")
+        if (not ctrl and event.keysym in ("Return", "KP_Enter")
+                and self.kanvas.alat == "penghalang" and self.kanvas._penghalang):
+            # Enter menutup garis penghalang, BUKAN menandai frame diperiksa.
+            return self.kanvas.selesai_penghalang()
         if not ctrl and event.keysym in ("Return", "KP_Enter"):
             # Enter: label ini sudah dicek manusia -> tandai lalu lanjut frame
             # berikutnya. Shift+Enter mencabut tanda (kembali usulan otomatis).
@@ -4732,6 +5223,17 @@ class Studio(tk.Tk):
             return self.pilih_alat("geser")
         if not ctrl and event.keysym.lower() == "x":
             return self.pilih_alat("blok")
+        if not ctrl and event.keysym.lower() == "c":
+            return self.pilih_alat("potong")
+        if not ctrl and event.keysym.lower() == "v":
+            return self.pilih_alat("penghalang")
+        if not ctrl and event.keysym.lower() == "m":
+            return self.gabung_mask()
+        if not ctrl and event.keysym == "BackSpace" and self.kanvas.alat == "penghalang":
+            self.kanvas.mundur_penghalang()
+            return "break"
+        if not ctrl and event.keysym in ("bracketleft", "bracketright"):
+            return self._lebar_potong_tombol(1 / 1.2 if event.keysym == "bracketleft" else 1.2)
         if self.kontrol_label.get() == "mudah":
             if event.keysym.lower() == "a":
                 return self.pilih_mode_keyboard("objek")
@@ -4753,7 +5255,7 @@ class Studio(tk.Tk):
         return None
 
     def teks_kontrol_label(self):
-        alat = " • G = geser • X = blok hapus • Esc = titik • +/− = zoom • 0 = muat"
+        alat = " • G = geser • X = blok hapus • C = potong penghalang • Esc = titik • +/− = zoom • 0 = muat"
         return (("A = merah • S = biru • Shift+A/S ubah kelas mask • "
                  "Space = berikutnya • D = sebelumnya • Ctrl+Z = Undo"
                  if self.kontrol_label.get() == "mudah" else
