@@ -575,6 +575,11 @@ class KanvasLabel(tk.Canvas):
         self.jarak_magnet = 7  # piksel layar, tetap nyaman pada setiap zoom
         self._riwayat: list[dict[str, list[list[tuple[float, float]]]]] = []
         self._riwayat_pos = -1
+        # True bila keadaan poligon saat ini hasil Ctrl+Z/redo, bukan suntingan
+        # baru. Studio memakainya untuk membedakan "membatalkan usulan" dari
+        # "sengaja menghapus semua mask" -- keduanya bisa berakhir di poligon
+        # kosong yang sama persis.
+        self.dari_undo = False
         self._render_terjadwal = False
         self._render_setelah = None
         self._zoom_cepat = False
@@ -658,8 +663,10 @@ class KanvasLabel(tk.Canvas):
     def reset_riwayat(self):
         self._riwayat = [self._salin_poligon()]
         self._riwayat_pos = 0
+        self.dari_undo = False
 
     def catat_riwayat(self):
+        self.dari_undo = False
         keadaan = self._salin_poligon()
         if self._riwayat_pos >= 0 and keadaan == self._riwayat[self._riwayat_pos]:
             return
@@ -676,6 +683,7 @@ class KanvasLabel(tk.Canvas):
         for nama, daftar in self.poligon.items():
             self.aktif_indeks[nama] = min(self.aktif_indeks.get(nama) or 0, len(daftar) - 1) if daftar else None
         self.titik_dipilih.clear()
+        self.dari_undo = True
         self.render(); self.on_change()
 
     def _ctrl_z(self, e):
@@ -4193,6 +4201,12 @@ class Studio(tk.Tk):
     def _pilih_indeks_frame(self, i: int) -> None:
         """Sorot dan buka frame ke-i pada daftar, dijepit ke rentang yang sah."""
         if not self.frame_paths:
+            # Suntingan yang masih menunggu autosave disimpan ke frame lamanya
+            # sebelum label_path dikosongkan; tanpa ini suntingan itu hilang.
+            if self._autosave_setelah is not None:
+                self.after_cancel(self._autosave_setelah)
+                self._autosave_setelah = None
+                self.simpan_draft_label()
             self.label_path = None
             self.kanvas.delete("all")
             return
@@ -4991,9 +5005,17 @@ class Studio(tk.Tk):
         if not self.label_path or self.kanvas.rgb is None:
             return
         u = getattr(self, "_usulan_aktif", None)
-        if u is not None and u["frame"] == self.label_path:
+        if u is not None and u["frame"] != self.label_path:
+            u = None
+        if u is not None:
             kini = self.kanvas._salin_poligon()
-            if kini == u["sebelum"]:
+            # Hanya Ctrl+Z yang boleh memulihkan berkas sebelum usulan. Dulu
+            # syaratnya cukup "poligon sama dengan sebelum usulan"; pada frame
+            # baru keadaan itu = kosong, sehingga menghapus SEMUA mask usulan
+            # (blok Ctrl+tarik / Hapus mask) dianggap membatalkan usulan:
+            # berkas label dihapus, frame kembali "belum berlabel", dan saat
+            # dibuka lagi auto-segmentasi memunculkan mask yang sama lagi.
+            if kini == u["sebelum"] and getattr(self.kanvas, "dari_undo", False):
                 # Ctrl+Z sampai sebelum usulan: berkas label kembali persis, termasuk statusnya.
                 self._pulihkan_berkas_label(self.label_path, u["berkas"])
                 self.perbarui_lencana_periksa()
@@ -5016,7 +5038,18 @@ class Studio(tk.Tk):
         # kalau menunggu, sebagian besar frame akan tetap bertanda otomatis
         # padahal sudah dikoreksi, dan penandanya kehilangan makna.
         lama = baca_json(self.label_path / "label_draft.json", {})
-        disunting = bool(lama.get("poligon")) and lama.get("poligon") != self.kanvas.poligon
+        # Dibandingkan dalam bentuk JSON: berkas berisi list [x, y], kanvas berisi
+        # tuple (x, y), dan [1, 2] != (1, 2). Dulu perbandingan langsung selalu
+        # "berbeda", sehingga Ctrl+Z kembali ke label semula pun mencabut status
+        # otomatis dan menandai frame "diperiksa manual" padahal tidak disentuh.
+        kini_json = json.loads(json.dumps(self.kanvas.poligon))
+        disunting = bool(lama.get("poligon")) and lama.get("poligon") != kini_json
+        # Usulan yang diubah sebelum sempat tersimpan (autosave 450 ms) juga
+        # suntingan manusia. Tanpa ini, menghapus semua mask usulan dengan cepat
+        # menulis draft kosong bertanda "otomatis", yang _punya_label anggap
+        # belum berlabel -- auto-segmentasi lalu berjalan ulang saat dibuka lagi.
+        if u is not None and u.get("usulan") is not None and self.kanvas._salin_poligon() != u["usulan"]:
+            disunting = True
         diperiksa = bool(lama.get("diperiksa_manual", False)) or disunting
         tulis_json(self.label_path / "label_draft.json", {
             "versi": 3,
