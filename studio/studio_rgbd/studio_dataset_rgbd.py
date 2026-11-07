@@ -151,7 +151,7 @@ def baris_label_yolo(poligon: dict, kategori: str, w: int, h: int) -> tuple[list
 # mask dengan menarik satu pita di atasnya. Pita dikurangkan dari setiap
 # poligon secara raster (resolusi SKALA_POTONG kali) lalu dikembalikan ke
 # poligon; shapely tidak tersedia di .venv, OpenCV sudah.
-SKALA_POTONG = 4
+SKALA_POTONG = 6
 LUAS_MIN_POTONGAN = 12.0      # px^2 citra; serpihan lebih kecil dari ini dibuang
 
 
@@ -190,6 +190,110 @@ def _sambung_cincin(cincin: list[list[tuple[float, float]]]) -> list[tuple[float
     return hasil
 
 
+def pecah_jembatan(poly) -> list[list[tuple[float, float]]]:
+    """Pecah poligon bersambung jembatan (lihat _sambung_cincin) kembali ke cincin aslinya.
+
+    Jembatan = sisi a->b yang juga ditempuh balik b->a. Dipakai untuk MENGGAMBAR
+    dan merasterisasi mask, supaya garis sambungan tidak tampak sebagai garis
+    melintang di atas penghalang dan tidak ikut terisi 1 px di mask PNG. Label
+    YOLO tetap memakai poligon bersambung (satu baris per instance).
+    """
+    tumpuk = [[tuple(map(float, q)) for q in poly]]
+    hasil = []
+    while tumpuk:
+        r = tumpuk.pop()
+        n = len(r)
+        sisi = {}
+        for k in range(n):
+            sisi.setdefault((r[k], r[(k + 1) % n]), []).append(k)
+        pecah = None
+        for k in range(n):
+            a, b = r[k], r[(k + 1) % n]
+            if a == b:
+                continue
+            balik = [m for m in sisi.get((b, a), []) if m != k]
+            if balik:
+                pecah = (k, balik[0])
+                break
+        if pecah is None:
+            if n >= 3:
+                hasil.append(r)
+            continue
+        k, _ = pecah
+        r = r[k:] + r[:k]                                   # sisi jembatan kini r[0] -> r[1]
+        m = next(i for i in range(1, n) if r[i] == r[1] and r[(i + 1) % n] == r[0])
+        dalam, luar = r[1:m], [r[0]] + r[m + 2:]
+        for bagian in (dalam, luar):
+            bagian = [q for i, q in enumerate(bagian) if i == 0 or q != bagian[i - 1]]
+            if len(bagian) >= 3:
+                tumpuk.append(bagian)
+    return hasil
+
+
+def isi_poligon(m: np.ndarray, poly, nilai=1) -> None:
+    """fillPoly yang memahami jembatan: setiap cincin diisi, lubang tetap lubang (aturan genap-ganjil)."""
+    cincin = pecah_jembatan(poly)
+    if cincin:
+        cv2.fillPoly(m, [np.round(np.asarray(c)).astype(np.int32) for c in cincin], nilai)
+
+
+def _rapikan_hasil(cincin, sumber_sisi, sumber_titik, tol=0.8):
+    """Tempelkan titik hasil raster ke geometri asli supaya tepinya presisi, tidak bergerigi.
+
+    Titik ditempel ke (1) vertex asli mask/penghalang atau perpotongan sisinya,
+    lalu (2) ke sisi asli terdekat; titik segaris kemudian dibuang.
+    """
+    def proyeksi(p, a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        L2 = dx * dx + dy * dy
+        if L2 < 1e-12:
+            return a
+        t = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2))
+        return (a[0] + t * dx, a[1] + t * dy)
+    keluar = []
+    for p in cincin:
+        terbaik = None
+        for q in sumber_titik:
+            d = math.hypot(q[0] - p[0], q[1] - p[1])
+            if d <= tol and (terbaik is None or d < terbaik[0]):
+                terbaik = (d, q)
+        if terbaik is None:
+            for a, b in sumber_sisi:
+                q = proyeksi(p, a, b)
+                d = math.hypot(q[0] - p[0], q[1] - p[1])
+                if d <= tol and (terbaik is None or d < terbaik[0]):
+                    terbaik = (d, q)
+        q = terbaik[1] if terbaik else p
+        q = (round(float(q[0]), 2), round(float(q[1]), 2))
+        if not keluar or keluar[-1] != q:
+            keluar.append(q)
+    while len(keluar) > 1 and keluar[0] == keluar[-1]:
+        keluar.pop()
+    # Buang titik yang segaris dengan kedua tetangganya (sisa tangga piksel).
+    berubah = True
+    while berubah and len(keluar) > 3:
+        berubah = False
+        for i in range(len(keluar)):
+            a, p, b = keluar[i - 1], keluar[i], keluar[(i + 1) % len(keluar)]
+            q = proyeksi(p, a, b)
+            if math.hypot(q[0] - p[0], q[1] - p[1]) < 0.25:
+                keluar.pop(i); berubah = True
+                break
+    return keluar
+
+
+def _perpotongan(a, b, c, d):
+    r = (b[0] - a[0], b[1] - a[1]); s_ = (d[0] - c[0], d[1] - c[1])
+    den = r[0] * s_[1] - r[1] * s_[0]
+    if abs(den) < 1e-12:
+        return None
+    t = ((c[0] - a[0]) * s_[1] - (c[1] - a[1]) * s_[0]) / den
+    u = ((c[0] - a[0]) * r[1] - (c[1] - a[1]) * r[0]) / den
+    if 0 <= t <= 1 and 0 <= u <= 1:
+        return (a[0] + t * r[0], a[1] + t * r[1])
+    return None
+
+
 def kurangi_pita(poly, pita: np.ndarray, satukan: bool = True):
     """Kurangkan pita dari satu poligon.
 
@@ -200,6 +304,9 @@ def kurangi_pita(poly, pita: np.ndarray, satukan: bool = True):
     """
     if len(poly) < 3:
         return None
+    cincin_asal = pecah_jembatan(poly)
+    if not cincin_asal:
+        return None
     P = np.asarray(poly, float)
     S = SKALA_POTONG
     x0, y0 = np.floor(P.min(0)) - 2
@@ -208,7 +315,7 @@ def kurangi_pita(poly, pita: np.ndarray, satukan: bool = True):
     asal = np.array([x0, y0])
     ke_raster = lambda Q: np.round((np.asarray(Q, float) - asal) * S).astype(np.int32)
     m = np.zeros((h, w), np.uint8)
-    cv2.fillPoly(m, [ke_raster(P)], 255)
+    cv2.fillPoly(m, [ke_raster(c) for c in cincin_asal], 255)   # jembatan tidak ikut terisi
     b = np.zeros_like(m)
     cv2.fillPoly(b, [ke_raster(pita)], 255)
     if not cv2.countNonZero(cv2.bitwise_and(m, b)):
@@ -218,8 +325,18 @@ def kurangi_pita(poly, pita: np.ndarray, satukan: bool = True):
     if not kontur:
         return []
     hirarki = hirarki[0]
-    ke_citra = lambda c: [tuple(map(float, np.round(q / S + asal, 2))) for q in c.reshape(-1, 2)]
-    sederhana = lambda c: cv2.approxPolyDP(c, 0.6 * S, True)
+    Q = [tuple(map(float, q)) for q in np.asarray(pita, float)]
+    sisi_P = [(c[i], c[(i + 1) % len(c)]) for c in cincin_asal for i in range(len(c))]
+    sisi_Q = [(Q[i], Q[(i + 1) % len(Q)]) for i in range(len(Q))]
+    titik_asli = [q for c in cincin_asal for q in c] + Q
+    for a, b2 in sisi_P:
+        for c, d in sisi_Q:
+            x = _perpotongan(a, b2, c, d)
+            if x is not None:
+                titik_asli.append(x)
+    ke_citra = lambda c: _rapikan_hasil([tuple(q) for q in (c.reshape(-1, 2) / S + asal)],
+                                        sisi_P + sisi_Q, titik_asli)
+    sederhana = lambda c: cv2.approxPolyDP(c, 0.5 * S, True)
     bagian = []
     for i, c in enumerate(kontur):
         if hirarki[i][3] != -1 or cv2.contourArea(c) < LUAS_MIN_POTONGAN * S * S:
@@ -230,7 +347,8 @@ def kurangi_pita(poly, pita: np.ndarray, satukan: bool = True):
             if cv2.contourArea(kontur[anak]) >= LUAS_MIN_POTONGAN * S * S:
                 cincin.append(ke_citra(sederhana(kontur[anak])))
             anak = hirarki[anak][0]
-        if len(cincin[0]) >= 3:
+        cincin = [r for r in cincin if len(r) >= 3]
+        if cincin and cincin[0] is not None and len(cincin[0]) >= 3:
             bagian.append((cv2.contourArea(c), cincin))
     if not bagian:
         return []
@@ -1028,29 +1146,39 @@ class KanvasLabel(tk.Canvas):
                     continue
                 aktif = idx - 1 == self.aktif_indeks.get(nama)
                 if len(pts) >= 3:
-                    # Opacity 0 berarti hanya garis: titik tetap mudah dipilih
-                    # tanpa menutupi warna RGB/depth di belakangnya.
-                    if cepat:
-                        # Halo gelap di bawah garis: pada citra gelap/berderau
-                        # atau saat banyak mask bertumpuk, garis warna pastel
-                        # (merah/biru muda) tipis 1-2 px mudah lebur ke latar.
-                        # Halo memberi kontras tetap terlepas dari isi citra.
-                        self.create_line(pts + [pts[0]], fill="#000000",
-                                         width=4 if aktif else 3, tags=("overlay",))
-                        self.create_line(pts + [pts[0]], fill="#FFFFFF" if aktif else garis,
-                                         width=2 if aktif else 1, tags=("overlay",))
-                    elif self.mask_alpha <= .01:
-                        self.create_polygon(pts, fill="", outline="#000000",
-                                            width=5 if aktif else 4, tags=("overlay",))
-                        self.create_polygon(pts, fill="", outline="#FFFFFF" if aktif else garis,
-                                            width=3 if aktif else 2, tags=("overlay",))
-                    else:
-                        pola = "gray12" if self.mask_alpha <= .20 else "gray25" if self.mask_alpha <= .38 else "gray50" if self.mask_alpha <= .62 else "gray75"
-                        self.create_polygon(pts, fill="", outline="#000000",
-                                            width=5 if aktif else 4, tags=("overlay",))
-                        self.create_polygon(pts, fill=garis, outline="#FFFFFF" if aktif else garis,
-                                            stipple=pola, width=3 if aktif else 2, tags=("overlay",))
-                    cx = sum(p[0] for p in pts) / len(pts); cy = sum(p[1] for p in pts) / len(pts)
+                    # Mask yang terbelah penghalang disimpan sebagai satu poligon
+                    # bersambung jembatan; digambar per cincin supaya jembatan
+                    # tidak tampak sebagai garis melintang di atas penghalang.
+                    cincin = [[(x * self.scale + self.ox, y * self.scale + self.oy) for x, y in c]
+                              for c in pecah_jembatan(poly)] or [pts]
+                    lubang = [any(i != j and len(c2) >= 3 and cv2.pointPolygonTest(
+                                  np.asarray(c2, np.float32), c[0], False) > 0
+                                  for j, c2 in enumerate(cincin)) for i, c in enumerate(cincin)]
+                    pola = "gray12" if self.mask_alpha <= .20 else "gray25" if self.mask_alpha <= .38 else "gray50" if self.mask_alpha <= .62 else "gray75"
+                    for c, adalah_lubang in zip(cincin, lubang):
+                        # Opacity 0 berarti hanya garis: titik tetap mudah dipilih
+                        # tanpa menutupi warna RGB/depth di belakangnya.
+                        if cepat:
+                            # Halo gelap di bawah garis: pada citra gelap/berderau
+                            # atau saat banyak mask bertumpuk, garis warna pastel
+                            # (merah/biru muda) tipis 1-2 px mudah lebur ke latar.
+                            # Halo memberi kontras tetap terlepas dari isi citra.
+                            self.create_line(c + [c[0]], fill="#000000",
+                                             width=4 if aktif else 3, tags=("overlay",))
+                            self.create_line(c + [c[0]], fill="#FFFFFF" if aktif else garis,
+                                             width=2 if aktif else 1, tags=("overlay",))
+                        elif self.mask_alpha <= .01 or adalah_lubang:
+                            self.create_polygon(c, fill="", outline="#000000",
+                                                width=5 if aktif else 4, tags=("overlay",))
+                            self.create_polygon(c, fill="", outline="#FFFFFF" if aktif else garis,
+                                                width=3 if aktif else 2, tags=("overlay",))
+                        else:
+                            self.create_polygon(c, fill="", outline="#000000",
+                                                width=5 if aktif else 4, tags=("overlay",))
+                            self.create_polygon(c, fill=garis, outline="#FFFFFF" if aktif else garis,
+                                                stipple=pola, width=3 if aktif else 2, tags=("overlay",))
+                    utama = max(cincin, key=len)
+                    cx = sum(p[0] for p in utama) / len(utama); cy = sum(p[1] for p in utama) / len(utama)
                     if not cepat:
                         self.create_text(cx, cy, text=str(idx), fill=garis if self.mask_alpha <= .01 else "white",
                                          font=("Segoe UI", 11, "bold"), tags=("overlay",))
@@ -1303,6 +1431,13 @@ class KanvasLabel(tk.Canvas):
             kunci = (nama, ip, it)
             if kunci not in self.titik_dipilih:
                 self.titik_dipilih = {kunci}
+            # Titik kembar di ujung jembatan (mask yang terbelah penghalang)
+            # ikut bergerak, supaya sambungan tidak robek menjadi celah tipis.
+            for n_, p_, t_ in list(self.titik_dipilih):
+                if p_ < len(self.poligon[n_]) and t_ < len(self.poligon[n_][p_]):
+                    xy = tuple(self.poligon[n_][p_][t_])
+                    self.titik_dipilih |= {(n_, p_, j) for j, q in enumerate(self.poligon[n_][p_])
+                                           if tuple(q) == xy}
             kelompok = [(n, p, t) for n, p, t in self.titik_dipilih
                          if p < len(self.poligon[n]) and t < len(self.poligon[n][p])]
             asal = {k: tuple(self.poligon[k[0]][k[1]][k[2]]) for k in kelompok}
@@ -1624,9 +1759,11 @@ class KanvasLabel(tk.Canvas):
                 i = sisi[0] + 1
                 self._penghalang.insert(i, sisi[1])
         if i is not None:
-            self._penghalang_tarik = {"mode": "titik", "i": i}
+            self._penghalang_tarik = {"mode": "titik", "i": i, "layar": (e.x, e.y),
+                                      "awal": self.canvas_ke_gambar_bebas(e.x, e.y),
+                                      "asal": tuple(self._penghalang[i])}
         else:
-            self._penghalang.append(self.canvas_ke_gambar_bebas(e.x, e.y))
+            self._penghalang.append(self._tempel_magnet(self.canvas_ke_gambar_bebas(e.x, e.y)))
             self._penghalang_tarik = {"mode": "laso", "layar": (e.x, e.y)}
         self.render()
         return "break"
@@ -1636,13 +1773,22 @@ class KanvasLabel(tk.Canvas):
         t = self._penghalang_tarik
         if t["mode"] == "titik":
             if 0 <= t["i"] < len(self._penghalang):
-                self._penghalang[t["i"]] = self.canvas_ke_gambar_bebas(e.x, e.y)
+                # Seperti menggeser titik mask: ikut arah gerak (bukan melompat ke
+                # kursor), menempel magnet ke titik/garis mask, dan memakai lup.
+                p = self.canvas_ke_gambar_bebas(e.x, e.y)
+                calon = (t["asal"][0] + p[0] - t["awal"][0], t["asal"][1] + p[1] - t["awal"][1])
+                self._penghalang[t["i"]] = self._tempel_magnet(calon)
+                t["layar"] = (e.x, e.y)
                 self.render_nanti()
         elif math.hypot(e.x - t["layar"][0], e.y - t["layar"][1]) >= 5:
             self._penghalang.append(self.canvas_ke_gambar_bebas(e.x, e.y))
             t["layar"] = (e.x, e.y)
             self.render_nanti()
         return "break"
+
+    def _tempel_magnet(self, p):
+        q = self._titik_magnet(p)
+        return self._magnet_garis(p) if q == p else q
 
     def lepas_penghalang(self, _e=None):
         # Tidak ada yang diterapkan saat tombol dilepas: garis tetap bisa disunting.
@@ -1687,18 +1833,24 @@ class KanvasLabel(tk.Canvas):
         return "break"
 
     def _gambar_penghalang(self):
+        # Digambar dengan gaya yang sama dengan mask merah/biru (halo hitam,
+        # isi berpola, titik bercincin), hanya warnanya kuning.
         pts = [self._layar(p) for p in self._penghalang]
-        datar = [v for p in pts for v in p]
+        garis, isi = "#FFD400", "#FFF3B0"
         if len(pts) >= 3:
-            self.create_polygon(*datar, fill="#FFD400", stipple="gray25", outline="", tags=("overlay",))
-            datar = datar + list(pts[0])                   # sisi penutup ikut tampak dan bisa disisipi
-        if len(pts) >= 2:
-            self.create_line(*datar, fill="#000000", width=4, tags=("overlay",))
-            self.create_line(*datar, fill="#FFD400", width=2, dash=(6, 3), tags=("overlay",))
-        dipegang = (self._penghalang_tarik or {}).get("i") if (self._penghalang_tarik or {}).get("mode") == "titik" else None
+            self.create_polygon(pts, fill="", outline="#000000", width=5, tags=("overlay",))
+            self.create_polygon(pts, fill=garis, outline=garis, stipple="gray25", width=3, tags=("overlay",))
+        elif len(pts) == 2:
+            self.create_line(pts, fill="#000000", width=5, tags=("overlay",))
+            self.create_line(pts, fill=garis, width=3, tags=("overlay",))
+        t = self._penghalang_tarik or {}
+        dipegang = t.get("i") if t.get("mode") == "titik" else None
         for i, (x, y) in enumerate(pts):
             r = 6 if i == dipegang else 4
-            self.create_oval(x - r, y - r, x + r, y + r, fill="#FFD400", outline="#000000", tags=("overlay",))
+            self.create_oval(x - r - 1, y - r - 1, x + r + 1, y + r + 1, fill="", outline="#000000", width=1, tags=("overlay",))
+            self.create_oval(x - r, y - r, x + r, y + r, fill=isi, outline=garis, width=2 if i == dipegang else 1, tags=("overlay",))
+        if dipegang is not None and "layar" in t:
+            self._gambar_lup(*t["layar"])
 
     def _kurangi_semua(self, bentuk: np.ndarray) -> None:
         """Kurangkan satu bentuk (pita atau garis penghalang) dari SEMUA mask."""
@@ -5853,7 +6005,7 @@ class Studio(tk.Tk):
         m = np.zeros(self.kanvas.rgb.shape[:2], np.uint8)
         for poly in self.kanvas.poligon[nama]:
             if len(poly) >= 3:
-                cv2.fillPoly(m, [np.round(poly).astype(np.int32)], 1)
+                isi_poligon(m, poly, 1)
         return m
 
     def simpan_label(self, senyap: bool = False):
@@ -6014,7 +6166,7 @@ class Studio(tk.Tk):
             return
         def masker(poly):
             m = np.zeros(bentuk, np.uint8)
-            cv2.fillPoly(m, [np.round(poly).astype(np.int32)], 1)
+            isi_poligon(m, poly, 1)
             return m
         riser = [masker(p) for p in self.kanvas.poligon["objek"] if len(p) >= 3]
         tread = [masker(p) for p in self.kanvas.poligon["acuan"] if len(p) >= 3]
