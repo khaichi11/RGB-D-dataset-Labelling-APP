@@ -59,6 +59,7 @@ if __package__:
     from .pengukuran_objek import ukur
     from .segmentasi_otomatis import usulkan as usulkan_segmentasi
     from . import catatan_rekaman as CR
+    from . import salin_label, skala_ui
     from .atribut_tangga import AtributTangga
     from . import tempat_sampah as TS
     from .hitung_data import JendelaJumlahData, status_label
@@ -77,6 +78,7 @@ else:
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
+    from studio_rgbd import salin_label, skala_ui
     from studio_rgbd.atribut_tangga import AtributTangga
     from studio_rgbd import tempat_sampah as TS
     from studio_rgbd.hitung_data import JendelaJumlahData, status_label
@@ -543,7 +545,7 @@ class TombolRounded(tk.Canvas):
         self.enabled = True
         self._hover = False
         self._siap = True
-        self._ukuran = (104, 32)
+        self._ukuran = (skala_ui.px(104), skala_ui.px(32))
         self.bind("<Configure>", self._ubah_ukuran)
         self.bind("<Button-1>", self._klik)
         self.bind("<Enter>", self._masuk)
@@ -567,7 +569,7 @@ class TombolRounded(tk.Canvas):
         # Jangan pakai polygon smooth: pada Canvas yang di-resize oleh grid,
         # spline dapat memakai lebar lama dan menyisakan bagian putih di kanan.
         w, h = self._ukuran
-        w, h, r = max(1, w), max(1, h), 7
+        w, h, r = max(1, w), max(1, h), skala_ui.px(7)
         warna = tema.latar(self.color if self.enabled else "#D8D0CB")
         if self._hover and self.enabled:
             warna = _shade(warna, 1.18 if tema.GELAP else 0.88)
@@ -597,6 +599,9 @@ class TombolRounded(tk.Canvas):
             self.color = kw.pop("bg")
         if "state" in kw:
             self.enabled = kw.pop("state") != "disabled"
+        for k in ("width", "height"):
+            if k in kw:
+                kw[k] = skala_ui.px(kw[k])
         result = super().configure(cnf, **kw)
         self._gambar()
         return result
@@ -743,6 +748,10 @@ class KanvasLabel(tk.Canvas):
         self.warna_bidang = 0.0      # 0..1 kekuatan warna ketinggian di atas latar
         self.garis_3d = False        # garis lipatan ujung/pangkal dari depth (visual_depth.garis_tepi)
         self.nomor_anak_tangga = []  # (x, y, teks, warna) koordinat citra; diisi panel_ukuran dari pelacakan video
+        # Bayangan frame sebelumnya: hanya tampilan, tidak ikut klik/simpan. Diisi Studio tiap frame dibuka.
+        self.bayangan_rgb: np.ndarray | None = None
+        self.bayangan_poligon: dict | None = None
+        self.bayangan_alpha = 0.35
         self.penyedia_depth_vis = None   # Studio: fungsi(mode) -> citra hasil prefetch atau None
         self._depth_vis = self._depth_vis_key = self._depth_vis_obj = None
         self.kecerahan = 0.0     # 0 = asli, 1 = CLAHE penuh (lihat _cerahkan)
@@ -868,6 +877,7 @@ class KanvasLabel(tk.Canvas):
         self.titik_dipilih.clear()
         self._penghalang = []                     # garis penghalang frame lama tidak berlaku
         self._penghalang_tarik = None
+        self.bayangan_rgb = self.bayangan_poligon = None
         self._photo = self._photo_key = self._tampil_cache = self._tampil_key = None
         self._canvas_background_key = None
         self.reset_riwayat()
@@ -1001,7 +1011,8 @@ class KanvasLabel(tk.Canvas):
         assert self.rgb is not None
         key = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), self.depth_mode, self.pakai_ir,
                round(self.warna_bidang, 3), self.garis_3d,
-              round(self.kecerahan, 3), round(self.ketajaman, 3), round(self.bantu_arah, 3))
+              round(self.kecerahan, 3), round(self.ketajaman, 3), round(self.bantu_arah, 3),
+              id(self.bayangan_rgb), round(self.bayangan_alpha, 3))
         if self._tampil_key == key and self._tampil_cache is not None:
             return self._tampil_cache
         # Tajam setelah cerah: menajamkan derau mentah pada frame gelap lebih
@@ -1019,6 +1030,9 @@ class KanvasLabel(tk.Canvas):
                     ir_rgb[kosong] = self.rgb[kosong]
                 latar = ir_rgb
         out = _pertajam(_cerahkan(latar, self.kecerahan), self.ketajaman)
+        if self.bayangan_rgb is not None and self.bayangan_rgb.shape == out.shape:
+            lama = _pertajam(_cerahkan(self.bayangan_rgb, self.kecerahan), self.ketajaman)
+            out = cv2.addWeighted(out, 1 - self.bayangan_alpha, lama, self.bayangan_alpha, 0)
         if self.warna_bidang > 0 and self.depth is not None and self.intrinsik is not None:
             bid = self.penyedia_depth_vis("bidang") if self.penyedia_depth_vis else None
             if bid is None:
@@ -1087,7 +1101,8 @@ class KanvasLabel(tk.Canvas):
         s = self.scale
         dasar = (id(self.rgb), id(self.depth), round(self.depth_alpha, 3), self.depth_mode, self.pakai_ir,
                  round(self.warna_bidang, 3), self.garis_3d, round(self.kecerahan, 3),
-                 round(self.ketajaman, 3), round(self.bantu_arah, 3), round(s, 5))
+                 round(self.ketajaman, 3), round(self.bantu_arah, 3), id(self.bayangan_rgb),
+                 round(self.bayangan_alpha, 3), round(s, 5))
         lama = self._photo_key if self._photo is not None else None
         if w * h * s * s <= 2_500_000:
             wilayah = (0, 0, w, h)
@@ -1125,6 +1140,16 @@ class KanvasLabel(tk.Canvas):
             self.create_image(gambar_x, gambar_y, anchor="nw", image=self._photo, tags=("gambar",))
             self._canvas_background_key = background_key
         self.delete("overlay")
+        g1, g2, g3, g4, g5 = map(skala_ui.px, (1, 2, 3, 4, 5))
+        if self.bayangan_poligon:
+            # Garis putus-putus di bawah mask aktif: hanya acuan, tidak bisa diklik.
+            for nama, warna in (("objek", "#FFB3B3"), ("acuan", "#B3D6FF")):
+                for poly in self.bayangan_poligon.get(nama, []):
+                    for c in pecah_jembatan(poly) or [poly]:
+                        pts = [v for x, y in list(c) + [c[0]] for v in (x * s + self.ox, y * s + self.oy)]
+                        if len(pts) >= 6:
+                            self.create_line(*pts, fill="#000000", width=g3, tags=("overlay",))
+                            self.create_line(*pts, fill=warna, width=g1, dash=(g5 * 2, g4), tags=("overlay",))
         # merah = sisi tinggi (riser), biru = permukaan datar (tapakan). Warna
         # ini bukan hiasan: yang biru dipakai RANSAC sebagai BIDANG ACUAN, dan
         # yang merah sebagai objek yang diukur tingginya terhadap bidang itu.
@@ -1164,19 +1189,19 @@ class KanvasLabel(tk.Canvas):
                             # (merah/biru muda) tipis 1-2 px mudah lebur ke latar.
                             # Halo memberi kontras tetap terlepas dari isi citra.
                             self.create_line(c + [c[0]], fill="#000000",
-                                             width=4 if aktif else 3, tags=("overlay",))
+                                             width=g4 if aktif else g3, tags=("overlay",))
                             self.create_line(c + [c[0]], fill="#FFFFFF" if aktif else garis,
-                                             width=2 if aktif else 1, tags=("overlay",))
+                                             width=g2 if aktif else g1, tags=("overlay",))
                         elif self.mask_alpha <= .01 or adalah_lubang:
                             self.create_polygon(c, fill="", outline="#000000",
-                                                width=5 if aktif else 4, tags=("overlay",))
+                                                width=g5 if aktif else g4, tags=("overlay",))
                             self.create_polygon(c, fill="", outline="#FFFFFF" if aktif else garis,
-                                                width=3 if aktif else 2, tags=("overlay",))
+                                                width=g3 if aktif else g2, tags=("overlay",))
                         else:
                             self.create_polygon(c, fill="", outline="#000000",
-                                                width=5 if aktif else 4, tags=("overlay",))
+                                                width=g5 if aktif else g4, tags=("overlay",))
                             self.create_polygon(c, fill=garis, outline="#FFFFFF" if aktif else garis,
-                                                stipple=pola, width=3 if aktif else 2, tags=("overlay",))
+                                                stipple=pola, width=g3 if aktif else g2, tags=("overlay",))
                     utama = max(cincin, key=len)
                     cx = sum(p[0] for p in utama) / len(utama); cy = sum(p[1] for p in utama) / len(utama)
                     if not cepat:
@@ -1185,21 +1210,20 @@ class KanvasLabel(tk.Canvas):
                         self.create_text(cx, cy, text=str(idx), fill="",
                                          font=("Segoe UI", 11, "bold"), tags=("overlay",))
                 elif len(pts) >= 2:
-                    self.create_line(pts, fill="#000000", width=4, tags=("overlay",))
-                    self.create_line(pts, fill=garis, width=2, tags=("overlay",))
+                    self.create_line(pts, fill="#000000", width=g4, tags=("overlay",))
+                    self.create_line(pts, fill=garis, width=g2, tags=("overlay",))
                 for it, (x, y) in enumerate(pts):
                     dipilih = (nama, idx - 1, it) in self.titik_dipilih
                     if cepat and not aktif and not dipilih:
                         continue
                     # Cincin hitam tipis di luar outline warna: titik tetap
                     # jelas terpisah dari garis mask dan dari latar gelap.
-                    self.create_oval(x - (7 if dipilih else 5), y - (7 if dipilih else 5),
-                                     x + (7 if dipilih else 5), y + (7 if dipilih else 5),
-                                     fill="", outline="#000000", width=1, tags=("overlay",))
-                    self.create_oval(x - (6 if dipilih else 4), y - (6 if dipilih else 4),
-                                     x + (6 if dipilih else 4), y + (6 if dipilih else 4),
+                    luar, dalam = skala_ui.px(7 if dipilih else 5), skala_ui.px(6 if dipilih else 4)
+                    self.create_oval(x - luar, y - luar, x + luar, y + luar,
+                                     fill="", outline="#000000", width=g1, tags=("overlay",))
+                    self.create_oval(x - dalam, y - dalam, x + dalam, y + dalam,
                                      fill=titik, outline="#FFD400" if dipilih else garis,
-                                     width=2 if dipilih else 1, tags=("overlay",))
+                                     width=g2 if dipilih else g1, tags=("overlay",))
         for x, y, teks, warna in self.nomor_anak_tangga:
             # Nomor anak tangga dari pelacakan video utuh (panel_ukuran): teks
             # berhalo gelap agar terbaca di atas mask dan citra terang/gelap.
@@ -1227,6 +1251,7 @@ class KanvasLabel(tk.Canvas):
         self.render()
 
     def _titik_dekat(self, x, y, batas=8, nama=None):
+        batas = skala_ui.px(batas)
         """Cari titik hanya di kelas aktif bila ``nama`` diberikan.
 
         Ini mencegah vertex merah dan biru yang berdekatan saling mengambil
@@ -1247,7 +1272,7 @@ class KanvasLabel(tk.Canvas):
         if not self.magnet_aktif:
             return titik
         kecualikan = set(kecualikan)
-        batas = self.jarak_magnet / max(self.scale, .01)
+        batas = skala_ui.px(self.jarak_magnet) / max(self.scale, .01)
         terbaik = None
         x, y = titik
         for nama, daftar in self.poligon.items():
@@ -1261,6 +1286,7 @@ class KanvasLabel(tk.Canvas):
         return terbaik[1] if terbaik is not None else titik
 
     def _sisi_terdekat(self, x, y, nama=None, batas=8, aktif_saja=False, kecualikan=()):
+        batas = skala_ui.px(batas)
         """Cari sisi terdekat dan titik proyeksinya dalam koordinat gambar."""
         terbaik = None
         sumber = self.poligon.items() if nama is None else ((nama, self.poligon[nama]),)
@@ -1311,7 +1337,7 @@ class KanvasLabel(tk.Canvas):
                  for it, xy in enumerate(poly)]
         if len(titik) < 2:
             return 0, 0
-        batas = self.jarak_magnet / max(self.scale, .01)
+        batas = skala_ui.px(self.jarak_magnet) / max(self.scale, .01)
         induk = list(range(len(titik)))
 
         def akar(i):
@@ -1374,7 +1400,7 @@ class KanvasLabel(tk.Canvas):
         gx, gy = self.canvas_ke_gambar_bebas(x, y)
         # Bidang yang lebih kecil dengan pembesaran lebih tinggi membuat
         # posisi vertex jauh lebih jelas, terutama saat dua batas berdekatan.
-        r, faktor = 18, 6
+        r, faktor = 18, skala_ui.px(6)
         h, w = self.rgb.shape[:2]
         x0, y0, x1, y1 = max(0, int(gx-r)), max(0, int(gy-r)), min(w, int(gx+r)), min(h, int(gy+r))
         potong = self.gambar_tampil()[y0:y1, x0:x1]
@@ -1716,6 +1742,7 @@ class KanvasLabel(tk.Canvas):
         return p[0] * self.scale + self.ox, p[1] * self.scale + self.oy
 
     def _titik_penghalang_dekat(self, x, y, batas=9) -> int | None:
+        batas = skala_ui.px(batas)
         terbaik = None
         for i, p in enumerate(self._penghalang):
             px, py = self._layar(p)
@@ -1725,6 +1752,7 @@ class KanvasLabel(tk.Canvas):
         return None if terbaik is None else terbaik[1]
 
     def _sisi_penghalang_dekat(self, x, y, batas=6) -> tuple[int, tuple[float, float]] | None:
+        batas = skala_ui.px(batas)
         """Sisi garis penghalang terdekat (termasuk sisi penutup) -> (indeks awal sisi, titik proyeksi)."""
         n = len(self._penghalang)
         if n < 2:
@@ -2150,6 +2178,9 @@ class Studio(tk.Tk):
         self.preview_photo = None
         self._preview_w = 480               # lebar render preview; mengikuti widget
         tema.pasang(self)                       # tema gelap: terjemahkan warna sebelum widget dibuat
+        skala_ui.pasang()                       # angka piksel kode ikut skala layar
+        self._skala_diberitahu = skala_ui.FAKTOR
+        self.after(15000, self._pantau_skala)
         self.title("RGB-D Labelling Studio — Rekam, Tinjau, Ekspor, Label")
         self.geometry("1500x940"); self.minsize(1180, 760); self.configure(bg=BG)
         self.protocol("WM_DELETE_WINDOW", self.tutup)
@@ -2191,6 +2222,11 @@ class Studio(tk.Tk):
         self.pakai_ir = BooleanVar(value=bool(preferensi.get("pakai_ir", False)))
         self.warna_bidang = DoubleVar(value=float(preferensi.get("warna_bidang", 0.0)))
         self.garis_3d = BooleanVar(value=bool(preferensi.get("garis_3d", False)))
+        self.bayangan_aktif = BooleanVar(value=bool(preferensi.get("bayangan_aktif", False)))
+        self.bayangan_alpha = DoubleVar(value=float(preferensi.get("bayangan_alpha", 0.35)))
+        self.bayangan_label = BooleanVar(value=bool(preferensi.get("bayangan_label", True)))
+        self.salin_selaras = BooleanVar(value=bool(preferensi.get("salin_selaras", True)))
+        self.salin_otomatis = BooleanVar(value=bool(preferensi.get("salin_otomatis", False)))
         self.magnet_titik = BooleanVar(value=True)
         # Model pengusul di GPU: auto-usulan frame tanpa label, peta model Bantu arah,
         # tombol Rekomendasi/Batch. Mati = model tidak dimuat (dan dilepas bila sudah).
@@ -2270,11 +2306,12 @@ class Studio(tk.Tk):
             pass
         L, T = tema.latar, tema.tinta
         s.configure("TNotebook", background=L(BG), borderwidth=0, tabmargins=(2, 0, 2, 0))
+        s.configure("Treeview", rowheight=tkfont.Font(font="TkDefaultFont").metrics("linespace") + skala_ui.px(5))
         s.configure("TNotebook.Tab", background=L("#EEE7E2"), foreground=T(MUTED),
-                    padding=(22, 11), font=("Segoe UI", 10, "bold"), borderwidth=0)
+                    padding=(skala_ui.px(22), skala_ui.px(11)), font=("Segoe UI", 10, "bold"), borderwidth=0)
         s.map("TNotebook.Tab", background=[("selected", L(PANEL))], foreground=[("selected", T(ACCENT))])
         s.configure("TCombobox", fieldbackground=L("#FFFDFC"), background=L("#FFFDFC"),
-                    foreground=T(INK), padding=5, bordercolor=L("#DED7D2"), lightcolor=L("#DED7D2"), darkcolor=L("#DED7D2"),
+                    foreground=T(INK), padding=skala_ui.px(5), bordercolor=L("#DED7D2"), lightcolor=L("#DED7D2"), darkcolor=L("#DED7D2"),
                     arrowcolor=T(INK))
         s.map("TCombobox", fieldbackground=[("readonly", L("#FFFDFC"))], foreground=[("readonly", T(INK))],
               selectbackground=[("readonly", L("#FFFDFC"))], selectforeground=[("readonly", T(INK))])
@@ -3128,7 +3165,7 @@ class Studio(tk.Tk):
         # tingginya ikut berubah sehingga daftar frame dan tombol di bawahnya
         # melompat naik-turun setiap next/prev.
         baris_px = tkfont.Font(font=("Segoe UI", 9)).metrics("linespace")
-        self.kotak_info_rekaman = tk.Frame(i, bg=PANEL, height=baris_px * 10 + 6)
+        self.kotak_info_rekaman = tk.Frame(i, bg=PANEL, height=int(baris_px * 10 / skala_ui.FAKTOR) + 6)
         self.kotak_info_rekaman.pack(fill="x", pady=(0, 4))
         self.kotak_info_rekaman.pack_propagate(False)
         self.info_rekaman = tk.Label(self.kotak_info_rekaman, text="", bg=PANEL, fg=ACCENT, justify="left", anchor="nw",
@@ -3210,6 +3247,20 @@ class Studio(tk.Tk):
             tk.Button(baris_ubah, text=teks, command=lambda n=nilai: self.ubah_kelas_mask(n), bg=warna,
                       fg="#FFFFFF", relief="flat", font=("Segoe UI", 8, "bold"),
                       pady=4).pack(side="left", expand=True, fill="x", padx=1)
+        cek = dict(bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL, wraplength=300, justify="left")
+        tk.Checkbutton(edit_i, text="Bayangan frame sebelumnya (B)", variable=self.bayangan_aktif,
+                       command=self.ganti_bayangan, **cek).pack(anchor="w", pady=(6, 0))
+        tk.Scale(edit_i, from_=.1, to=.85, resolution=.05, orient="horizontal", variable=self.bayangan_alpha,
+                 command=lambda _: self.ganti_kekuatan_bayangan(), label="Kekuatan bayangan", bg=PANEL, fg=INK,
+                 highlightthickness=0, length=220).pack(fill="x")
+        tk.Checkbutton(edit_i, text="Garis label frame sebelumnya (putus-putus)", variable=self.bayangan_label,
+                       command=self.ganti_bayangan, **cek).pack(anchor="w")
+        self.tombol_ringkas(edit_i, "Salin label frame sebelumnya (P)", self.salin_label_sebelumnya,
+                            "#E8DDD5", INK).pack(fill="x", pady=(4, 2))
+        tk.Checkbutton(edit_i, text="Salinan mengikuti gerak kamera", variable=self.salin_selaras,
+                       command=self.simpan_preferensi, **cek).pack(anchor="w")
+        tk.Checkbutton(edit_i, text="Frame tanpa label langsung mulai dari label frame sebelumnya",
+                       variable=self.salin_otomatis, command=self.simpan_preferensi, **cek).pack(anchor="w", pady=(0, 4))
         tk.Scale(edit_i, from_=0, to=1.0, resolution=.05, orient="horizontal", variable=self.depth_alpha,
                  command=lambda _: self.ganti_depth(), label="Overlay depth (1,0 = depth murni)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(2, 0))
@@ -3483,6 +3534,11 @@ class Studio(tk.Tk):
                                           "pakai_ir": bool(self.pakai_ir.get()),
                                           "warna_bidang": float(self.warna_bidang.get()),
                                           "garis_3d": bool(self.garis_3d.get()),
+                                          "bayangan_aktif": bool(self.bayangan_aktif.get()),
+                                          "bayangan_alpha": float(self.bayangan_alpha.get()),
+                                          "bayangan_label": bool(self.bayangan_label.get()),
+                                          "salin_selaras": bool(self.salin_selaras.get()),
+                                          "salin_otomatis": bool(self.salin_otomatis.get()),
                                           "model_gpu": bool(self.model_gpu.get())})
 
     def ganti_tab(self, _event=None):
@@ -4968,6 +5024,7 @@ class Studio(tk.Tk):
         except (KeyError, TypeError, ValueError):
             self.kanvas.intrinsik = None               # frame tanpa intrinsik: lapisan arah tidak tersedia
         self.kanvas.set_frame(cv2.cvtColor(bgr,cv2.COLOR_BGR2RGB),dep)
+        self._perbarui_bayangan()
         draft = baca_json(p / "label_draft.json", {})
         if draft.get("poligon"):
             self.kanvas.poligon = {nama: [list(map(tuple, poly)) for poly in draft["poligon"].get(nama, [])]
@@ -4981,7 +5038,7 @@ class Studio(tk.Tk):
         if not draft.get("poligon") and not self._punya_label(p):
             # Frame baru selalu mendapat usulan terlebih dahulu. Pengguna lalu
             # tinggal mengoreksi; draft/label yang sudah ada tidak ditimpa.
-            self.after(180, lambda target=p: self._auto_segmentasi(target))
+            self.after(180, lambda target=p: self._mulai_frame_baru(target))
         self.perbarui_lencana_periksa()
         self._perbarui_info_rekaman(p)
         if getattr(self, "panel_ukuran", None) is not None:
@@ -5157,6 +5214,120 @@ class Studio(tk.Tk):
                         data["peta"] = peta_kelas_convnext(data["bgr"], data["dep"], self._intrinsics(info))
             except Exception:                               # noqa: BLE001
                 continue                                    # prefetch hanya percepatan; jalur utama tetap membaca sendiri
+
+    # -------------------------------------------- bayangan & salin frame sebelumnya
+    def _frame_sebelumnya(self) -> Path | None:
+        """Frame tepat sebelum frame aktif pada daftar (urutan waktu rekaman)."""
+        if self.label_path is None or self.label_path not in self.frame_paths:
+            return None
+        i = self.frame_paths.index(self.label_path)
+        return self.frame_paths[i - 1] if i > 0 else None
+
+    def _data_frame(self, p: Path) -> dict | None:
+        """Data frame lain dari cache/disk, tanpa memindahkan prefetch ke sekitarnya."""
+        with self._kunci_cache:
+            data = self._cache_frame.get(p)
+        if data is None:
+            data = self._baca_berkas_frame(p)
+            if data is not None:
+                self._simpan_cache(p, data)
+        return data
+
+    def _perbarui_bayangan(self) -> None:
+        k = self.kanvas
+        k.bayangan_rgb = k.bayangan_poligon = None
+        k.bayangan_alpha = float(self.bayangan_alpha.get())
+        p = self._frame_sebelumnya() if self.bayangan_aktif.get() else None
+        data = self._data_frame(p) if p is not None else None
+        if data is None:
+            return
+        rgb = cv2.cvtColor(data["bgr"], cv2.COLOR_BGR2RGB)
+        if self.pakai_ir.get() and k.intrinsik is not None:
+            try:
+                ir = self._vis_frame(p, data, k.intrinsik, "ir")     # samakan dengan latar frame aktif
+            except (OSError, KeyError, ValueError, cv2.error):
+                ir = None
+            if ir is not None:
+                ir = cv2.cvtColor(ir, cv2.COLOR_GRAY2RGB) if ir.ndim == 2 else ir.copy()
+                kosong = ir.max(2) == 0
+                ir[kosong] = rgb[kosong]
+                rgb = ir
+        k.bayangan_rgb = rgb
+        if self.bayangan_label.get():
+            k.bayangan_poligon = baca_json(p / "label_draft.json", {}).get("poligon") or None
+
+    def ganti_bayangan(self) -> None:
+        self._perbarui_bayangan()
+        self.kanvas.render(); self.simpan_preferensi(); self._fokus_kanvas_label()
+        if self.bayangan_aktif.get() and self.kanvas.bayangan_rgb is None and self.label_path is not None:
+            self.status.set("Frame ini adalah frame pertama rekaman, jadi belum ada bayangan.")
+
+    def ganti_kekuatan_bayangan(self) -> None:
+        self.kanvas.bayangan_alpha = float(self.bayangan_alpha.get())
+        self.kanvas.render(); self.simpan_preferensi()
+
+    def _salin_dari_sebelumnya(self) -> bool:
+        """Mulai frame aktif dari label frame sebelumnya. Hasilnya berstatus usulan sampai disunting/diperiksa."""
+        k, p = self.kanvas, self.label_path
+        asal = self._frame_sebelumnya()
+        poligon = baca_json(asal / "label_draft.json", {}).get("poligon") if asal is not None else None
+        if not poligon or not any(poligon.get(nama) for nama in MODE_MASK):
+            self.status.set("Frame sebelumnya belum punya label untuk disalin.")
+            return False
+        H = None
+        if self.salin_selaras.get():
+            data = self._data_frame(asal)
+            try:
+                H = salin_label.homografi(cv2.cvtColor(data["bgr"], cv2.COLOR_BGR2RGB), k.rgb) if data is not None else None
+            except cv2.error:
+                H = None
+        h, w = k.rgb.shape[:2]
+        hasil = salin_label.pindahkan({nama: poligon.get(nama, []) for nama in MODE_MASK}, H, w, h)
+        # Jalur yang sama dengan usulan model (usulkan_segmentasi): salinan belum disunting
+        # bukan label diperiksa, dan Ctrl+Z memulihkan berkas label sebelumnya persis.
+        if self._autosave_setelah is not None:
+            self.after_cancel(self._autosave_setelah)
+            self.simpan_draft_label()
+        self._usulan_aktif = {"frame": p, "sebelum": k._salin_poligon(), "berkas": self._potret_berkas_label(p)}
+        k.poligon = hasil
+        self._usulan_aktif["usulan"] = k._salin_poligon()
+        k.aktif_indeks = {nama: (len(daftar) - 1 if daftar else None) for nama, daftar in k.poligon.items()}
+        k.catat_riwayat()
+        self._aktif_mask_berubah(self.mode_label.get(), k.aktif_indeks[self.mode_label.get()])
+        k.render(); k.on_change()
+        selaras = ("mengikuti gerak kamera" if H is not None else
+                   "di posisi yang sama (gerak kamera tidak terbaca)" if self.salin_selaras.get() else "di posisi yang sama")
+        self.ukur_status.set(f"Label {asal.name} disalin {selaras}: {len(hasil['objek'])} merah, {len(hasil['acuan'])} biru. "
+                             "Silakan ubah; Ctrl+Z membatalkan.")
+        return True
+
+    def salin_label_sebelumnya(self):
+        if self.label_path is None or self.kanvas.rgb is None:
+            return "break"
+        if self.status_periksa():
+            self.status.set("Frame ini sudah ✔ diperiksa, jadi tidak ditimpa. Cabut dulu dengan Shift+Enter bila ingin menggantinya.")
+            return "break"
+        self._salin_dari_sebelumnya()
+        self.kanvas.focus_set()
+        return "break"
+
+    def _mulai_frame_baru(self, target: Path) -> None:
+        """Isi awal frame tanpa label: dari frame sebelumnya bila diminta, kalau tidak dari model."""
+        if target != self.label_path or self._punya_label(target):
+            return
+        if not (self.salin_otomatis.get() and self._salin_dari_sebelumnya()):
+            self._auto_segmentasi(target)
+
+    def _pantau_skala(self) -> None:
+        """Skala layar bisa berubah saat Studio terbuka (monitor/skala tampilan); Tk tidak menata ulang sendiri."""
+        baru = skala_ui.baca_faktor()
+        if baru != self._skala_diberitahu:
+            self._skala_diberitahu = baru
+            if baru != skala_ui.FAKTOR:
+                messagebox.showinfo("Skala layar berubah", "Skala layar berubah sejak Studio dibuka, jadi tulisan bisa tampak "
+                                    "terlalu kecil atau besar.\n\nTutup lalu buka lagi Studio agar ukurannya kembali pas. "
+                                    "Label sudah tersimpan otomatis.", parent=self)
+        self.after(15000, self._pantau_skala)
 
     def _auto_segmentasi(self, target: Path):
         if target != self.label_path or self._punya_label(target) or not self._model_gpu_aktif:
@@ -5381,6 +5552,12 @@ class Studio(tk.Tk):
             return self.pilih_alat("penghalang")
         if not ctrl and event.keysym.lower() == "m":
             return self.gabung_mask()
+        if not ctrl and event.keysym.lower() == "b":
+            self.bayangan_aktif.set(not self.bayangan_aktif.get())
+            self.ganti_bayangan()
+            return "break"
+        if not ctrl and event.keysym.lower() == "p":
+            return self.salin_label_sebelumnya()
         if not ctrl and event.keysym == "BackSpace" and self.kanvas.alat == "penghalang":
             self.kanvas.mundur_penghalang()
             return "break"
@@ -5407,7 +5584,8 @@ class Studio(tk.Tk):
         return None
 
     def teks_kontrol_label(self):
-        alat = " • G = geser • X = blok hapus • C = potong penghalang • Esc = titik • +/− = zoom • 0 = muat"
+        alat = (" • G = geser • X = blok hapus • C = potong penghalang • Esc = titik • +/− = zoom • 0 = muat"
+                " • B = bayangan frame sebelumnya • P = salin label frame sebelumnya")
         return (("A = merah • S = biru • Shift+A/S ubah kelas mask • "
                  "Space = berikutnya • D = sebelumnya • Ctrl+Z = Undo"
                  if self.kontrol_label.get() == "mudah" else
