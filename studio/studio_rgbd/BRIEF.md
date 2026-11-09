@@ -32,7 +32,7 @@ sudah dipecahkan ada di tabel "Catatan integrasi dan jejak masalah"
 | Frame hilang dari daftar latih | `tab_split.py`, `kurasi.py` (`kurasi.json`), rekaman harus ✔ dan label terperiksa |
 | Tata letak terpotong | `uji_tata_letak.py`; galat tiap tab: `uji_asap.py` |
 | Tulisan terlalu kecil/terpotong, kontrol sempit | `skala_ui.py` (angka piksel kode mengikuti `Xft.dpi`, dibaca sekali saat mulai; skala layar berubah -> tutup-buka Studio, `Studio._pantau_skala` memberi tahu) |
-| Bayangan/salin label frame sebelumnya (B/P) | `salin_label.py` (homografi ORB), `Studio._salin_dari_sebelumnya`, `KanvasLabel.gambar_tampil`/`render`; salinan berstatus usulan sampai disunting/diperiksa |
+| Bayangan/salin label frame sebelum atau sesudahnya (B/P/N) | `salin_label.py` (homografi ORB), `Studio._salin_dari_tetangga`, `KanvasLabel.gambar_tampil`/`render`; salinan berstatus usulan sampai disunting/diperiksa |
 
 ## Rilis perubahan Studio
 
