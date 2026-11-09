@@ -532,6 +532,9 @@ class PembacaBag:
         return None
 
 
+NAMA_ARAH = {-1: "sebelumnya", 1: "berikutnya"}
+
+
 class TombolRounded(tk.Canvas):
     """Tombol datar dengan radius kecil; elegan tanpa tampak seperti pil besar."""
 
@@ -748,7 +751,7 @@ class KanvasLabel(tk.Canvas):
         self.warna_bidang = 0.0      # 0..1 kekuatan warna ketinggian di atas latar
         self.garis_3d = False        # garis lipatan ujung/pangkal dari depth (visual_depth.garis_tepi)
         self.nomor_anak_tangga = []  # (x, y, teks, warna) koordinat citra; diisi panel_ukuran dari pelacakan video
-        # Bayangan frame sebelumnya: hanya tampilan, tidak ikut klik/simpan. Diisi Studio tiap frame dibuka.
+        # Bayangan frame acuan (sebelum/sesudah): hanya tampilan, tidak ikut klik/simpan. Diisi Studio tiap frame dibuka.
         self.bayangan_rgb: np.ndarray | None = None
         self.bayangan_poligon: dict | None = None
         self.bayangan_alpha = 0.35
@@ -2225,6 +2228,7 @@ class Studio(tk.Tk):
         self.bayangan_aktif = BooleanVar(value=bool(preferensi.get("bayangan_aktif", False)))
         self.bayangan_alpha = DoubleVar(value=float(preferensi.get("bayangan_alpha", 0.35)))
         self.bayangan_label = BooleanVar(value=bool(preferensi.get("bayangan_label", True)))
+        self.frame_acuan = IntVar(value=int(preferensi.get("frame_acuan", -1)))     # -1 sebelumnya, +1 berikutnya
         self.salin_selaras = BooleanVar(value=bool(preferensi.get("salin_selaras", True)))
         self.salin_otomatis = BooleanVar(value=bool(preferensi.get("salin_otomatis", False)))
         self.magnet_titik = BooleanVar(value=True)
@@ -3248,18 +3252,26 @@ class Studio(tk.Tk):
                       fg="#FFFFFF", relief="flat", font=("Segoe UI", 8, "bold"),
                       pady=4).pack(side="left", expand=True, fill="x", padx=1)
         cek = dict(bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL, wraplength=300, justify="left")
-        tk.Checkbutton(edit_i, text="Bayangan frame sebelumnya (B)", variable=self.bayangan_aktif,
-                       command=self.ganti_bayangan, **cek).pack(anchor="w", pady=(6, 0))
+        baris_acuan = tk.Frame(edit_i, bg=PANEL); baris_acuan.pack(fill="x", pady=(6, 0))
+        tk.Label(baris_acuan, text="Frame acuan:", bg=PANEL, fg=INK).pack(side="left")
+        for nilai, teks in ((-1, "sebelumnya"), (1, "berikutnya")):
+            tk.Radiobutton(baris_acuan, text=teks, variable=self.frame_acuan, value=nilai, command=self.ganti_bayangan,
+                           **cek).pack(side="left", padx=(4, 0))
+        tk.Checkbutton(edit_i, text="Bayangan frame acuan (B)", variable=self.bayangan_aktif,
+                       command=self.ganti_bayangan, **cek).pack(anchor="w")
         tk.Scale(edit_i, from_=.1, to=.85, resolution=.05, orient="horizontal", variable=self.bayangan_alpha,
                  command=lambda _: self.ganti_kekuatan_bayangan(), label="Kekuatan bayangan", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x")
-        tk.Checkbutton(edit_i, text="Garis label frame sebelumnya (putus-putus)", variable=self.bayangan_label,
+        tk.Checkbutton(edit_i, text="Garis label frame acuan (putus-putus)", variable=self.bayangan_label,
                        command=self.ganti_bayangan, **cek).pack(anchor="w")
-        self.tombol_ringkas(edit_i, "Salin label frame sebelumnya (P)", self.salin_label_sebelumnya,
-                            "#E8DDD5", INK).pack(fill="x", pady=(4, 2))
+        tk.Label(edit_i, text="Salin label dari frame:", bg=PANEL, fg=INK).pack(anchor="w", pady=(4, 0))
+        baris_salin = tk.Frame(edit_i, bg=PANEL); baris_salin.pack(fill="x", pady=(0, 2))
+        for arah, teks in ((-1, "◀ Sebelumnya (P)"), (1, "Berikutnya (N) ▶")):
+            self.tombol_ringkas(baris_salin, teks, lambda a=arah: self.salin_label_tetangga(a),
+                                "#E8DDD5", INK).pack(side="left", expand=True, fill="x", padx=1)
         tk.Checkbutton(edit_i, text="Salinan mengikuti gerak kamera", variable=self.salin_selaras,
                        command=self.simpan_preferensi, **cek).pack(anchor="w")
-        tk.Checkbutton(edit_i, text="Frame tanpa label langsung mulai dari label frame sebelumnya",
+        tk.Checkbutton(edit_i, text="Frame tanpa label langsung mulai dari label frame acuan",
                        variable=self.salin_otomatis, command=self.simpan_preferensi, **cek).pack(anchor="w", pady=(0, 4))
         tk.Scale(edit_i, from_=0, to=1.0, resolution=.05, orient="horizontal", variable=self.depth_alpha,
                  command=lambda _: self.ganti_depth(), label="Overlay depth (1,0 = depth murni)", bg=PANEL, fg=INK,
@@ -3537,6 +3549,7 @@ class Studio(tk.Tk):
                                           "bayangan_aktif": bool(self.bayangan_aktif.get()),
                                           "bayangan_alpha": float(self.bayangan_alpha.get()),
                                           "bayangan_label": bool(self.bayangan_label.get()),
+                                          "frame_acuan": int(self.frame_acuan.get()),
                                           "salin_selaras": bool(self.salin_selaras.get()),
                                           "salin_otomatis": bool(self.salin_otomatis.get()),
                                           "model_gpu": bool(self.model_gpu.get())})
@@ -5215,13 +5228,13 @@ class Studio(tk.Tk):
             except Exception:                               # noqa: BLE001
                 continue                                    # prefetch hanya percepatan; jalur utama tetap membaca sendiri
 
-    # -------------------------------------------- bayangan & salin frame sebelumnya
-    def _frame_sebelumnya(self) -> Path | None:
-        """Frame tepat sebelum frame aktif pada daftar (urutan waktu rekaman)."""
+    # -------------------------------------------- bayangan & salin frame tetangga
+    def _frame_tetangga(self, arah: int) -> Path | None:
+        """Frame di sebelah frame aktif pada daftar (urutan waktu rekaman): -1 sebelumnya, +1 berikutnya."""
         if self.label_path is None or self.label_path not in self.frame_paths:
             return None
-        i = self.frame_paths.index(self.label_path)
-        return self.frame_paths[i - 1] if i > 0 else None
+        j = self.frame_paths.index(self.label_path) + arah
+        return self.frame_paths[j] if 0 <= j < len(self.frame_paths) else None
 
     def _data_frame(self, p: Path) -> dict | None:
         """Data frame lain dari cache/disk, tanpa memindahkan prefetch ke sekitarnya."""
@@ -5237,7 +5250,7 @@ class Studio(tk.Tk):
         k = self.kanvas
         k.bayangan_rgb = k.bayangan_poligon = None
         k.bayangan_alpha = float(self.bayangan_alpha.get())
-        p = self._frame_sebelumnya() if self.bayangan_aktif.get() else None
+        p = self._frame_tetangga(self.frame_acuan.get()) if self.bayangan_aktif.get() else None
         data = self._data_frame(p) if p is not None else None
         if data is None:
             return
@@ -5260,19 +5273,19 @@ class Studio(tk.Tk):
         self._perbarui_bayangan()
         self.kanvas.render(); self.simpan_preferensi(); self._fokus_kanvas_label()
         if self.bayangan_aktif.get() and self.kanvas.bayangan_rgb is None and self.label_path is not None:
-            self.status.set("Frame ini adalah frame pertama rekaman, jadi belum ada bayangan.")
+            self.status.set(f"Tidak ada frame {NAMA_ARAH[self.frame_acuan.get()]} di rekaman ini, jadi belum ada bayangan.")
 
     def ganti_kekuatan_bayangan(self) -> None:
         self.kanvas.bayangan_alpha = float(self.bayangan_alpha.get())
         self.kanvas.render(); self.simpan_preferensi()
 
-    def _salin_dari_sebelumnya(self) -> bool:
-        """Mulai frame aktif dari label frame sebelumnya. Hasilnya berstatus usulan sampai disunting/diperiksa."""
+    def _salin_dari_tetangga(self, arah: int) -> bool:
+        """Mulai frame aktif dari label frame tetangga. Hasilnya berstatus usulan sampai disunting/diperiksa."""
         k, p = self.kanvas, self.label_path
-        asal = self._frame_sebelumnya()
+        asal = self._frame_tetangga(arah)
         poligon = baca_json(asal / "label_draft.json", {}).get("poligon") if asal is not None else None
         if not poligon or not any(poligon.get(nama) for nama in MODE_MASK):
-            self.status.set("Frame sebelumnya belum punya label untuk disalin.")
+            self.status.set(f"Frame {NAMA_ARAH[arah]} belum punya label untuk disalin.")
             return False
         H = None
         if self.salin_selaras.get():
@@ -5301,21 +5314,21 @@ class Studio(tk.Tk):
                              "Silakan ubah; Ctrl+Z membatalkan.")
         return True
 
-    def salin_label_sebelumnya(self):
+    def salin_label_tetangga(self, arah: int):
         if self.label_path is None or self.kanvas.rgb is None:
             return "break"
         if self.status_periksa():
             self.status.set("Frame ini sudah ✔ diperiksa, jadi tidak ditimpa. Cabut dulu dengan Shift+Enter bila ingin menggantinya.")
             return "break"
-        self._salin_dari_sebelumnya()
+        self._salin_dari_tetangga(arah)
         self.kanvas.focus_set()
         return "break"
 
     def _mulai_frame_baru(self, target: Path) -> None:
-        """Isi awal frame tanpa label: dari frame sebelumnya bila diminta, kalau tidak dari model."""
+        """Isi awal frame tanpa label: dari frame acuan bila diminta, kalau tidak dari model."""
         if target != self.label_path or self._punya_label(target):
             return
-        if not (self.salin_otomatis.get() and self._salin_dari_sebelumnya()):
+        if not (self.salin_otomatis.get() and self._salin_dari_tetangga(self.frame_acuan.get())):
             self._auto_segmentasi(target)
 
     def _pantau_skala(self) -> None:
@@ -5556,8 +5569,8 @@ class Studio(tk.Tk):
             self.bayangan_aktif.set(not self.bayangan_aktif.get())
             self.ganti_bayangan()
             return "break"
-        if not ctrl and event.keysym.lower() == "p":
-            return self.salin_label_sebelumnya()
+        if not ctrl and event.keysym.lower() in ("p", "n"):
+            return self.salin_label_tetangga(-1 if event.keysym.lower() == "p" else 1)
         if not ctrl and event.keysym == "BackSpace" and self.kanvas.alat == "penghalang":
             self.kanvas.mundur_penghalang()
             return "break"
@@ -5585,7 +5598,7 @@ class Studio(tk.Tk):
 
     def teks_kontrol_label(self):
         alat = (" • G = geser • X = blok hapus • C = potong penghalang • Esc = titik • +/− = zoom • 0 = muat"
-                " • B = bayangan frame sebelumnya • P = salin label frame sebelumnya")
+                " • B = bayangan frame acuan • P/N = salin label dari frame sebelumnya/berikutnya")
         return (("A = merah • S = biru • Shift+A/S ubah kelas mask • "
                  "Space = berikutnya • D = sebelumnya • Ctrl+Z = Undo"
                  if self.kontrol_label.get() == "mudah" else

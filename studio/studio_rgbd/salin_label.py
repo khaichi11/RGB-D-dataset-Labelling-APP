@@ -1,4 +1,4 @@
-"""Membawa label frame sebelumnya ke frame berikutnya.
+"""Membawa label dari frame tetangga (sebelum atau sesudahnya) ke frame aktif.
 
 Kamera bergerak antar-frame, jadi poligon dipindahkan lewat homografi dari pencocokan
 fitur ORB dua citra. Homografi hanya kira-kira (tangga tidak satu bidang), karena itu
