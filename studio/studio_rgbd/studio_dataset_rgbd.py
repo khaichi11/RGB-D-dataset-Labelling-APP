@@ -795,13 +795,14 @@ class KanvasLabel(tk.Canvas):
         self._penghalang: list[tuple[float, float]] = []
         self._penghalang_tarik = None     # None | {"mode": "titik", "i"} | {"mode": "laso", "layar"}
         self.saat_ganti_alat = None       # Studio menyelaraskan tombol alat bila kanvas berpindah alat sendiri
+        self.saat_tukar = None            # Studio menukar warna mask yang diklik dengan alat Tukar
         self.bind("<Double-Button-1>", self._klik_ganda)
         # Dipanggil saat Ctrl+Z tidak punya langkah lagi di frame ini; Studio
         # memakainya untuk kembali ke frame yang baru disunting (riwayat lintas frame).
         self.saat_undo_habis = None
         # Alat tarik tanpa modifier, untuk papan sentuh yang sulit menahan
         # Ctrl atau Shift sambil menarik satu jari.
-        self.alat = "normal"      # "normal" | "geser" | "blok"
+        self.alat = "normal"      # "normal" | "geser" | "blok" | "potong" | "penghalang" | "tukar"
         self.touchpad = True      # gulir dua jari menggeser; Ctrl+gulir memperbesar
         self._seleksi_kotak = None
         self.titik_dipilih: set[tuple[str, int, int]] = set()
@@ -1451,6 +1452,11 @@ class KanvasLabel(tk.Canvas):
             return self.mulai_potong(e)
         if self.alat == "penghalang":
             return self.titik_penghalang(e)
+        if self.alat == "tukar":
+            kena = self.mask_di(e.x, e.y)
+            if kena is not None and self.saat_tukar is not None:
+                self.saat_tukar(*kena)
+            return
         dekat = self._titik_dekat(e.x, e.y, nama=self.mode)
         if dekat is not None:
             nama, ip, it = dekat
@@ -1739,6 +1745,8 @@ class KanvasLabel(tk.Canvas):
         # kedua dengan Double-Button-1.
         if self.alat == "penghalang":
             return self.selesai_penghalang()
+        if self.alat == "tukar":
+            return None                # klik kedua jangan membalikkan lagi mask yang baru ditukar
         return self.tambah(e)
 
     def _layar(self, p):
@@ -1998,15 +2006,54 @@ class KanvasLabel(tk.Canvas):
         daftar.sort(key=urutan)
         self.aktif_indeks[nama] = daftar.index(aktif)
 
-    def ubah_kelas_aktif(self, ke: str) -> str | None:
-        """Pindahkan mask yang sedang aktif ke kelas lain, misalnya riser yang
-        ternyata tapakan.
+    def mask_di(self, x, y, batas=6):
+        """(kelas, indeks) mask di titik kanvas (x, y), merah maupun biru.
 
-        Mask dipindah utuh beserta titiknya, bukan digambar ulang, karena
-        kesalahan yang sering terjadi adalah kelasnya, bukan bentuknya.
-        Mengembalikan nama kelas asal, atau None bila tidak ada mask aktif yang
-        sah.
+        Tidak bergantung pada kelas yang sedang dipilih: mask yang salah warna
+        justru sering berada di kelas lain. Bila beberapa mask menumpuk, yang
+        terkecil menang karena yang besar masih bisa dikenai di tempat lain.
         """
+        if self.rgb is None:
+            return None
+        titik = ((x - self.ox) / self.scale, (y - self.oy) / self.scale)
+        toleransi = skala_ui.px(batas) / self.scale
+        terbaik = None
+        for nama, daftar in self.poligon.items():
+            for ip, poly in enumerate(daftar):
+                if len(poly) < 3:
+                    continue
+                kontur = np.array(poly, np.float32)
+                jarak = cv2.pointPolygonTest(kontur, titik, True)
+                if jarak >= -toleransi:
+                    kunci = (jarak < 0, cv2.contourArea(kontur))
+                    if terbaik is None or kunci < terbaik[0]:
+                        terbaik = (kunci, nama, ip)
+        return None if terbaik is None else terbaik[1:]
+
+    def pindah_kelas(self, dari: str, indeks: int, ke: str) -> None:
+        """Pindahkan satu mask utuh beserta titiknya ke kelas lain.
+
+        Kesalahan yang sering terjadi adalah kelasnya, bukan bentuknya, jadi
+        mask tidak perlu digambar ulang.
+        """
+        daftar = self.poligon[dari]
+        poly = daftar.pop(indeks)
+        aktif = self.aktif_indeks.get(dari)
+        if aktif == indeks:
+            aktif = (len(daftar) - 1) if daftar else None
+        elif aktif is not None and aktif > indeks:
+            aktif -= 1                                     # nomor di belakangnya maju satu
+        self.aktif_indeks[dari] = aktif
+        self.poligon[ke].append(poly)
+        self.mode = ke
+        self._mask_dipilih_eksplisit = True
+        self._urutkan_dari_bawah(ke, poly)
+        self.titik_dipilih.clear()
+        self.catat_riwayat(); self.render(); self.on_change()
+        self._beritahu_aktif(ke, self.aktif_indeks.get(ke))
+
+    def ubah_kelas_aktif(self, ke: str) -> str | None:
+        """Pindahkan mask aktif ke kelas ``ke``; kembalikan kelas asalnya, atau None bila tidak ada yang sah."""
         dari = self.mode
         if ke == dari or ke not in self.poligon:
             return None
@@ -2014,17 +2061,7 @@ class KanvasLabel(tk.Canvas):
         indeks = self.aktif_indeks.get(dari)
         if indeks is None or not (0 <= indeks < len(daftar)) or len(daftar[indeks]) < 3:
             return None
-        poly = daftar.pop(indeks)
-        self.aktif_indeks[dari] = (len(daftar) - 1) if daftar else None
-        self.poligon[ke].append(poly)
-        self.mode = ke
-        self._mask_dipilih_eksplisit = True
-        self._urutkan_dari_bawah(ke, poly)
-        self.titik_dipilih.clear()
-        self.catat_riwayat(); self.render(); self.on_change()
-        # Dulu baris ini berada sesudah return sehingga tidak pernah jalan:
-        # nomor mask di panel tidak ikut pindah ke kelas barunya.
-        self._beritahu_aktif(ke, self.aktif_indeks.get(ke))
+        self.pindah_kelas(dari, indeks, ke)
         return dari
 
     def bersihkan(self, nama):
@@ -2122,13 +2159,13 @@ class KanvasLabel(tk.Canvas):
 
     def set_alat(self, nama: str) -> None:
         """Pilih alat tarik; kursor ikut berubah supaya keadaannya terlihat."""
-        self.alat = nama if nama in ("normal", "geser", "blok", "potong", "penghalang") else "normal"
+        self.alat = nama if nama in ("normal", "geser", "blok", "potong", "penghalang", "tukar") else "normal"
         if self.alat in ("normal", "blok") and self._penghalang:
             # Garis setengah jadi dibuang saat kembali menyunting mask; saat
             # menggeser gambar atau membuat pita, garis tetap disimpan.
             self.batal_penghalang()
         self.config(cursor={"geser": "fleur", "blok": "X_cursor", "potong": "tcross",
-                            "penghalang": "pencil"}.get(self.alat, ""))
+                            "penghalang": "pencil", "tukar": "exchange"}.get(self.alat, ""))
 
 
 class Studio(tk.Tk):
@@ -2243,6 +2280,7 @@ class Studio(tk.Tk):
         self._mode_label_dipilih = False
         self.ukur_status = StringVar(value="Tandai sisi tinggi/riser (merah) dan permukaan datar/tapakan (biru).")
         self.alat_label = StringVar(value="normal")
+        self._tahan_status = False        # autosave berikutnya tidak menimpa hasil salin/tukar di bilah status
         self.mode_touchpad = BooleanVar(value=bool(preferensi.get("mode_touchpad", True)))
         self.lebar_potong = DoubleVar(value=float(preferensi.get("lebar_potong", 14.0)))
         self.satukan_potongan = BooleanVar(value=bool(preferensi.get("satukan_potongan", True)))
@@ -3094,7 +3132,13 @@ class Studio(tk.Tk):
     def ui_label(self):
         f = tk.Frame(self.tab_label, bg=BG); f.pack(fill="both", expand=True, padx=14, pady=14)
         left = tk.Frame(f, bg=BG); left.pack(side="left", fill="both", expand=True, padx=(0, 12))
+        # Yang dipakai tiap frame ada di atas gambar, tidak perlu dicari dengan menggulir panel.
+        bilah = tk.Frame(left, bg=PANEL, highlightthickness=1, highlightbackground=LINE, padx=6, pady=4)
+        bilah.pack(fill="x", pady=(0, 6))
+        bilah_kelas = tk.Frame(bilah, bg=PANEL); bilah_kelas.pack(fill="x")
+        bilah_salin = tk.Frame(bilah, bg=PANEL); bilah_salin.pack(fill="x", pady=(4, 0))
         self.kanvas = KanvasLabel(left, self.hitung_ukuran, self._aktif_mask_berubah); self.kanvas.pack(fill="both", expand=True)
+        self.kanvas.saat_tukar = self.tukar_warna_mask
         self.kanvas.saat_undo_habis = self._undo_frame_lain
         self.kanvas.penyedia_peta = self._peta_model_kini
         self.kanvas.lapor_blok = self._lapor_blok
@@ -3238,37 +3282,38 @@ class Studio(tk.Tk):
         self.label_bantuan_kontrol = tk.Label(otomatis_i, text=self.teks_kontrol_label(), bg=PANEL, fg=MUTED,
                                               wraplength=300, justify="left", font=("Segoe UI", 8))
         self.label_bantuan_kontrol.pack(anchor="w", pady=(1, 5))
-        self.rb_objek = tk.Radiobutton(edit_i, variable=self.mode_label, value="objek", indicatoron=False, command=self.ganti_mode,
-                                       bg="#FFF9F4", selectcolor=RED, activebackground=RED, fg=INK, relief="flat", pady=7)
-        self.rb_acuan = tk.Radiobutton(edit_i, variable=self.mode_label, value="acuan", indicatoron=False, command=self.ganti_mode,
-                                       bg="#FFF9F4", selectcolor=BLUE, activebackground=BLUE, fg=INK, relief="flat", pady=7)
-        self.rb_objek.pack(fill="x", pady=2); self.rb_acuan.pack(fill="x", pady=2)
-        ubah_f = tk.Frame(edit_i, bg=PANEL); ubah_f.pack(fill="x", pady=(3, 0))
-        tk.Label(ubah_f, text="Ubah kelas mask aktif (Shift+A/S)", bg=PANEL, fg=MUTED,
-                 font=("Segoe UI", 8)).pack(anchor="w")
-        baris_ubah = tk.Frame(ubah_f, bg=PANEL); baris_ubah.pack(fill="x")
-        for nilai, teks, warna in (("objek", "→ MERAH", RED), ("acuan", "→ BIRU", BLUE)):
-            tk.Button(baris_ubah, text=teks, command=lambda n=nilai: self.ubah_kelas_mask(n), bg=warna,
-                      fg="#FFFFFF", relief="flat", font=("Segoe UI", 8, "bold"),
-                      pady=4).pack(side="left", expand=True, fill="x", padx=1)
+        self.rb_objek = tk.Radiobutton(bilah_kelas, variable=self.mode_label, value="objek", indicatoron=False, command=self.ganti_mode,
+                                       bg="#FFF9F4", selectcolor=RED, activebackground=RED, fg=INK, relief="flat", pady=5)
+        self.rb_acuan = tk.Radiobutton(bilah_kelas, variable=self.mode_label, value="acuan", indicatoron=False, command=self.ganti_mode,
+                                       bg="#FFF9F4", selectcolor=BLUE, activebackground=BLUE, fg=INK, relief="flat", pady=5)
+        self.rb_objek.pack(side="left", fill="x", expand=True, padx=1)
+        self.rb_acuan.pack(side="left", fill="x", expand=True, padx=1)
+        tk.Frame(bilah_kelas, bg=LINE, width=1).pack(side="left", fill="y", padx=5)
+        for nilai, teks in (("tukar", "⇄ Tukar warna (T)"), ("normal", "✏ Titik"), ("geser", "✋ Geser (G)"), ("blok", "▭ Blok (X)"),
+                            ("potong", "✂ Pita (C)"), ("penghalang", "⬠ Halang (V)")):
+            tk.Radiobutton(bilah_kelas, text=teks, variable=self.alat_label, value=nilai, indicatoron=False,
+                           command=lambda: self.pilih_alat(self.alat_label.get(), dari_tombol=True),
+                           bg="#FFF9F4", selectcolor="#E8DDD5", activebackground="#E8DDD5", fg=INK,
+                           relief="flat", pady=5, font=("Segoe UI", 8)).pack(side="left", expand=True, fill="x", padx=1)
         cek = dict(bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL, wraplength=300, justify="left")
-        baris_acuan = tk.Frame(edit_i, bg=PANEL); baris_acuan.pack(fill="x", pady=(6, 0))
-        tk.Label(baris_acuan, text="Frame acuan:", bg=PANEL, fg=INK).pack(side="left")
+        tk.Label(bilah_salin, text="Salin label dari:", bg=PANEL, fg=INK).pack(side="left")
+        for arah, teks in ((-1, "◀ Sebelumnya (P)"), (1, "Berikutnya (N) ▶")):
+            self.tombol_ringkas(bilah_salin, teks, lambda a=arah: self.salin_label_tetangga(a), "#E8DDD5", INK,
+                                width=118).pack(side="left", padx=(4, 0))
+        tk.Frame(bilah_salin, bg=LINE, width=1).pack(side="left", fill="y", padx=6)
+        sakelar = dict(indicatoron=False, bg="#FFF9F4", selectcolor="#E8DDD5", activebackground="#E8DDD5", fg=INK,
+                       relief="flat", padx=8, pady=5, font=("Segoe UI", 8))
+        tk.Checkbutton(bilah_salin, text="Bayangan (B)", variable=self.bayangan_aktif, command=self.ganti_bayangan,
+                       **sakelar).pack(side="left", padx=1)
+        tk.Label(bilah_salin, text="dari", bg=PANEL, fg=MUTED).pack(side="left", padx=3)
         for nilai, teks in ((-1, "sebelumnya"), (1, "berikutnya")):
-            tk.Radiobutton(baris_acuan, text=teks, variable=self.frame_acuan, value=nilai, command=self.ganti_bayangan,
-                           **cek).pack(side="left", padx=(4, 0))
-        tk.Checkbutton(edit_i, text="Bayangan frame acuan (B)", variable=self.bayangan_aktif,
-                       command=self.ganti_bayangan, **cek).pack(anchor="w")
+            tk.Radiobutton(bilah_salin, text=teks, variable=self.frame_acuan, value=nilai, command=self.ganti_bayangan,
+                           **sakelar).pack(side="left", padx=1)
         tk.Scale(edit_i, from_=.1, to=.85, resolution=.05, orient="horizontal", variable=self.bayangan_alpha,
                  command=lambda _: self.ganti_kekuatan_bayangan(), label="Kekuatan bayangan", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x")
         tk.Checkbutton(edit_i, text="Garis label frame acuan (putus-putus)", variable=self.bayangan_label,
                        command=self.ganti_bayangan, **cek).pack(anchor="w")
-        tk.Label(edit_i, text="Salin label dari frame:", bg=PANEL, fg=INK).pack(anchor="w", pady=(4, 0))
-        baris_salin = tk.Frame(edit_i, bg=PANEL); baris_salin.pack(fill="x", pady=(0, 2))
-        for arah, teks in ((-1, "◀ Sebelumnya (P)"), (1, "Berikutnya (N) ▶")):
-            self.tombol_ringkas(baris_salin, teks, lambda a=arah: self.salin_label_tetangga(a),
-                                "#E8DDD5", INK).pack(side="left", expand=True, fill="x", padx=1)
         tk.Checkbutton(edit_i, text="Salinan mengikuti gerak kamera", variable=self.salin_selaras,
                        command=self.simpan_preferensi, **cek).pack(anchor="w")
         tk.Checkbutton(edit_i, text="Frame tanpa label langsung mulai dari label frame acuan",
@@ -3308,13 +3353,6 @@ class Studio(tk.Tk):
                  label="Pemandu riser/tread model RGB-D (biru tread, merah riser, garis kuning batas)", bg=PANEL, fg=INK,
                  highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
         alat_f = tk.Frame(edit_i, bg=PANEL); alat_f.pack(fill="x", pady=(4, 0))
-        baris_alat = tk.Frame(alat_f, bg=PANEL); baris_alat.pack(fill="x")
-        for nilai, teks in (("normal", "✏ Titik"), ("geser", "✋ Geser (G)"), ("blok", "▭ Blok (X)"),
-                            ("potong", "✂ Pita (C)"), ("penghalang", "⬠ Halang (V)")):
-            tk.Radiobutton(baris_alat, text=teks, variable=self.alat_label, value=nilai, indicatoron=False,
-                           command=lambda: self.pilih_alat(self.alat_label.get(), dari_tombol=True),
-                           bg="#FFF9F4", selectcolor="#E8DDD5", activebackground="#E8DDD5", fg=INK,
-                           relief="flat", pady=5, font=("Segoe UI", 8)).pack(side="left", expand=True, fill="x", padx=1)
         zoom_f = tk.Frame(alat_f, bg=PANEL); zoom_f.pack(fill="x", pady=(2, 0))
         for teks, perintah in (("🔍−  ( - )", lambda: self.zoom_tombol(1 / 1.25)),
                                ("🔍+  ( + )", lambda: self.zoom_tombol(1.25)),
@@ -3355,11 +3393,9 @@ class Studio(tk.Tk):
                                   "Shift+tarik pilih titik • Ctrl+C nama frame • Ctrl+Shift+C jalur lengkap",
                  bg=PANEL, fg=MUTED, wraplength=300, justify="left").pack(anchor="w", pady=(4, 2))
         self.tombol(otomatis_i, "Bangun folder dataset YOLO", self.bangun_yolo, GREEN).pack(fill="x", pady=(4, 2))
-        edit = tk.Frame(edit_i, bg=PANEL); edit.pack(fill="x", pady=(4, 0))
-        self.tombol_ringkas(edit, "+ Mask", self.mulai_mask_baru, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        self.tombol_ringkas(edit, "+ Titik", self.mulai_tambah_titik, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=2)
-        self.tombol_ringkas(edit, "Undo", self.kanvas.undo_riwayat, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=2)
-        self.tombol_ringkas(edit, "Redo", self.kanvas.redo_riwayat, "#E8DDD5", INK, width=58).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        for teks, perintah, lebar in (("Redo", self.kanvas.redo_riwayat, 50), ("Undo", self.kanvas.undo_riwayat, 50),
+                                      ("+ Titik", self.mulai_tambah_titik, 54), ("+ Mask", self.mulai_mask_baru, 54)):
+            self.tombol_ringkas(bilah_salin, teks, perintah, "#E8DDD5", INK, width=lebar).pack(side="right", padx=(3, 0))
         nomor = tk.Frame(edit_i, bg=PANEL); nomor.pack(fill="x", pady=(4, 0))
         tk.Label(nomor, text="Mask yang diedit", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
         self.spin_nomor_mask = tk.Spinbox(nomor, from_=1, to=999, textvariable=self.nomor_mask, width=5,
@@ -3397,16 +3433,32 @@ class Studio(tk.Tk):
     def _mulai_kamera_async(self):
         threading.Thread(target=self._mulai_kamera, daemon=True).start()
 
-    def ubah_kelas_mask(self, ke: str):
-        """Pindahkan mask aktif ke kelas lain tanpa menggambar ulang.
+    def tukar_warna_mask(self, nama: str, indeks: int):
+        """Merah jadi biru atau sebaliknya untuk satu mask tertentu."""
+        ke = "acuan" if nama == "objek" else "objek"
+        self.kanvas.pindah_kelas(nama, indeks, ke)
+        self._selesai_pindah_kelas(nama, ke)
 
-        Dipakai ketika kelasnya yang salah, bukan bentuknya: misalnya bordes
-        yang telanjur dilabeli tapakan.
-        """
+    def tukar_di_kursor(self):
+        """T: tukar mask di bawah kursor; tanpa mask di sana, alat Tukar menunggu klik."""
+        k = self.kanvas
+        x, y = k.winfo_pointerx() - k.winfo_rootx(), k.winfo_pointery() - k.winfo_rooty()
+        kena = k.mask_di(x, y) if 0 <= x < k.winfo_width() and 0 <= y < k.winfo_height() else None
+        if kena is None:
+            return self.pilih_alat("tukar")
+        self.tukar_warna_mask(*kena)
+        return "break"
+
+    def ubah_kelas_mask(self, ke: str):
+        """Shift+A/S: pindahkan mask aktif ke kelas yang disebut."""
         dari = self.kanvas.ubah_kelas_aktif(ke)
         if dari is None:
             self.status.set("Pilih dulu mask yang mau diubah kelasnya, dengan mengklik salah satu titiknya.")
             return "break"
+        self._selesai_pindah_kelas(dari, ke)
+        return "break"
+
+    def _selesai_pindah_kelas(self, dari: str, ke: str) -> None:
         nama = {"objek": "merah", "acuan": "biru"}
         self.mode_label.set(ke)
         self._mode_label_dipilih = True
@@ -3417,7 +3469,7 @@ class Studio(tk.Tk):
         self.simpan_draft_label()
         self.kanvas.focus_set()
         self.status.set(f"Mask dipindah dari {nama[dari]} ke {nama[ke]}. Ctrl+Z membatalkan.")
-        return "break"
+        self._tahan_status = True
 
     def zoom_tombol(self, faktor: float):
         self.kanvas.zoom_tengah(faktor)
@@ -3449,6 +3501,7 @@ class Studio(tk.Tk):
                            "Enter / klik ganda = potong semua mask di dalamnya, Esc batal."),
             "potong": (f"Alat PITA aktif: tarik garis di sepanjang tiang (lebar {self.kanvas.lebar_potong:.0f} px, "
                        f"[ ] mengubah). Pita jadi garis kuning yang bisa dirapikan, lalu Enter untuk memotong."),
+            "tukar": "Alat TUKAR aktif: klik mask yang salah warna, merah jadi biru atau sebaliknya. T atau Esc kembali ke titik.",
             "normal": "Alat titik aktif: klik menambah titik, tarik memindahkannya.",
         }[self.kanvas.alat])
         return "break"
@@ -4637,8 +4690,8 @@ class Studio(tk.Tk):
         peta = KELAS_MODE.get(kategori, KELAS_MODE["tangga_naik"])
         objek, acuan = peta["objek"], peta["acuan"]
         if hasattr(self, "rb_objek"):
-            self.rb_objek.configure(text=f"Mask {objek.replace('_', ' ')}  (MERAH)")
-            self.rb_acuan.configure(text=f"Mask {acuan.replace('_', ' ')} / bidang acuan  (BIRU)")
+            self.rb_objek.configure(text=f"Merah: {objek.replace('_', ' ')}")
+            self.rb_acuan.configure(text=f"Biru: {acuan.replace('_', ' ')}")
 
     def rentang(self):
         if not self.sesi: return (0, -1)
@@ -5310,8 +5363,9 @@ class Studio(tk.Tk):
         k.render(); k.on_change()
         selaras = ("mengikuti gerak kamera" if H is not None else
                    "di posisi yang sama (gerak kamera tidak terbaca)" if self.salin_selaras.get() else "di posisi yang sama")
-        self.ukur_status.set(f"Label {asal.name} disalin {selaras}: {len(hasil['objek'])} merah, {len(hasil['acuan'])} biru. "
-                             "Silakan ubah; Ctrl+Z membatalkan.")
+        self.status.set(f"Label {asal.name} disalin {selaras}: {len(hasil['objek'])} merah, {len(hasil['acuan'])} biru. "
+                        "Silakan ubah; Ctrl+Z membatalkan.")
+        self._tahan_status = True
         return True
 
     def salin_label_tetangga(self, arah: int):
@@ -5565,6 +5619,8 @@ class Studio(tk.Tk):
             return self.pilih_alat("penghalang")
         if not ctrl and event.keysym.lower() == "m":
             return self.gabung_mask()
+        if not ctrl and event.keysym.lower() == "t":
+            return self.tukar_di_kursor()
         if not ctrl and event.keysym.lower() == "b":
             self.bayangan_aktif.set(not self.bayangan_aktif.get())
             self.ganti_bayangan()
@@ -5598,7 +5654,8 @@ class Studio(tk.Tk):
 
     def teks_kontrol_label(self):
         alat = (" • G = geser • X = blok hapus • C = potong penghalang • Esc = titik • +/− = zoom • 0 = muat"
-                " • B = bayangan frame acuan • P/N = salin label dari frame sebelumnya/berikutnya")
+                " • T = tukar merah/biru mask di bawah kursor • B = bayangan frame acuan"
+                " • P/N = salin label dari frame sebelumnya/berikutnya")
         return (("A = merah • S = biru • Shift+A/S ubah kelas mask • "
                  "Space = berikutnya • D = sebelumnya • Ctrl+Z = Undo"
                  if self.kontrol_label.get() == "mudah" else
@@ -5876,7 +5933,10 @@ class Studio(tk.Tk):
                 self.perbarui_lencana_periksa()
                 if self._ada_poligon():
                     self.simpan_label(senyap=True)
-                self.status.set(f"Usulan disimpan sebagai belum diperiksa (Ctrl+Z membatalkan): {self.label_path.name}")
+                if self._tahan_status:
+                    self._tahan_status = False
+                else:
+                    self.status.set(f"Usulan disimpan sebagai belum diperiksa (Ctrl+Z membatalkan): {self.label_path.name}")
                 return
         # Menyunting poligon berarti manusia sudah memeriksanya. Penanda
         # otomatis karena itu dicabut sendiri, bukan menunggu tombol ditekan:
@@ -5910,7 +5970,10 @@ class Studio(tk.Tk):
         # Tanpa ini mask lama yang berisi tertinggal dan tetap dipakai pelatihan.
         if diperiksa or self._ada_poligon():
             self.simpan_label(senyap=True)
-        self.status.set(f"Draft mask otomatis disimpan: {self.label_path.name}")
+        if self._tahan_status:
+            self._tahan_status = False
+        else:
+            self.status.set(f"Draft mask otomatis disimpan: {self.label_path.name}")
 
     def _ada_poligon(self) -> bool:
         return any(len(poly) >= 3 for daftar in self.kanvas.poligon.values() for poly in daftar)
