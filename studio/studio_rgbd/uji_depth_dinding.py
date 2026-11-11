@@ -84,10 +84,12 @@ def baca_cm(teks: str) -> float | None:
 
 def peringatan_dinding(hasil: dict) -> str:
     """Teks peringatan bila bacaan langsung jelas bukan dinding tegak lurus di depan kamera."""
+    if hasil["sah"] < 0.5:
+        return f"DEPTH KOSONG ({hasil['sah'] * 100:.0f} % sah): terlalu dekat\n(< 30 cm), lensa tertutup, atau bukan dinding"
     if hasil["tengah_m"] == hasil["tengah_m"] and hasil["tengah_m"] < 0.3:
         return "TERLALU DEKAT / terhalang: titik tengah < 30 cm"
     if hasil["miring_deg"] > 10:
-        return "BELUM MENGHADAP DINDING: miring > 10 derajat"
+        return "BELUM LURUS KE DINDING: miring > 10 derajat\n(0 = lurus, bukan 90)"
     return ""
 
 
@@ -148,7 +150,8 @@ class JendelaUjiDepth(tk.Toplevel):
                     "2. Hadapkan kamera tegak lurus ke dinding datar; bagian tengah citra harus dinding saja.\n"
                     "3. Ukur jarak dari KACA DEPAN kamera ke dinding dengan meteran, tegak lurus dinding.\n"
                     "4. Isi jarak (cm), tekan Ukur. Ulangi pada ~0,5 / 1 / 1,5 / 2 / 2,5 / 3 m.\n"
-                    "Usahakan miring < 5 derajat. Setelah selesai tekan Salin hasil.")
+                    "Miring = sudut kamera dari tegak lurus dinding: 0 = lurus. Usahakan < 5 derajat.\n"
+                    "Tabel terisi setelah Ukur berhasil. Setelah selesai tekan Salin hasil.")
         tk.Label(kiri, text=petunjuk, bg=BG, fg=INK, justify="left", wraplength=330).pack(anchor="w")
         self.var_langsung = tk.StringVar(value="Kamera belum hidup.")
         tk.Label(kiri, textvariable=self.var_langsung, bg=PANEL, fg=INK, justify="left", font=("Consolas", 11),
@@ -178,7 +181,7 @@ class JendelaUjiDepth(tk.Toplevel):
                  wraplength=330).pack(anchor="w", pady=(6, 0))
 
         kolom = ("meteran", "depth", "selisih", "galat", "tengah", "miring", "rms", "sebaran")
-        judul = ("meteran cm", "depth bidang cm", "selisih cm", "galat %", "titik tengah cm", "miring °", "rms mm",
+        judul = ("meteran cm", "depth bidang cm", "selisih cm", "galat %", "titik tengah cm", "miring ° (0=lurus)", "rms mm",
                  "sebaran mm")
         self.tabel = ttk.Treeview(kanan, columns=kolom, show="headings", height=8)
         for k, j in zip(kolom, judul):
@@ -269,7 +272,7 @@ class JendelaUjiDepth(tk.Toplevel):
                 awas = peringatan_dinding(hasil)
                 self.var_langsung.set(f"depth bidang  {hasil['jarak_m'] * 100:7.1f} cm\n"
                                       f"titik tengah  {hasil['tengah_m'] * 100:7.1f} cm\n"
-                                      f"miring        {hasil['miring_deg']:7.1f} deg\n"
+                                      f"miring        {hasil['miring_deg']:7.1f} deg  (0 = lurus)\n"
                                       f"rms bidang    {hasil['rms_mm']:7.1f} mm   sah {hasil['sah'] * 100:3.0f} %"
                                       + (f"\n{awas}" if awas else ""))
         self.after(40 if self._kumpul is not None else 150, self._detak)
