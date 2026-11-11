@@ -85,12 +85,23 @@ def baca_cm(teks: str) -> float | None:
 def peringatan_dinding(hasil: dict) -> str:
     """Teks peringatan bila bacaan langsung jelas bukan dinding tegak lurus di depan kamera."""
     if hasil["sah"] < 0.5:
-        return f"DEPTH KOSONG ({hasil['sah'] * 100:.0f} % sah): terlalu dekat\n(< 30 cm), lensa tertutup, atau bukan dinding"
+        return (f"DEPTH KOSONG ({hasil['sah'] * 100:.0f} % sah):\nterlalu dekat (< 30 cm), lensa\n"
+                "tertutup, atau bukan dinding")
     if hasil["tengah_m"] == hasil["tengah_m"] and hasil["tengah_m"] < 0.3:
-        return "TERLALU DEKAT / terhalang: titik tengah < 30 cm"
+        return "TERLALU DEKAT / terhalang:\ntitik tengah < 30 cm"
     if hasil["miring_deg"] > 10:
-        return "BELUM LURUS KE DINDING: miring > 10 derajat\n(0 = lurus, bukan 90)"
+        return "BELUM LURUS KE DINDING:\nmiring > 10 derajat (0 = lurus)"
     return ""
+
+
+def pratinjau_depth(depth_m: np.ndarray, dekat: float = 0.3, jauh: float = 3.0) -> np.ndarray:
+    """Depth berwarna RGB dengan rentang tetap 0,3-3 m (biru dekat, merah jauh); tidak terbaca = hitam."""
+    import cv2
+    sah = (depth_m > 0.1) & np.isfinite(depth_m)
+    n = np.clip((depth_m - dekat) / (jauh - dekat), 0, 1)
+    rgb = cv2.applyColorMap((n * 255).astype(np.uint8), cv2.COLORMAP_TURBO)[:, :, ::-1].copy()
+    rgb[~sah] = 0
+    return rgb
 
 
 def perkiraan_k(baris: list[dict]) -> float | None:
@@ -131,13 +142,15 @@ class JendelaUjiDepth(tk.Toplevel):
         self.app = app
         self.title("Uji depth dinding (meteran)")
         self.configure(bg=BG)
-        self.geometry("980x640")
+        self.geometry("1120x760")
         self.baris: list[dict] = []
         self.info: dict = {"waktu": datetime.now().strftime("%Y-%m-%d %H:%M")}
         self.berkas = Path(app.root_data) / "uji_depth_dinding" / f"{datetime.now():%Y%m%d_%H%M%S}.json"
         self._kumpul: list[dict] | None = None
         self._nomor_akhir = -1
         self._mulai_kumpul = 0.0
+        self._foto = None
+        self._pratinjau_t = 0.0
         self._buat_ui()
         self.protocol("WM_DELETE_WINDOW", self.tutup)
         self.after(200, self._detak)
@@ -183,7 +196,12 @@ class JendelaUjiDepth(tk.Toplevel):
         kolom = ("meteran", "depth", "selisih", "galat", "tengah", "miring", "rms", "sebaran")
         judul = ("meteran cm", "depth bidang cm", "selisih cm", "galat %", "titik tengah cm", "miring ° (0=lurus)", "rms mm",
                  "sebaran mm")
-        self.tabel = ttk.Treeview(kanan, columns=kolom, show="headings", height=8)
+        tk.Label(kanan, text="Pratinjau: kiri kamera warna, kanan depth (hitam = tidak terbaca). "
+                 "Kotak putih = bagian yang diukur, harus berisi dinding saja.", bg=BG, fg=MUTED,
+                 justify="left", wraplength=640).pack(anchor="w")
+        self.label_pratinjau = tk.Label(kanan, bg=PANEL, text="Kamera belum hidup", fg=MUTED)
+        self.label_pratinjau.pack(anchor="w", pady=(4, 10))
+        self.tabel = ttk.Treeview(kanan, columns=kolom, show="headings", height=5)
         for k, j in zip(kolom, judul):
             self.tabel.heading(k, text=j)
             self.tabel.column(k, width=70, minwidth=50, anchor="e", stretch=True)
@@ -192,7 +210,7 @@ class JendelaUjiDepth(tk.Toplevel):
         tk.Label(kanan, textvariable=self.var_k, bg=BG, fg=INK, font=("Segoe UI", 11, "bold"),
                  justify="left").pack(anchor="w", pady=(8, 4))
         tk.Label(kanan, text="Teks untuk disalin (bisa juga dipilih manual):", bg=BG, fg=MUTED).pack(anchor="w")
-        self.teks = tk.Text(kanan, height=14, bg=PANEL, fg=INK, relief="flat", font=("Consolas", 9), wrap="none")
+        self.teks = tk.Text(kanan, height=8, bg=PANEL, fg=INK, relief="flat", font=("Consolas", 9), wrap="none")
         self.teks.pack(fill="both", expand=True)
 
     # ---------------- kamera ----------------
@@ -218,6 +236,7 @@ class JendelaUjiDepth(tk.Toplevel):
         if nomor == self._nomor_akhir:
             return None
         self._nomor_akhir = nomor
+        self._fs_akhir = fs
         skala = float(cam.profile.get_device().first_depth_sensor().get_depth_scale())
         intr = depth.profile.as_video_stream_profile().intrinsics
         m = np.asanyarray(depth.get_data()).astype(np.float32) * skala
@@ -246,6 +265,9 @@ class JendelaUjiDepth(tk.Toplevel):
         if cam is None:
             self.var_langsung.set("Kamera mati. Tekan Nyalakan kamera\n(tab Rekam harus terbuka, tidak sedang rekam).")
             self.btn_kamera.configure(state="normal")
+            if self._foto is not None:
+                self._foto = None
+                self.label_pratinjau.configure(image="", text="Kamera belum hidup")
             if self._kumpul is not None:
                 self._kumpul = None
                 self.btn_ukur.configure(state="normal", text=f"Ukur ({N_FRAME} frame)")
@@ -256,6 +278,9 @@ class JendelaUjiDepth(tk.Toplevel):
         if f is not None:
             m, intr, _ = f
             hasil = ukur_bidang_dinding(m, intr.fx, intr.fy, intr.ppx, intr.ppy)
+            if time.monotonic() - self._pratinjau_t > 0.15:
+                self._pratinjau_t = time.monotonic()
+                self._tampilkan_pratinjau(m, hasil)
             if self._kumpul is not None:
                 if hasil is not None and not peringatan_dinding(hasil):
                     self._kumpul.append(hasil)
@@ -272,10 +297,54 @@ class JendelaUjiDepth(tk.Toplevel):
                 awas = peringatan_dinding(hasil)
                 self.var_langsung.set(f"depth bidang  {hasil['jarak_m'] * 100:7.1f} cm\n"
                                       f"titik tengah  {hasil['tengah_m'] * 100:7.1f} cm\n"
-                                      f"miring        {hasil['miring_deg']:7.1f} deg  (0 = lurus)\n"
+                                      f"miring        {hasil['miring_deg']:7.1f} ° (0=lurus)\n"
                                       f"rms bidang    {hasil['rms_mm']:7.1f} mm   sah {hasil['sah'] * 100:3.0f} %"
                                       + (f"\n{awas}" if awas else ""))
         self.after(40 if self._kumpul is not None else 150, self._detak)
+
+    def _tampilkan_pratinjau(self, depth_m: np.ndarray, hasil: dict | None) -> None:
+        """Warna + depth berdampingan dengan kotak bagian tengah yang dipakai untuk bidang."""
+        try:
+            import cv2
+            from PIL import Image, ImageTk
+            dep = pratinjau_depth(depth_m)
+            warna = None
+            fs = getattr(self, "_fs_akhir", None)
+            c = fs.get_color_frame() if fs is not None else None
+            if c:
+                import pyrealsense2 as rs
+                a = np.asanyarray(c.get_data())
+                fmt = c.get_profile().format()
+                if a.ndim == 3 and fmt == rs.format.rgb8:
+                    warna = a.copy()
+                elif a.ndim == 3 and fmt == rs.format.bgr8:
+                    warna = a[:, :, ::-1].copy()
+            daftar = ([warna] if warna is not None else []) + [dep]
+            lebar = max(300, self.label_pratinjau.master.winfo_width() - 12)
+            tinggi = int(min(480, (lebar - 6 * len(daftar)) / sum(x.shape[1] / x.shape[0] for x in daftar)))
+            gambar = []
+            for im in daftar:
+                h, w = im.shape[:2]
+                im = cv2.resize(im, (int(w * tinggi / h), tinggi), interpolation=cv2.INTER_AREA)
+                h, w = im.shape[:2]
+                y0, y1 = int(h * (1 - PORSI_TENGAH) / 2), int(h * (1 + PORSI_TENGAH) / 2)
+                x0, x1 = int(w * (1 - PORSI_TENGAH) / 2), int(w * (1 + PORSI_TENGAH) / 2)
+                cv2.rectangle(im, (x0, y0), (x1, y1), (255, 255, 255), 2)
+                gambar.append(im)
+            gab = np.concatenate([np.concatenate([g, np.full((tinggi, 6, 3), 30, np.uint8)], 1) for g in gambar], 1)[:, :-6]
+            awas = peringatan_dinding(hasil) if hasil is not None else "BIDANG TIDAK TERPASANG"
+            if awas:
+                cv2.rectangle(gab, (0, 0), (gab.shape[1], 30), (166, 69, 47), -1)
+                cv2.putText(gab, awas.replace("\n", " ")[:90], (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1,
+                            cv2.LINE_AA)
+            im = Image.fromarray(np.ascontiguousarray(gab))
+            if self._foto is None or self._foto.width() != im.width or self._foto.height() != im.height:
+                self._foto = ImageTk.PhotoImage(im)
+                self.label_pratinjau.configure(image=self._foto, text="")
+            else:
+                self._foto.paste(im)
+        except Exception as e:                                  # noqa: BLE001
+            self.label_pratinjau.configure(text=f"Pratinjau gagal: {e}")
 
     # ---------------- ukur ----------------
     def ukur(self) -> None:
