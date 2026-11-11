@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 import tkinter as tk
 from datetime import datetime
@@ -73,6 +74,21 @@ def ukur_bidang_dinding(depth_m: np.ndarray, fx: float, fy: float, cx: float, cy
     return {"jarak_m": jarak, "miring_deg": math.degrees(math.acos(min(1.0, abs(float(n[2]))))),
             "rms_mm": rms * 1000, "sah": rasio, "inlier": float(pakai.mean()),
             "tengah_m": float(np.median(tengah)) if tengah.size else float("nan")}
+
+
+def baca_cm(teks: str) -> float | None:
+    """Angka pertama pada isian ("100", "100,5", "100 cm"), atau None."""
+    cocok = re.search(r"\d+(?:[.,]\d+)?", teks or "")
+    return float(cocok.group().replace(",", ".")) if cocok else None
+
+
+def peringatan_dinding(hasil: dict) -> str:
+    """Teks peringatan bila bacaan langsung jelas bukan dinding tegak lurus di depan kamera."""
+    if hasil["tengah_m"] == hasil["tengah_m"] and hasil["tengah_m"] < 0.3:
+        return "TERLALU DEKAT / terhalang: titik tengah < 30 cm"
+    if hasil["miring_deg"] > 10:
+        return "BELUM MENGHADAP DINDING: miring > 10 derajat"
+    return ""
 
 
 def perkiraan_k(baris: list[dict]) -> float | None:
@@ -141,11 +157,15 @@ class JendelaUjiDepth(tk.Toplevel):
                                     relief="flat")
         self.btn_kamera.pack(anchor="w", fill="x")
         baris = tk.Frame(kiri, bg=BG); baris.pack(anchor="w", pady=(14, 4), fill="x")
-        tk.Label(baris, text="Jarak meteran (cm)", bg=BG, fg=MUTED).pack(side="left")
+        tk.Label(baris, text="Jarak meteran (cm)", bg=BG, fg=INK, font=("Segoe UI", 11, "bold")).pack(side="left")
         self.var_meteran = tk.StringVar()
-        isian = tk.Entry(baris, textvariable=self.var_meteran, width=10, bg="#FFF9F4", fg=INK, relief="flat")
-        isian.pack(side="left", padx=8)
-        isian.bind("<Return>", lambda _e: self.ukur())
+        # Garis oranye tebal: pada tema gelap isian berlatar hampir sama dengan jendela dan tak terlihat.
+        self.isian = tk.Entry(baris, textvariable=self.var_meteran, width=10, bg="#FFF9F4", fg=INK, relief="flat",
+                              font=("Consolas", 14), highlightthickness=3, highlightbackground=ACCENT,
+                              highlightcolor=ACCENT, insertwidth=3)
+        self.isian.pack(side="left", padx=8, ipady=4)
+        self.isian.bind("<Return>", lambda _e: self.ukur())
+        self.after(300, self.isian.focus_set)
         self.btn_ukur = tk.Button(kiri, text=f"Ukur ({N_FRAME} frame)", command=self.ukur, bg=ACCENT, fg="white",
                                   relief="flat")
         self.btn_ukur.pack(anchor="w", fill="x", pady=(4, 4))
@@ -234,34 +254,39 @@ class JendelaUjiDepth(tk.Toplevel):
             m, intr, _ = f
             hasil = ukur_bidang_dinding(m, intr.fx, intr.fy, intr.ppx, intr.ppy)
             if self._kumpul is not None:
-                if hasil is not None:
+                if hasil is not None and not peringatan_dinding(hasil):
                     self._kumpul.append(hasil)
                 if len(self._kumpul) >= N_FRAME:
                     self._selesai_kumpul(cam, intr)
                 elif time.monotonic() - self._mulai_kumpul > 8:
-                    self.var_status.set("Gagal: depth dinding tidak cukup (terlalu dekat/jauh atau bukan dinding?).")
+                    self.var_status.set("Gagal: dinding tidak terbaca 8 detik. Lihat kotak bacaan di atas: kamera harus "
+                                        "menghadap dinding (miring < 10 derajat) dan berjarak >= 30 cm.")
                     self._kumpul = None
                     self.btn_ukur.configure(state="normal", text=f"Ukur ({N_FRAME} frame)")
             if hasil is None:
                 self.var_langsung.set("Bidang tidak terpasang:\nbagian tengah citra bukan dinding datar?")
             else:
+                awas = peringatan_dinding(hasil)
                 self.var_langsung.set(f"depth bidang  {hasil['jarak_m'] * 100:7.1f} cm\n"
                                       f"titik tengah  {hasil['tengah_m'] * 100:7.1f} cm\n"
                                       f"miring        {hasil['miring_deg']:7.1f} deg\n"
-                                      f"rms bidang    {hasil['rms_mm']:7.1f} mm   sah {hasil['sah'] * 100:3.0f} %")
+                                      f"rms bidang    {hasil['rms_mm']:7.1f} mm   sah {hasil['sah'] * 100:3.0f} %"
+                                      + (f"\n{awas}" if awas else ""))
         self.after(40 if self._kumpul is not None else 150, self._detak)
 
     # ---------------- ukur ----------------
     def ukur(self) -> None:
         if self._kumpul is not None:
             return
-        try:
-            meteran = float(self.var_meteran.get().replace(",", "."))
-        except ValueError:
-            self.var_status.set("Isi jarak meteran dalam cm, mis. 150 atau 150,5.")
+        meteran = baca_cm(self.var_meteran.get())
+        if meteran is None:
+            self.var_status.set("Ketik dulu jarak meteran di kotak oranye \"Jarak meteran (cm)\", "
+                                "mis. 100 atau 100,5, lalu tekan Ukur (atau Enter).")
+            self.isian.focus_set()
             return
         if not 20 <= meteran <= 600:
-            self.var_status.set("Jarak meteran di luar 20-600 cm.")
+            self.var_status.set(f"Jarak {meteran:g} cm di luar 20-600 cm. Isi dalam cm (1 m = 100).")
+            self.isian.focus_set()
             return
         if self._kamera() is None:
             self.var_status.set("Kamera belum hidup.")
