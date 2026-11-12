@@ -16,6 +16,7 @@ Jalankan dari folder ``kode``:
 from __future__ import annotations
 
 import argparse
+import collections
 import csv
 import math
 import json
@@ -65,6 +66,7 @@ if __package__:
     from .hitung_data import JendelaJumlahData, status_label
     from .ui_bantu import kolom_gulir
     from . import visual_depth, ir_selaras, sinkron, tema
+    from . import sudut_kamera
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from .segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
                                          model_siap as model_convnext_siap, peta_kelas as peta_kelas_convnext,
@@ -78,6 +80,7 @@ else:
     from studio_rgbd.pengukuran_objek import ukur
     from studio_rgbd.segmentasi_otomatis import usulkan as usulkan_segmentasi
     from studio_rgbd import catatan_rekaman as CR
+    from studio_rgbd import sudut_kamera
     from studio_rgbd import salin_label, skala_ui
     from studio_rgbd.atribut_tangga import AtributTangga
     from studio_rgbd import tempat_sampah as TS
@@ -3834,6 +3837,29 @@ class Studio(tk.Tk):
         if abs(w - self._preview_w) > 24:
             self._preview_w = w
 
+    def _perbarui_sudut(self, dep_kecil):
+        """Sudut tunduk kamera dari depth (sudut_kamera.py) tiap 0,2 s, dihaluskan median 5 bacaan.
+
+        Selama merekam setiap bacaan disimpan; ringkasannya ditulis ke session.json saat selesai."""
+        sekarang = time.monotonic()
+        if sekarang - getattr(self, "_sudut_t", 0.0) >= 0.2:
+            self._sudut_t = sekarang
+            i = self.preview_info
+            h = sudut_kamera.sudut_tunduk(dep_kecil, i["fx"] / 2, i["fy"] / 2, i["cx"] / 2, i["cy"] / 2)
+            riwayat = self.__dict__.setdefault("_sudut_riwayat", collections.deque(maxlen=5))
+            if h is None:
+                riwayat.clear()
+            else:
+                riwayat.append(h)
+                if self.sedang_rekam:
+                    self.__dict__.setdefault("_sudut_rekam", []).append((time.time(), h["tunduk"], h["samping"]))
+            if riwayat:
+                self._sudut_teks = sudut_kamera.teks({k: float(np.median([r[k] for r in riwayat]))
+                                                      for k in ("tunduk", "samping", "porsi")})
+            else:
+                self._sudut_teks = sudut_kamera.teks(None)
+        return getattr(self, "_sudut_teks", sudut_kamera.teks(None))
+
     def _render_sekali(self):
         _, cn, dn, ca, da = self.cam.ambil()
         rgb = np.asanyarray(ca.get_data())
@@ -3857,6 +3883,7 @@ class Studio(tk.Tk):
                          interpolation=cv2.INTER_AREA)
         self._silang(vis)
         self._pita(vis, f"Titik tengah {teks_jarak}   Depth sah {persen_sah:.0f}%")
+        self._pita(vis, self._perbarui_sudut(dep_kecil), di_bawah=True)
 
         dvis = np.zeros(dep_kecil.shape, dtype=np.uint8)
         lo = hi = None
@@ -3919,6 +3946,9 @@ class Studio(tk.Tk):
                 assert self.sesi
                 meta = baca_json(self.sesi / "source" / "session.json")
                 meta["selesai_iso"] = datetime.now().isoformat(timespec="milliseconds")
+                sudut = sudut_kamera.ringkas(getattr(self, "_sudut_rekam", []))
+                if sudut is not None:
+                    meta["sudut_kamera"] = sudut
                 meta["status"] = "selesai"; tulis_json(self.sesi / "source" / "session.json", meta)
                 self.sedang_rekam = False; self.btn_rekam.configure(text="● Mulai rekam", bg=RED)
                 self.preview_diminta = False
@@ -3936,6 +3966,7 @@ class Studio(tk.Tk):
         try:
             self.cam.hentikan()
             self.cam.mulai(sesi / "source" / nama_rekaman())
+            self._sudut_rekam = []
             self.cam.mulai_pompa(); self._mulai_render()
             self.preview_diminta = True
             self.preview_info = None
