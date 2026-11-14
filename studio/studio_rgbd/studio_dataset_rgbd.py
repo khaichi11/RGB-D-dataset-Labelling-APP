@@ -2735,13 +2735,21 @@ class Studio(tk.Tk):
         elif self.bag(p).stat().st_size < 1_000_000:
             tanda += "  ⚠(rusak/kosong)"
         cek = "✔ " if d.get("selesai") else ""
-        uji = "   🧪 DATA TEST" if self._set_split(p) == "test" else ""
+        uji = ""
+        if self._set_split(p) == "test":
+            # Lokasi + nomor tangga seperti di sheet Ukur Tangga, untuk mencocokkan meteran.
+            tid = d.get("tangga")
+            nama = (self._daftar_tangga().get(tid) or {}).get("nama", "") if tid else ""
+            uji = f"   🧪 DATA TEST · {nama}" if nama else "   🧪 DATA TEST · (lokasi belum diisi)"
+            tanda = tanda.replace(f"  🪜{tid}", "") if tid else tanda
         return f"{ikon}{cek}{p.name.replace('TANGGA_NAIK_', '')}{uji}{tanda}"
 
     def _warnai_item_sesi(self, i: int, p: Path) -> None:
         w = CR.WARNA.get(CR.warna_rekaman(self._catatan_cache(p), self._daftar_tangga()))
-        self.list_sesi.itemconfig(i, bg=w or "#FFF9F4", selectbackground=w or ACCENT_SOFT,
-                                  fg=WARNA_DATA_TEST if self._set_split(p) == "test" else INK)
+        uji = self._set_split(p) == "test"
+        # Latar pastel tangga tidak diubah tema gelap, jadi teksnya harus tetap gelap (warna di luar peta tema).
+        fg = ("#1F4E79" if uji else "#1A1A1A") if w else (WARNA_DATA_TEST if uji else INK)
+        self.list_sesi.itemconfig(i, bg=w or "#FFF9F4", selectbackground=w or ACCENT_SOFT, fg=fg, selectforeground=fg)
 
     # ---- data test: set rekaman pada split_dataset.json (satu sumber dengan tab 7. Split Dataset)
     def _pustaka_split(self):
@@ -2774,6 +2782,50 @@ class Studio(tk.Tk):
     def _set_split(self, p: Path) -> str | None:
         return self._data_split().get(Path(p).name)
 
+    def _dialog_lokasi_uji(self):
+        """Lokasi dan nomor tangga persis seperti di sheet Ukur Tangga. -> (lokasi, nomor), () = lewati, None = batal."""
+        daftar = self._daftar_tangga()
+        tid = CR.baca(self.sesi).get("tangga") if self.sesi else None
+        lokasi_awal, nomor_awal = "", 1
+        if tid and tid in daftar:
+            lokasi_awal = daftar[tid].get("lokasi", "")
+            m = re.search(r"Tangga\s+(\d+)\s*$", daftar[tid].get("nama", ""))
+            nomor_awal = int(m.group(1)) if m else 1
+        semua_lokasi = sorted({v.get("lokasi", "") for v in daftar.values() if v.get("lokasi")}, key=str.casefold)
+        hasil = {"nilai": None}
+        dlg = tk.Toplevel(self); dlg.title("Data test: lokasi"); dlg.configure(bg=PANEL)
+        dlg.transient(self); dlg.grab_set(); dlg.resizable(False, False)
+        tk.Label(dlg, text="Tulis persis seperti nama lokasi dan nomor tangga di sheet Ukur Tangga,\n"
+                           "supaya ukuran meterannya bisa dicocokkan.", bg=PANEL, fg=MUTED, justify="left"
+                 ).grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 8))
+        tk.Label(dlg, text="Lokasi", bg=PANEL, fg=INK).grid(row=1, column=0, sticky="w", padx=14, pady=4)
+        pilih = ttk.Combobox(dlg, values=semua_lokasi, width=34)
+        pilih.set(lokasi_awal); pilih.grid(row=1, column=1, sticky="ew", padx=(0, 14), pady=4)
+        tk.Label(dlg, text="Tangga ke-", bg=PANEL, fg=INK).grid(row=2, column=0, sticky="w", padx=14, pady=4)
+        nomor = tk.Spinbox(dlg, from_=1, to=99, width=6, bg="#FFF9F4", fg=INK, relief="flat")
+        nomor.delete(0, "end"); nomor.insert(0, str(nomor_awal)); nomor.grid(row=2, column=1, sticky="w", pady=4)
+        tombol = tk.Frame(dlg, bg=PANEL); tombol.grid(row=3, column=0, columnspan=2, sticky="e", padx=14, pady=(10, 12))
+
+        def simpan(_e=None):
+            lok = " ".join(pilih.get().split())
+            if not lok:
+                messagebox.showinfo("Lokasi kosong", "Isi lokasi, atau tekan Lewati.", parent=dlg); return
+            try:
+                n = int(nomor.get())
+            except ValueError:
+                messagebox.showinfo("Nomor tangga", "Nomor tangga harus angka.", parent=dlg); return
+            hasil["nilai"] = (lok, n); dlg.destroy()
+
+        def lewati():
+            hasil["nilai"] = (); dlg.destroy()
+        self.tombol_ringkas(tombol, "Simpan", simpan, WARNA_DATA_TEST, "white", width=90).pack(side="right")
+        self.tombol_ringkas(tombol, "Lewati", lewati, "#E8DDD5", INK, width=80).pack(side="right", padx=4)
+        self.tombol_ringkas(tombol, "Batal", dlg.destroy, "#E8DDD5", INK, width=70).pack(side="right")
+        dlg.bind("<Return>", simpan); dlg.bind("<Escape>", lambda _e: dlg.destroy())
+        pilih.focus_set()
+        self.wait_window(dlg)
+        return hasil["nilai"]
+
     def toggle_data_test(self):
         """Tandai/lepas rekaman terpilih sebagai DATA TEST (tidak boleh dipakai melatih atau menyetel)."""
         if not self.sesi:
@@ -2791,9 +2843,19 @@ class Studio(tk.Tk):
             data["rekaman"].pop(nama, None)
             pesan = f"{nama}: tanda DATA TEST dilepas (set rekaman kini kosong)."
         else:
+            pilihan = self._dialog_lokasi_uji()
+            if pilihan is None:
+                return                              # batal
             data["rekaman"][nama] = "test"
             pesan = (f"{nama}: ditandai DATA TEST" + (f" (sebelumnya {lama.upper()})" if lama else "")
                      + ". Rekaman ini tidak dipakai melatih model.")
+            if pilihan:
+                lokasi, nomor = pilihan
+                tid, _baru = CR.tangga_dari_nama(self.root_data, f"{lokasi} · Tangga {nomor}", lokasi)
+                self._simpan_catatan_sekarang()
+                d = CR.baca(self.sesi); d["tangga"] = tid; CR.tulis(self.sesi, d)
+                self._muat_catatan_ui()
+                pesan += f" Lokasi: {lokasi} · Tangga {nomor} ({tid})."
         try:
             if panel is not None:
                 panel._simpan()                     # tab 7 menghitung ulang saat dibuka (ganti_tab)
