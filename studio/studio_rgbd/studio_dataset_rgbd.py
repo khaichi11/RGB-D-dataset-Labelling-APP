@@ -103,7 +103,7 @@ ACCENT_SOFT = "#E9D8CC"
 GREEN = "#6B8B63"
 BLUE = "#407EA3"
 RED = "#AA5A55"
-WARNA_DATA_TEST = "#1F5F8B"          # teks rekaman bertanda DATA TEST di daftar rekaman
+WARNA_DATA_TEST = "#407EA3"          # warna TEST tab Split; tema gelap memetakannya ke biru muda
 KATEGORI = ("batu", "tangga_naik", "ramp_naik")
 # Dua cara mengukur. Yang pertama adalah metode yang dipakai skripsi: RANSAC
 # memasang bidang acuan, tinggi = persentil-95 jarak tegak lurus titik objek
@@ -2541,7 +2541,7 @@ class Studio(tk.Tk):
         self.tombol_ringkas(baris, "Hapus preview", self.hapus_preview_permanen, "#F3D8D4", INK, width=110).pack(side="left", expand=True, fill="x")
         self.tombol_ringkas(baris, "Hapus rekaman", self.hapus_sesi_permanen, RED, width=110).pack(side="left", expand=True, fill="x", padx=(3, 0))
         # Tandai rekaman sebagai data uji (split_dataset.json, sama dengan set TEST di tab 7. Split Dataset).
-        self.tombol_ringkas(i, "🧪 Data test: tandai / lepas", self.toggle_data_test, "#D6E6F0", INK,
+        self.tombol_ringkas(i, "🧪 Data test: tandai / lepas", self.toggle_data_test, WARNA_DATA_TEST, "white",
                             width=220).pack(fill="x", pady=(3, 0))
         self.tombol_ringkas(i, "♻ Tempat sampah Studio…", self.buka_tempat_sampah, "#E8DDD5", INK,
                             width=220).pack(fill="x", pady=(3, 0))
