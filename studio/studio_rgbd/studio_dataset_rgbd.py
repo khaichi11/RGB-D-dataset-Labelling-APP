@@ -103,6 +103,7 @@ ACCENT_SOFT = "#E9D8CC"
 GREEN = "#6B8B63"
 BLUE = "#407EA3"
 RED = "#AA5A55"
+WARNA_DATA_TEST = "#1F5F8B"          # teks rekaman bertanda DATA TEST di daftar rekaman
 KATEGORI = ("batu", "tangga_naik", "ramp_naik")
 # Dua cara mengukur. Yang pertama adalah metode yang dipakai skripsi: RANSAC
 # memasang bidang acuan, tinggi = persentil-95 jarak tegak lurus titik objek
@@ -2539,6 +2540,9 @@ class Studio(tk.Tk):
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(3, 0))
         self.tombol_ringkas(baris, "Hapus preview", self.hapus_preview_permanen, "#F3D8D4", INK, width=110).pack(side="left", expand=True, fill="x")
         self.tombol_ringkas(baris, "Hapus rekaman", self.hapus_sesi_permanen, RED, width=110).pack(side="left", expand=True, fill="x", padx=(3, 0))
+        # Tandai rekaman sebagai data uji (split_dataset.json, sama dengan set TEST di tab 7. Split Dataset).
+        self.tombol_ringkas(i, "🧪 Data test: tandai / lepas", self.toggle_data_test, "#D6E6F0", INK,
+                            width=220).pack(fill="x", pady=(3, 0))
         self.tombol_ringkas(i, "♻ Tempat sampah Studio…", self.buka_tempat_sampah, "#E8DDD5", INK,
                             width=220).pack(fill="x", pady=(3, 0))
         self.tombol_ringkas(i, "📊 Jumlah data berlabel", self.buka_jumlah_data, "#E8DDD5", INK,
@@ -2731,11 +2735,75 @@ class Studio(tk.Tk):
         elif self.bag(p).stat().st_size < 1_000_000:
             tanda += "  ⚠(rusak/kosong)"
         cek = "✔ " if d.get("selesai") else ""
-        return f"{ikon}{cek}{p.name.replace('TANGGA_NAIK_', '')}{tanda}"
+        uji = "   🧪 DATA TEST" if self._set_split(p) == "test" else ""
+        return f"{ikon}{cek}{p.name.replace('TANGGA_NAIK_', '')}{uji}{tanda}"
 
     def _warnai_item_sesi(self, i: int, p: Path) -> None:
         w = CR.WARNA.get(CR.warna_rekaman(self._catatan_cache(p), self._daftar_tangga()))
-        self.list_sesi.itemconfig(i, bg=w or "#FFF9F4", selectbackground=w or ACCENT_SOFT)
+        self.list_sesi.itemconfig(i, bg=w or "#FFF9F4", selectbackground=w or ACCENT_SOFT,
+                                  fg=WARNA_DATA_TEST if self._set_split(p) == "test" else INK)
+
+    # ---- data test: set rekaman pada split_dataset.json (satu sumber dengan tab 7. Split Dataset)
+    def _pustaka_split(self):
+        panel = getattr(self, "panel_split", None)
+        if panel is not None:
+            return panel.sd
+        try:
+            from .tab_split import _pustaka
+        except ImportError:
+            from tab_split import _pustaka
+        return _pustaka()[0]
+
+    def _data_split(self) -> dict:
+        """split_dataset.json, dibaca ulang hanya bila berkasnya berubah."""
+        f = self.root_data / "split_dataset.json"
+        try:
+            kunci = f.stat().st_mtime_ns
+        except OSError:
+            kunci = None
+        lama = getattr(self, "_cache_split", None)
+        if lama is None or lama[0] != kunci:
+            try:
+                data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+            except (OSError, ValueError):
+                data = {}
+            lama = (kunci, dict(data.get("rekaman") or {}))
+            self._cache_split = lama
+        return lama[1]
+
+    def _set_split(self, p: Path) -> str | None:
+        return self._data_split().get(Path(p).name)
+
+    def toggle_data_test(self):
+        """Tandai/lepas rekaman terpilih sebagai DATA TEST (tidak boleh dipakai melatih atau menyetel)."""
+        if not self.sesi:
+            messagebox.showinfo("Pilih rekaman", "Pilih rekaman dahulu.", parent=self); return
+        nama = self.sesi.name
+        panel = getattr(self, "panel_split", None)
+        if panel is not None:                       # tab Split memegang salinan di memori: ubah lewat dia
+            data = panel.data = panel.sd.baca(panel.berkas)
+        else:
+            sd = self._pustaka_split()
+            berkas = self.root_data / "split_dataset.json"
+            data = sd.baca(berkas)
+        lama = data["rekaman"].get(nama)
+        if lama == "test":
+            data["rekaman"].pop(nama, None)
+            pesan = f"{nama}: tanda DATA TEST dilepas (set rekaman kini kosong)."
+        else:
+            data["rekaman"][nama] = "test"
+            pesan = (f"{nama}: ditandai DATA TEST" + (f" (sebelumnya {lama.upper()})" if lama else "")
+                     + ". Rekaman ini tidak dipakai melatih model.")
+        try:
+            if panel is not None:
+                panel._simpan()                     # tab 7 menghitung ulang saat dibuka (ganti_tab)
+            else:
+                sd.tulis(berkas, data)
+        except Exception as e:                      # noqa: BLE001
+            messagebox.showerror("Data test", f"Gagal menyimpan split_dataset.json:\n{e}", parent=self); return
+        self._cache_split = None
+        self._segarkan_item_sesi(self.sesi)
+        self.status.set(pesan)
 
     def _daftar_tangga(self) -> dict:
         """tangga.json, dibaca ulang hanya bila berubah."""
