@@ -31,14 +31,14 @@ from PIL import Image, ImageTk
 try:
     from .segmentasi_convnext_depth import akar_aplikasi
     from . import catatan_rekaman as CR, qa_label, sinkron, unggah_hf
-    from .ui_bantu import kolom_gulir
+    from .ui_bantu import jadikan_modal, kolom_gulir
 except ImportError:
     from segmentasi_convnext_depth import akar_aplikasi
     import catatan_rekaman as CR
     import qa_label
     import sinkron
     import unggah_hf
-    from ui_bantu import kolom_gulir
+    from ui_bantu import jadikan_modal, kolom_gulir
 
 BG, PANEL, INK, MUTED = "#F3EEE7", "#FFFDFC", "#382D29", "#786962"      # sama dengan studio_dataset_rgbd
 ACCENT, ACCENT_SOFT, GREEN, BLUE = "#754C3B", "#E9D8CC", "#6B8B63", "#407EA3"
@@ -1425,7 +1425,7 @@ def masuk_hf(induk) -> bool:
     ikut Git. Cukup sekali per laptop.
     """
     dlg = tk.Toplevel(induk); dlg.title("Masuk Hugging Face"); dlg.configure(bg=PANEL)
-    dlg.transient(induk); dlg.grab_set(); dlg.resizable(False, False)
+    dlg.transient(induk); dlg.resizable(False, False)
     hasil = {"ok": False}
     tk.Label(dlg, bg=PANEL, fg=INK, justify="left", wraplength=440, text=(
         "Laptop ini belum masuk Hugging Face.\n\n"
@@ -1455,5 +1455,7 @@ def masuk_hf(induk) -> bool:
     baris = tk.Frame(dlg, bg=PANEL); baris.pack(fill="x", padx=16, pady=(6, 14))
     tk.Button(baris, text="Simpan & lanjut", command=simpan).pack(side="right")
     tk.Button(baris, text="Batal", command=dlg.destroy).pack(side="right", padx=6)
+    jadikan_modal(dlg, induk)
+    isian.focus_set()
     dlg.wait_window()
     return hasil["ok"]

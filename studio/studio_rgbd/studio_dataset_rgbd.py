@@ -64,7 +64,7 @@ if __package__:
     from .atribut_tangga import AtributTangga
     from . import tempat_sampah as TS
     from .hitung_data import JendelaJumlahData, status_label
-    from .ui_bantu import kolom_gulir
+    from .ui_bantu import jadikan_modal, kolom_gulir
     from . import visual_depth, ir_selaras, sinkron, tema
     from . import sudut_kamera
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
@@ -85,7 +85,7 @@ else:
     from studio_rgbd.atribut_tangga import AtributTangga
     from studio_rgbd import tempat_sampah as TS
     from studio_rgbd.hitung_data import JendelaJumlahData, status_label
-    from studio_rgbd.ui_bantu import kolom_gulir
+    from studio_rgbd.ui_bantu import jadikan_modal, kolom_gulir
     from studio_rgbd import visual_depth, ir_selaras, sinkron, tema
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
@@ -2794,15 +2794,16 @@ class Studio(tk.Tk):
         semua_lokasi = sorted({v.get("lokasi", "") for v in daftar.values() if v.get("lokasi")}, key=str.casefold)
         hasil = {"nilai": None}
         dlg = tk.Toplevel(self); dlg.title("Data test: lokasi"); dlg.configure(bg=PANEL)
-        dlg.transient(self); dlg.grab_set(); dlg.resizable(False, False)
+        dlg.transient(self); dlg.resizable(False, False)
         tk.Label(dlg, text="Tulis persis seperti nama lokasi dan nomor tangga di sheet Ukur Tangga,\n"
-                           "supaya ukuran meterannya bisa dicocokkan.", bg=PANEL, fg=MUTED, justify="left"
-                 ).grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 8))
-        tk.Label(dlg, text="Lokasi", bg=PANEL, fg=INK).grid(row=1, column=0, sticky="w", padx=14, pady=4)
-        pilih = ttk.Combobox(dlg, values=semua_lokasi, width=34)
+                           "supaya ukuran meterannya bisa dicocokkan.", bg=PANEL, fg=MUTED, justify="left",
+                 font=("Segoe UI", 10)).grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 8))
+        tk.Label(dlg, text="Lokasi", bg=PANEL, fg=INK, font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", padx=14, pady=4)
+        pilih = ttk.Combobox(dlg, values=semua_lokasi, width=34, font=("Segoe UI", 10))
         pilih.set(lokasi_awal); pilih.grid(row=1, column=1, sticky="ew", padx=(0, 14), pady=4)
-        tk.Label(dlg, text="Tangga ke-", bg=PANEL, fg=INK).grid(row=2, column=0, sticky="w", padx=14, pady=4)
-        nomor = tk.Spinbox(dlg, from_=1, to=99, width=6, bg="#FFF9F4", fg=INK, relief="flat")
+        tk.Label(dlg, text="Tangga ke-", bg=PANEL, fg=INK, font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", padx=14, pady=4)
+        nomor = tk.Spinbox(dlg, from_=1, to=99, width=6, bg="#FFF9F4", fg=INK, relief="flat", font=("Segoe UI", 10),
+                           buttonbackground="#E8DDD5", insertbackground=INK)
         nomor.delete(0, "end"); nomor.insert(0, str(nomor_awal)); nomor.grid(row=2, column=1, sticky="w", pady=4)
         tombol = tk.Frame(dlg, bg=PANEL); tombol.grid(row=3, column=0, columnspan=2, sticky="e", padx=14, pady=(10, 12))
 
@@ -2822,6 +2823,7 @@ class Studio(tk.Tk):
         self.tombol_ringkas(tombol, "Lewati", lewati, "#E8DDD5", INK, width=80).pack(side="right", padx=4)
         self.tombol_ringkas(tombol, "Batal", dlg.destroy, "#E8DDD5", INK, width=70).pack(side="right")
         dlg.bind("<Return>", simpan); dlg.bind("<Escape>", lambda _e: dlg.destroy())
+        jadikan_modal(dlg, self)
         pilih.focus_set()
         self.wait_window(dlg)
         return hasil["nilai"]
@@ -3049,7 +3051,7 @@ class Studio(tk.Tk):
         daftar = CR.baca_tangga(self.root_data)
         if not daftar:
             messagebox.showinfo("Belum ada tangga", "Buat tangga dahulu dengan tombol + Baru.", parent=self); return
-        dlg = tk.Toplevel(self); dlg.title("Tangga scene"); dlg.configure(bg=PANEL); dlg.transient(self); dlg.grab_set()
+        dlg = tk.Toplevel(self); dlg.title("Tangga scene"); dlg.configure(bg=PANEL); dlg.transient(self)
         tk.Label(dlg, text="Tangga untuk scene ini:", bg=PANEL, fg=INK).pack(padx=14, pady=(12, 4), anchor="w")
         pilih = ttk.Combobox(dlg, state="readonly", width=34,
                              values=["— ikut tangga rekaman —"] + [CR.label_tangga(k, daftar) for k in daftar])
@@ -3062,6 +3064,7 @@ class Studio(tk.Tk):
             dlg.destroy()
             self._ubah_catatan(lambda d: d["scene"][i].update(tangga=tid))
         tk.Button(dlg, text="Simpan", command=simpan).pack(pady=10)
+        jadikan_modal(dlg, self)
         dlg.wait_window()
 
     def atur_warna_sesi(self, warna: str | None) -> None:
