@@ -41,3 +41,26 @@ def kolom_gulir(induk, lebar: int, bg: str, **pack) -> tk.Frame:
     akar.bind_all("<Button-5>", lambda e: gulir(e, 3), add="+")
     akar.bind_all("<MouseWheel>", lambda e: gulir(e, -3 if e.delta > 0 else 3), add="+")
     return isi
+
+
+def jadikan_modal(dlg: tk.Toplevel, induk) -> None:
+    """Pusatkan dialog di atas induk, lalu kunci (grab) SETELAH dialog tampil.
+
+    Di Xwayland, grab_set() pada jendela yang belum tampil gagal ("grab failed: window not
+    viewable") dan dialog tertinggal kosong. Panggil sesudah semua isi dialog dibuat.
+    """
+    dlg.update_idletasks()
+    w, h = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+    try:
+        x = induk.winfo_rootx() + (induk.winfo_width() - w) // 2
+        y = induk.winfo_rooty() + (induk.winfo_height() - h) // 3
+        dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
+    except tk.TclError:
+        pass
+    try:
+        dlg.wait_visibility()
+        dlg.grab_set()
+    except tk.TclError:
+        pass
+    dlg.lift()
+    dlg.focus_force()
