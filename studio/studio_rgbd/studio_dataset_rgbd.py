@@ -2783,39 +2783,41 @@ class Studio(tk.Tk):
         return self._data_split().get(Path(p).name)
 
     def _dialog_lokasi_uji(self):
-        """Lokasi dan nomor tangga persis seperti di sheet Ukur Tangga. -> (lokasi, nomor), () = lewati, None = batal."""
+        """Lokasi persis seperti sheet Ukur Tangga, dan bagian tangga yang direkam.
+
+        -> (lokasi, nomor) dengan nomor None = seluruh tangga di lokasi itu (bawaan: satu rekaman biasanya
+        naik semua tangga sampai atas); () = lewati; None = batal.
+        """
         daftar = self._daftar_tangga()
         tid = CR.baca(self.sesi).get("tangga") if self.sesi else None
-        lokasi_awal, nomor_awal = "", 1
+        SEMUA = "Seluruh tangga (semua bagian)"
+        lokasi_awal, bagian_awal = "", SEMUA
         if tid and tid in daftar:
-            lokasi_awal = daftar[tid].get("lokasi", "")
+            lokasi_awal = daftar[tid].get("lokasi", "") or daftar[tid].get("nama", "")
             m = re.search(r"Tangga\s+(\d+)\s*$", daftar[tid].get("nama", ""))
-            nomor_awal = int(m.group(1)) if m else 1
+            bagian_awal = f"Tangga {m.group(1)} saja" if m else SEMUA
         semua_lokasi = sorted({v.get("lokasi", "") for v in daftar.values() if v.get("lokasi")}, key=str.casefold)
         hasil = {"nilai": None}
         dlg = tk.Toplevel(self); dlg.title("Data test: lokasi"); dlg.configure(bg=PANEL)
         dlg.transient(self); dlg.resizable(False, False)
-        tk.Label(dlg, text="Tulis persis seperti nama lokasi dan nomor tangga di sheet Ukur Tangga,\n"
+        tk.Label(dlg, text="Tulis lokasi persis seperti nama sheet di Ukur Tangga,\n"
                            "supaya ukuran meterannya bisa dicocokkan.", bg=PANEL, fg=MUTED, justify="left",
                  font=("Segoe UI", 10)).grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 8))
         tk.Label(dlg, text="Lokasi", bg=PANEL, fg=INK, font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", padx=14, pady=4)
         pilih = ttk.Combobox(dlg, values=semua_lokasi, width=34, font=("Segoe UI", 10))
         pilih.set(lokasi_awal); pilih.grid(row=1, column=1, sticky="ew", padx=(0, 14), pady=4)
-        tk.Label(dlg, text="Tangga ke-", bg=PANEL, fg=INK, font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", padx=14, pady=4)
-        nomor = tk.Spinbox(dlg, from_=1, to=99, width=6, bg="#FFF9F4", fg=INK, relief="flat", font=("Segoe UI", 10),
-                           buttonbackground="#E8DDD5", insertbackground=INK)
-        nomor.delete(0, "end"); nomor.insert(0, str(nomor_awal)); nomor.grid(row=2, column=1, sticky="w", pady=4)
+        tk.Label(dlg, text="Yang direkam", bg=PANEL, fg=INK, font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", padx=14, pady=4)
+        nomor = ttk.Combobox(dlg, state="readonly", width=30, font=("Segoe UI", 10),
+                             values=[SEMUA] + [f"Tangga {k} saja" for k in range(1, 11)])
+        nomor.set(bagian_awal); nomor.grid(row=2, column=1, sticky="w", pady=4)
         tombol = tk.Frame(dlg, bg=PANEL); tombol.grid(row=3, column=0, columnspan=2, sticky="e", padx=14, pady=(10, 12))
 
         def simpan(_e=None):
             lok = " ".join(pilih.get().split())
             if not lok:
                 messagebox.showinfo("Lokasi kosong", "Isi lokasi, atau tekan Lewati.", parent=dlg); return
-            try:
-                n = int(nomor.get())
-            except ValueError:
-                messagebox.showinfo("Nomor tangga", "Nomor tangga harus angka.", parent=dlg); return
-            hasil["nilai"] = (lok, n); dlg.destroy()
+            m = re.search(r"(\d+)", nomor.get())
+            hasil["nilai"] = (lok, int(m.group(1)) if m and nomor.get() != SEMUA else None); dlg.destroy()
 
         def lewati():
             hasil["nilai"] = (); dlg.destroy()
@@ -2853,11 +2855,12 @@ class Studio(tk.Tk):
                      + ". Rekaman ini tidak dipakai melatih model.")
             if pilihan:
                 lokasi, nomor = pilihan
-                tid, _baru = CR.tangga_dari_nama(self.root_data, f"{lokasi} · Tangga {nomor}", lokasi)
+                nama_tangga = lokasi if nomor is None else f"{lokasi} · Tangga {nomor}"
+                tid, _baru = CR.tangga_dari_nama(self.root_data, nama_tangga, lokasi)
                 self._simpan_catatan_sekarang()
                 d = CR.baca(self.sesi); d["tangga"] = tid; CR.tulis(self.sesi, d)
                 self._muat_catatan_ui()
-                pesan += f" Lokasi: {lokasi} · Tangga {nomor} ({tid})."
+                pesan += f" Lokasi: {nama_tangga} ({tid})."
         try:
             if panel is not None:
                 panel._simpan()                     # tab 7 menghitung ulang saat dibuka (ganti_tab)
