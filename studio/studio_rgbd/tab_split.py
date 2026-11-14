@@ -305,6 +305,8 @@ class TabSplit:
             self.induk.after(1000, self.muat_ulang)
             return
         self._sibuk = True
+        # Tanda DATA TEST bisa diubah dari daftar rekaman tab lain: baca ulang berkasnya.
+        self.data = self.sd.baca(self.berkas)
         self.ringkas.config(text="Membaca daftar frame…")
         hanya = self.hanya_diperiksa.get()
 
