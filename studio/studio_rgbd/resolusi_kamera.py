@@ -190,6 +190,31 @@ def _sensor_depth(rs):
         return None
 
 
+# A-factor (linearitas subpiksel) optimum per preset, Tabel 1 whitepaper Intel "Subpixel Linearity Improvement for
+# Intel RealSense Depth Camera D400" (FW >= 5.11.06.250, SDK >= 2.24). Firmware memakai A = 0 dan preset JSON resmi
+# High Accuracy tidak memuatnya, sehingga depth berosilasi terhadap pecahan disparitas (+/-1 % pada ~1 m untuk High
+# Accuracy menurut whitepaper; terukur +/-0,6 mm residu bidang pada rekaman 14 Nov,
+# model/bukti/final_d435/subpiksel_20261119/). Disetel SESUDAH visual_preset karena preset menimpa parameter lanjutan.
+A_FACTOR_PRESET = {"High Accuracy": 0.18, "High Density": 0.08, "Medium Density": 0.1, "Default": 0.08, "Hand": 0.08}
+
+
+def terapkan_a_factor(rs, dev, nama_preset: str | None) -> tuple[float | None, str]:
+    """Setel A-factor sesuai preset pada perangkat. -> (nilai terpasang atau None, keterangan)."""
+    nilai = next((v for k, v in A_FACTOR_PRESET.items() if nama_preset and k in nama_preset), None)
+    if nilai is None:
+        return None, f"preset {nama_preset!r} tanpa nilai A-factor"
+    try:
+        adv = rs.rs400_advanced_mode(dev)
+        if not adv.is_enabled():
+            return None, "advanced mode mati; A-factor tidak disetel"
+        a = adv.get_amp_factor()
+        a.a_factor = float(nilai)
+        adv.set_amp_factor(a)
+        return round(float(adv.get_amp_factor().a_factor), 4), "ok"
+    except Exception as e:                                      # noqa: BLE001
+        return None, f"gagal: {e}"
+
+
 def terapkan_preset(rs, mode: str) -> str:
     """Setel visual_preset SEBELUM aliran dinyalakan. -> nama preset terpakai."""
     if mode == "jangan":
