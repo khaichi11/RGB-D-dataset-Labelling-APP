@@ -158,6 +158,13 @@ class KameraRGBD:
         """A-factor sesuai preset terpakai (lihat resolusi_kamera.A_FACTOR_PRESET); dicatat di catatan pembukaan."""
         if self.profile is None:
             return
+        import os
+        if os.environ.get("STUDIO_A_FACTOR", "0") != "1":
+            # Bawaan mati (19 Nov 2026): data latih dan semua tangga uji direkam dengan A = 0; menyalakannya membuat
+            # rekaman baru berbeda kondisi. STUDIO_A_FACTOR=1 menyetel nilai rekomendasi Intel.
+            self.catatan_pembukaan["a_factor"] = None
+            self.catatan_pembukaan["a_factor_keterangan"] = "tidak disetel (bawaan kamera, STUDIO_A_FACTOR=1 untuk menyalakan)"
+            return
         from .resolusi_kamera import terapkan_a_factor
         nilai, ket = terapkan_a_factor(rs, self.profile.get_device(), self.preset_terpakai)
         self.catatan_pembukaan["a_factor"] = nilai
