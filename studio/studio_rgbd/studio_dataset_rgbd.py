@@ -4112,7 +4112,11 @@ class Studio(tk.Tk):
                 # nama sebenarnya, bukan tebakan: cam.mulai() boleh berganti
                 # ekstensi kalau librealsense menolak yang pertama.
                 "raw_bag": (self.cam.record_path or (sesi / "source" / nama_rekaman())).name,
-                "raw_tidak_boleh_diubah": True, "fps_native": self.args.fps})
+                "raw_tidak_boleh_diubah": True, "fps_native": self.args.fps,
+                # Parameter lanjutan (A-factor) tidak ikut tersimpan di raw.db3: dicatat di sini agar rekaman sebelum
+                # dan sesudah A-factor dapat dibedakan.
+                "pengaturan_kamera": {k: self.cam.catatan_pembukaan.get(k) for k in
+                                      ("preset_terpakai", "a_factor", "a_factor_keterangan", "infrared", "exposure_us")}})
             self.sesi = sesi; self.sedang_rekam = True
             self.btn_rekam.configure(text="■ Selesai rekaman", bg=ACCENT)
             self.btn_preview_kamera.configure(text="Preview aktif saat rekam", state="disabled")

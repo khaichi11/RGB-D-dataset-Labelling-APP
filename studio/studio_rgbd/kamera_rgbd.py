@@ -150,8 +150,20 @@ class KameraRGBD:
             raise
         self.catatan_pembukaan = catatan
         self.record_path = record_path
+        self._terapkan_a_factor()
         if self.exposure_us > 0:
             self._terapkan_exposure(self.exposure_us)
+
+    def _terapkan_a_factor(self) -> None:
+        """A-factor sesuai preset terpakai (lihat resolusi_kamera.A_FACTOR_PRESET); dicatat di catatan pembukaan."""
+        if self.profile is None:
+            return
+        from .resolusi_kamera import terapkan_a_factor
+        nilai, ket = terapkan_a_factor(rs, self.profile.get_device(), self.preset_terpakai)
+        self.catatan_pembukaan["a_factor"] = nilai
+        self.catatan_pembukaan["a_factor_keterangan"] = ket
+        if nilai is None:
+            print(f"  (A-factor: {ket})")
 
     def _terapkan_exposure(self, us: int) -> None:
         """Setel exposure RGB manual. Dipanggil setelah pipe.start()."""
@@ -292,6 +304,7 @@ class KameraRGBD:
                 ds.set_option(rs.option.visual_preset, i)
                 self.preset_terpakai = nama
                 self.catatan_pembukaan["preset_terpakai"] = nama
+                self._terapkan_a_factor()          # preset menimpa A-factor: setel ulang
                 return nama
         raise RuntimeError(f"Preset {nama!r} tidak ada pada perangkat ini.")
 
