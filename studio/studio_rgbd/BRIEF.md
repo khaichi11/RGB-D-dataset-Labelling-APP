@@ -26,6 +26,7 @@ sudah dipecahkan ada di tabel "Catatan integrasi dan jejak masalah"
 | Tab Uji tidak menampilkan kamera / "device busy" | `uji_realtime.py` (pesan di kanvas), rgbd_convnext `sumber.alir_kamera` (coba ulang 5x); tutup program lain yang memakai D435 |
 | Model yang dipakai salah / tidak muncul di daftar | `daftar_model.py`, `segmentasi_convnext_depth.pilih_bobot_usulan`; checkpoint `runs/` tidak masuk Git |
 | Usulan label buruk | `segmentasi_convnext_depth.py`; checklist di PANDUAN |
+| Depth berosilasi terhadap jarak (linearitas subpiksel) / A-factor rekaman | `resolusi_kamera.A_FACTOR_PRESET`, `terapkan_a_factor` (disetel sesudah preset di `kamera_rgbd._terapkan_a_factor`); nilai tercatat di `session.json` `pengaturan_kamera` (rekaman sebelum 19 Nov 2026: A = 0) |
 | Nomor/ukuran anak tangga di kartu Label | `panel_ukuran.py` -> rgbd_convnext `ukuran_sesi.py` ("Hitung nomor dari video") |
 | Isian meteran | `ukuran_meteran.py`, `pemutar_ukur.py`; data dari aplikasi Ukur Tangga diimpor ke sini |
 | Depth/jarak D435 diragukan (makin jauh makin meleset) | `uji_depth_dinding.py`: dinding datar vs meteran, hasil di `<akar data>/uji_depth_dinding/`; latar: `model/bukti/final_d435/galat_ukur_20261017/` |
