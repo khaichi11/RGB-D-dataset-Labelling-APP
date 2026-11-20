@@ -14,13 +14,17 @@ Aturan (lihat ``AturanKurasi``):
 - mirip: dibanding frame TERPILIH terakhir di rekaman yang sama, gambar abu-abu
   kecil berkorelasi >= ``min_korelasi`` DAN label riser/tread hampir sama
   (IoU >= ``min_iou_label``) -> dibuang;
-- buram: varians Laplacian < ``rasio_buram`` x median rekaman -> dibuang;
+- buram: varians Laplacian < ``rasio_buram`` x median rekaman -> dibuang. Sejak 20 Nov 2026 bawaan 0 (mati,
+  keputusan pemakai): getar kamera pinggang saat berjalan adalah kondisi nyata;
 - perlu dilihat (tetap dipilih, keputusan di tanganmu):
-  * model CV out-of-fold sangat berbeda dengan label (Dice < ``maks_dice_curiga``);
+  * model CV out-of-fold sangat berbeda dengan label (Dice < ``maks_dice_curiga``;
+    pada CV 20 Nov: kedua model, data baru dan lama);
   * berlabel tangga tetapi model CV hampir tidak melihat tangga, atau mask sangat
     kecil / ada potongan mask kecil terpisah -> mungkin terlabeli tak sengaja;
   * berlabel latar tetapi model CV melihat tangga cukup luas -> mungkin tangga
-    yang lupa dilabel.
+    yang lupa dilabel;
+  * depth hampir kosong (< ``min_depth_valid`` piksel sah): kamera tertutup, terlalu
+    dekat, atau ke langit -> frame hampir tanpa informasi depth.
 Frame gelap TIDAK dibuang: gelap adalah kondisi yang harus dikuasai model.
 """
 from __future__ import annotations
@@ -42,8 +46,9 @@ class AturanKurasi:
     min_korelasi_latar: float = 0.85      # dua frame latar (tanpa label) cukup mirip gambarnya saja
     min_terang_buram: float = 25.0        # frame lebih gelap dari ini tidak dinilai buram (gelap != buram)
     min_iou_label: float = 0.85
-    rasio_buram: float = 0.35
+    rasio_buram: float = 0.0              # 0 = buram tidak dibuang (pemakai 20 Nov 2026; dulu 0,35)
     maks_dice_curiga: float = 0.5
+    min_depth_valid: float = 0.4          # fraksi piksel depth sah; lebih kecil = "perlu dilihat"
     min_luas_mask: float = 1.0            # % citra; mask tangga lebih kecil dari ini dicurigai tak sengaja
     min_potongan: float = 0.15            # % citra; potongan mask terpisah sekecil ini dicurigai coretan
     maks_pred_kosong: float = 0.005       # model CV memprediksi < 0,5% citra = model tidak melihat tangga
@@ -133,6 +138,10 @@ def pilih_rekaman(frames: list[Path], fitur: dict, dice_cv: dict, aturan: Aturan
                 alasan.append(f"perlu dilihat: potongan mask kecil terpisah ({f['potongan_min']:.2f}%)")
         elif pred is not None and pred >= aturan.min_pred_latar:
             alasan.append(f"perlu dilihat: latar, model CV melihat tangga {100 * pred:.0f}% citra")
+        elif cv.get("latar_diberi_tangga"):
+            alasan.append("perlu dilihat: latar, model CV melihat tangga (kedua model CV 20 Nov)")
+        if f["depth_valid"] is not None and f["depth_valid"] < aturan.min_depth_valid:
+            alasan.append(f"perlu dilihat: depth hampir kosong ({100 * f['depth_valid']:.0f}% piksel sah)")
         if pilih:
             terakhir = d
         hasil[kunci(d)] = {"pilih": pilih, "alasan": alasan,
@@ -191,11 +200,30 @@ def kurasi(akar_data: Path, frames: list[Path], dice_cv: dict | None = None,
 
 
 def dice_cv_dari(berkas: Path) -> dict:
-    """Hasil CV out-of-fold per frame: Dice rerata riser/tread peta kelas dan luas tangga prediksi (fraksi)."""
+    """Hasil CV out-of-fold per frame: Dice rerata riser/tread peta kelas dan luas tangga prediksi (fraksi).
+
+    Dua format: CV 13 Okt (``{"cv": {"baru": [...]}}``, satu model, ada luas prediksi) dan CV 20 Nov
+    (``{"baru": [...], "lama": [...]}``, dua model tanpa luas prediksi). Pada format 20 Nov, Dice = Dice usulan
+    terbaik dari kedua model (curiga hanya bila keduanya < ambang) dan frame latar ditandai bila kedua model
+    memberi tangga.
+    """
     try:
-        d = json.loads(Path(berkas).read_text())["cv"]["baru"]
+        j = json.loads(Path(berkas).read_text())
+        d = j["cv"]["baru"] if "cv" in j else None
     except (OSError, ValueError, KeyError, TypeError):
         return {}
+    if d is None:
+        try:
+            lama = {(x["rekaman"], x["frame"]): x for x in j["lama"]}
+            keluar = {}
+            for x in j["baru"]:
+                y = lama[(x["rekaman"], x["frame"])]
+                db, dl = float(np.mean(x["usulan"][:2])), float(np.mean(y["usulan"][:2]))
+                keluar[f"{x['rekaman']}/{x['frame']}"] = (
+                    {"dice": max(db, dl)} if x.get("ada_tangga") else {"latar_diberi_tangga": db < 1 and dl < 1})
+            return keluar
+        except (KeyError, TypeError, ValueError):
+            return {}
     return {f"{x['rekaman']}/{x['frame']}": {"dice": float(np.mean(x["peta"])) if x.get("ada_tangga") else None,
                                              "luas_pred": float(x["usulan"][2]) if len(x.get("usulan", [])) > 2 else None}
             for x in d}

@@ -209,6 +209,7 @@ class TabSplit:
         cb.pack(side="left", padx=4); cb.bind("<<ComboboxSelected>>", lambda e: self._filter_berubah())
         st.tombol_ringkas(baris, "🔎 Periksa label", self.periksa_label, "#E8DDD5", INK, width=120).pack(side="right")
         st.tombol_ringkas(baris, "🧹 Kurasi…", self.buka_kurasi, "#E8DDD5", INK, width=90).pack(side="right", padx=(0, 4))
+        st.tombol_ringkas(baris, "📦 Versi data…", self.buka_versi, "#E8DDD5", INK, width=110).pack(side="right", padx=(0, 4))
         f2 = tk.Frame(i, bg=PANEL); f2.pack(fill="both", expand=True, pady=(4, 0))
         self.lb = tk.Listbox(f2, height=9, selectmode="extended", exportselection=False, activestyle="none",
                              bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT,
@@ -626,6 +627,17 @@ class TabSplit:
         if lama is not None and lama.winfo_exists():
             lama.lift(); return
         self._jendela_kurasi = JendelaKurasi(self.studio, lambda: [d for r in self.rekaman for d in self.frames.get(r, [])])
+
+    def buka_versi(self) -> None:
+        """Jendela versi data: potret dataset latih (v1, v2, ...) dan hasil CV tiap versi (jendela_versi.py)."""
+        try:
+            from .jendela_versi import JendelaVersi
+        except ImportError:
+            from jendela_versi import JendelaVersi
+        lama = getattr(self, "_jendela_versi", None)
+        if lama is not None and lama.winfo_exists():
+            lama.lift(); return
+        self._jendela_versi = JendelaVersi(self.studio)
 
     def _filter_berubah(self) -> None:
         sampah = self.filter_set.get() == "disampahkan"
