@@ -204,12 +204,14 @@ class TabSplit:
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x")
         tk.Label(baris, text="Tampilkan", bg=PANEL, fg=MUTED).pack(side="left")
         cb = ttk.Combobox(baris, textvariable=self.filter_set, state="readonly", width=10,
-                          values=("semua", "train", "val", "test", "abaikan", "belum", "perlu dicek",
+                          values=("semua", "train", "val", "test", "abaikan", "belum", "perlu dicek", "saran buang",
                                   "ada mask", "latar (tanpa mask)", "disampahkan"))
         cb.pack(side="left", padx=4); cb.bind("<<ComboboxSelected>>", lambda e: self._filter_berubah())
         st.tombol_ringkas(baris, "🔎 Periksa label", self.periksa_label, "#E8DDD5", INK, width=120).pack(side="right")
         st.tombol_ringkas(baris, "🧹 Kurasi…", self.buka_kurasi, "#E8DDD5", INK, width=90).pack(side="right", padx=(0, 4))
         st.tombol_ringkas(baris, "📦 Versi data…", self.buka_versi, "#E8DDD5", INK, width=110).pack(side="right", padx=(0, 4))
+        st.tombol_ringkas(baris, "🗑 Abaikan saran buang", self.abaikan_saran_buang, "#E8DDD5", INK,
+                          width=170).pack(side="right", padx=(0, 4))
         f2 = tk.Frame(i, bg=PANEL); f2.pack(fill="both", expand=True, pady=(4, 0))
         self.lb = tk.Listbox(f2, height=9, selectmode="extended", exportselection=False, activestyle="none",
                              bg="#FFF9F4", fg=INK, relief="flat", selectbackground=ACCENT_SOFT,
@@ -628,6 +630,38 @@ class TabSplit:
             lama.lift(); return
         self._jendela_kurasi = JendelaKurasi(self.studio, lambda: [d for r in self.rekaman for d in self.frames.get(r, [])])
 
+    def abaikan_saran_buang(self) -> None:
+        """Tandai abaikan semua frame bersaran "buang" dari pemeriksaan CV (qa_label.json, kolom ``saran``).
+
+        Saran datang dari model CV (kedua model hampir tidak cocok dengan label, atau depth hampir kosong); frame
+        yang labelnya sudah disunting sejak ditandai tidak ikut. Bisa dibatalkan: pilih frame lalu Backspace.
+        Sesudahnya ditawarkan menyimpan versi data baru.
+        """
+        calon = [d for r in self.rekaman for d in self.frames.get(r, [])
+                 if (self._qa(d) or {}).get("saran") == "buang" and self._set_frame(d) != "abaikan"]
+        if not calon:
+            messagebox.showinfo("Saran buang", "Tidak ada frame bersaran buang yang belum diabaikan."); return
+        per_rek = {}
+        for d in calon:
+            r = d.parent.parent.parent.name[-15:]
+            per_rek[r] = per_rek.get(r, 0) + 1
+        rinci = ", ".join(f"{r} {n}" for r, n in sorted(per_rek.items(), key=lambda x: -x[1])[:8])
+        if not messagebox.askyesno(
+                "Abaikan saran buang",
+                f"Tandai ABAIKAN {len(calon)} frame yang disarankan dibuang model?\n\n{rinci}\n\n"
+                "Frame tidak dihapus; hanya tidak dipakai latih. Lihat dulu lewat Tampilkan: saran buang. "
+                "Batalkan per frame dengan Backspace."):
+            return
+        for d in calon:
+            self.data["frame"][self.sd.kunci_frame(d)] = "abaikan"
+        self._simpan()
+        self._perbarui_tree()
+        self._isi_daftar(pertahankan=True)
+        self._perbarui_ringkas()
+        self.ringkas.config(text=f"{len(calon)} frame bersaran buang ditandai abaikan.")
+        if messagebox.askyesno("Versi data", "Simpan keadaan ini sebagai versi data baru sekarang?"):
+            self.buka_versi()
+
     def buka_versi(self) -> None:
         """Jendela versi data: potret dataset latih (v1, v2, ...) dan hasil CV tiap versi (jendela_versi.py)."""
         try:
@@ -705,7 +739,7 @@ class TabSplit:
             self.daftar = self._frame_sampah()
             dilihat = set(self.daftar)
         # "perlu dicek" tanpa pilihan rekaman = daftar periksa dari semua rekaman.
-        sumber = self.tree.selection() or (tuple(self.rekaman) if filt == "perlu dicek" else ())
+        sumber = self.tree.selection() or (tuple(self.rekaman) if filt in ("perlu dicek", "saran buang") else ())
         for iid in (() if filt == "disampahkan" else sumber):
             for d in self._frames_iid(iid):
                 if d in dilihat:
@@ -716,12 +750,15 @@ class TabSplit:
                     q = self._qa(d)
                     if q and q["alasan"]:
                         self.daftar.append(d)
+                elif filt == "saran buang":
+                    if (self._qa(d) or {}).get("saran") == "buang":
+                        self.daftar.append(d)
                 elif filt in ("ada mask", "latar (tanpa mask)"):
                     if (sum(self._poligon_label(d)) > 0) == (filt == "ada mask"):
                         self.daftar.append(d)
                 elif filt == "semua" or (filt == "belum" and s is None) or s == filt:
                     self.daftar.append(d)
-        if filt == "perlu dicek":
+        if filt in ("perlu dicek", "saran buang"):
             self.daftar.sort(key=lambda d: -self._qa(d)["skor"])
         pos = self.lb.yview()
         self.lb.delete(0, "end")
@@ -729,7 +766,7 @@ class TabSplit:
             s = self._set_frame(d)
             ciri = "*" if self.data["frame"].get(self.sd.kunci_frame(d)) else " "
             q = self._qa(d)
-            tanda = f" ⚠{q['skor']:.1f}" if q and q["alasan"] else ""
+            tanda = (f" ⚠{q['skor']:.1f}" + (" BUANG?" if q.get("saran") == "buang" else "")) if q and q["alasan"] else ""
             ada = sum(self._poligon_label(d)) > 0
             # ▣ = ada mask tangga, ∅ = latar (mask kosong): latar yang ternyata bertangga mudah terlihat.
             self.lb.insert("end", f"{LABEL_SET[s]:>7}{ciri} {'▣' if ada else '∅'} {d.parent.parent.parent.name[-6:]} "
@@ -1124,6 +1161,8 @@ class TabSplit:
                 ada = bool(frames)
             elif filt == "perlu dicek":
                 ada = any((self._qa(d) or {}).get("alasan") for d in frames)
+            elif filt == "saran buang":
+                ada = any((self._qa(d) or {}).get("saran") == "buang" for d in frames)
             else:
                 ada = any((self._set_frame(d) is None if filt == "belum" else self._set_frame(d) == filt) for d in frames)
             if ada:
