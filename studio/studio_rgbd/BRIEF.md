@@ -16,7 +16,7 @@ sudah dipecahkan ada di tabel "Catatan integrasi dan jejak masalah"
 | 4. Label & Ukur | `studio_dataset_rgbd.py` (`KanvasLabel`) | `segmentasi_convnext_depth.py` (usulan label), `visual_depth.py`, `ir_selaras.py`, `qa_label.py`, `panel_ukuran.py`, `pemutar_ukur.py`, `ukuran_meteran.py` |
 | 5. Uji Sistem Tangga | `uji_realtime.py` | `daftar_model.py` (pilihan model), rgbd_convnext `paralel.py`/`sumber.py` |
 | 6. Uji Model pada Berkas | `uji_berkas.py` | `daftar_model.py` |
-| 7. Split Dataset | `tab_split.py` | `kurasi.py`, `jendela_kurasi.py`, `atribut_tangga.py` |
+| 7. Split Dataset | `tab_split.py` | `kurasi.py`, `jendela_kurasi.py`, `jendela_versi.py` (Versi data), `atribut_tangga.py` |
 | Hugging Face | `unggah_hf.py` (dataset) | model: `model/aplikasi_tangga/skrip/utama/unggah_model_hf.py` |
 
 ## Gejala -> letak
@@ -33,6 +33,8 @@ sudah dipecahkan ada di tabel "Catatan integrasi dan jejak masalah"
 | Uji depth dinding: tekan Ukur tidak terjadi apa-apa | `uji_depth_dinding.py`: isian "Jarak meteran (cm)" wajib diisi (kini bergaris oranye, langsung terfokus, terima "100 cm"); pratinjau warna + depth dengan kotak bagian yang diukur ada di jendela itu; frame dengan peringatan (depth sah < 50 %, titik tengah < 30 cm, atau miring > 10 derajat; miring 0 = lurus) tidak dihitung, gagal setelah 8 detik dengan pesan |
 | Berapa derajat kamera menunduk saat merekam | `sudut_kamera.py` (bidang mendatar terbesar di bagian bawah depth; D435 tanpa IMU), dipanggil `Studio._perbarui_sudut` tiap 0,2 s: pita bawah preview RGB "Sudut tunduk N deg (OK/tundukkan/angkat; saran 25-35)"; ringkasan `sudut_kamera` di `session.json` saat rekaman selesai |
 | Frame hilang dari daftar latih | `tab_split.py`, `kurasi.py` (`kurasi.json`), rekaman harus ✔ dan label terperiksa |
+| Data apa yang melatih model mana; simpan/bandingkan versi dataset (v1, v2, ...) dan hasil CV-nya | `jendela_versi.py` (tab Split, "📦 Versi data…"); inti di model `rgbd_convnext/data/versi_data.py`, arsip `<akar data>/versi_data/`, hasil CV `model/bukti/final_d435/versi_data/hasil.json` |
+| Kurasi tidak membuang frame buram | sengaja sejak 20 Nov 2026: `kurasi.AturanKurasi.rasio_buram` = 0 (getar kamera pinggang = kondisi nyata); "perlu dilihat" kini juga dari CV 20 Nov (kedua model) dan depth hampir kosong |
 | Tata letak terpotong | `uji_tata_letak.py`; galat tiap tab: `uji_asap.py` |
 | Tulisan terlalu kecil/terpotong, kontrol sempit | `skala_ui.py` (angka piksel kode mengikuti `Xft.dpi`, dibaca sekali saat mulai; skala layar berubah -> tutup-buka Studio, `Studio._pantau_skala` memberi tahu) |
 | Tukar merah/biru satu mask (T di atas mask, atau alat Tukar lalu klik); bilah kontrol di atas gambar | `KanvasLabel.mask_di`/`pindah_kelas`, `Studio.tukar_di_kursor`/`tukar_warna_mask`, `bilah_kelas`/`bilah_salin` di `ui_label` |
