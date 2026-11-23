@@ -117,7 +117,7 @@ def hitung_semua(akar_data: Path, kategori: str | None = None, hanya_selesai: bo
     return [b for b in baris if b["selesai"] or not hanya_selesai]
 
 
-KOLOM = (("rekaman", "Rekaman"), ("frame", "Frame"), ("st_diperiksa", "✔ diperiksa"), ("st_claude", "🤖 Claude"),
+KOLOM = (("rekaman", "Rekaman"), ("frame", "Frame"), ("st_diperiksa", "✔ diperiksa"), ("st_claude", "🤖 otomatis"),
          ("st_claude_cek", "🤖⚠ cek"), ("st_claude_kosong", "🤖∅ kosong"), ("st_kosong", "○ belum"),
          ("siap_latih", "Siap latih"), ("siap_diperiksa", "Siap latih ✔"),
          ("set_train", "Train"), ("set_val", "Val"), ("set_test", "Test"))
@@ -136,7 +136,7 @@ def ringkas_teks(baris: list[dict]) -> str:
     t = jumlahkan(baris)
     asal = "split tersimpan" if baris and baris[0]["set_dari_split"] else "perkiraan pembagian per blok 70/15/15"
     return (f"{t['rekaman']} · {CR.ribuan(t['frame'])} frame · {CR.ribuan(t['st_diperiksa'])} diperiksa · "
-            f"{CR.ribuan(t['st_claude'] + t['st_claude_cek'])} label Claude belum diperiksa · "
+            f"{CR.ribuan(t['st_claude'] + t['st_claude_cek'])} label otomatis belum diperiksa · "
             f"{CR.ribuan(t['st_kosong'])} belum berlabel\n"
             f"Siap latih (label diperiksa): {CR.ribuan(t['siap_diperiksa'])} frame -> train {CR.ribuan(t['set_train'])}, "
             f"val {CR.ribuan(t['set_val'])}, test {CR.ribuan(t['set_test'])} ({asal})")

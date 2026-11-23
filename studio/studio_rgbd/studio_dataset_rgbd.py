@@ -369,7 +369,7 @@ def baca_json(path: Path, default: dict | None = None) -> dict:
 
 
 # Penanda status label di daftar frame dan pita di bawah klip video. Label buatan
-# Claude (auto-label massal, lihat runs/label_claude/tulis_final.py di repo
+# label otomatis massal (auto-label, lihat runs/label_claude/tulis_final.py di repo
 # Train) bertanda "oleh_claude"; "perlu_dicek" = keyakinan model rendah atau
 # usulan lama yang tidak dikenali pengusul baru. Begitu disunting atau ditandai
 # diperiksa, frame berstatus "diperiksa" seperti biasa.
@@ -377,8 +377,8 @@ IKON_LABEL = {"diperiksa": "\u2714 ", "claude_cek": "\U0001f916\u26a0 ", "claude
               "claude_kosong": "\U0001f916\u2205 ", "usulan": "\u25cc ", "": "\u25cb "}
 WARNA_LABEL = {"diperiksa": "#1E8E3E", "claude_cek": "#D93025", "claude": "#7C3AED", "claude_kosong": "#64748B",
                "usulan": "#B0A8A0"}
-KETERANGAN_LABEL = ("\u2714 diperiksa   \U0001f916 Claude   \U0001f916\u26a0 perlu dicek\n"
-                    "\U0001f916\u2205 Claude: tanpa tangga   \u25cc usulan lama   \u25cb belum ada label   \u2205 LATAR = mask kosong")
+KETERANGAN_LABEL = ("\u2714 diperiksa   \U0001f916 otomatis   \U0001f916\u26a0 perlu dicek\n"
+                    "\U0001f916\u2205 otomatis: tanpa tangga   \u25cc usulan lama   \u25cb belum ada label   \u2205 LATAR = mask kosong")
 
 
 def stamp() -> str:
@@ -2605,7 +2605,7 @@ class Studio(tk.Tk):
                                   command=self._geser_posisi)
         self.scale_pos.pack(fill="x", pady=(6, 0))
         # Pita penanda status label frame ekspor di sepanjang klip: hijau = diperiksa,
-        # ungu = dilabel Claude, merah = dilabel Claude dan perlu dicek. Klik = lompat
+        # ungu = label otomatis, merah = label otomatis yang perlu dicek. Klik = lompat
         # ke frame bertanda terdekat.
         self.pita_label = tk.Canvas(bawah, height=12, bg=PANEL, highlightthickness=0, cursor="hand2")
         self.pita_label.pack(fill="x")
@@ -5836,7 +5836,7 @@ class Studio(tk.Tk):
         # Frame tanpa poligon: mask kosong ditulis atau dicabut mengikuti penanda.
         # Frame berpoligon yang ditandai diperiksa: mask PNG dan label YOLO ditulis ulang
         # dari poligon. Dulu hanya penanda di label_draft.json yang berubah, sehingga label
-        # usulan yang tersimpan tanpa mask PNG (mis. label Claude 5 Oktober) tetap tidak
+        # usulan yang tersimpan tanpa mask PNG (mis. label otomatis 5 Oktober) tetap tidak
         # punya mask dan diam-diam tidak ikut dilatih (15 frame terperiksa di rekaman ✔).
         if baru or not self._ada_poligon() or (nilai and self.kanvas.rgb is not None):
             self.simpan_label(senyap=True)
@@ -5872,12 +5872,12 @@ class Studio(tk.Tk):
         else:
             draf = baca_json(self.label_path / "label_draft.json", {})
             if draf.get("oleh_claude") and draf.get("perlu_dicek"):
-                lbl.config(text="\U0001f916\u26a0  dilabel Claude, PERLU DICEK: " + str(draf.get("catatan_claude", ""))[:70],
+                lbl.config(text="\U0001f916\u26a0  label otomatis, PERLU DICEK: " + str(draf.get("catatan_claude", ""))[:70],
                            bg="#FDE7E5", fg="#B42318")
             elif draf.get("oleh_claude") and not any(draf.get("poligon", {}).values()):
-                lbl.config(text="\U0001f916\u2205  Claude: tidak ada tangga di frame ini, belum diperiksa", bg="#EEF1F5", fg="#475569")
+                lbl.config(text="\U0001f916\u2205  label otomatis: tidak ada tangga di frame ini, belum diperiksa", bg="#EEF1F5", fg="#475569")
             elif draf.get("oleh_claude"):
-                lbl.config(text="\U0001f916  dilabel Claude, belum diperiksa", bg="#EFE7FD", fg="#5B21B6")
+                lbl.config(text="\U0001f916  label otomatis, belum diperiksa", bg="#EFE7FD", fg="#5B21B6")
             else:
                 lbl.config(text="⚠  masih usulan otomatis", bg="#FBEEDA", fg="#8A5A12")
         self._segarkan_item_frame()
@@ -5911,7 +5911,7 @@ class Studio(tk.Tk):
             r = None
         if r is None:
             # Potret saat dibuka: Ctrl+Z sampai keadaan ini memulihkan berkas label
-            # persis (status ✔/otomatis/Claude), bukan menyimpannya sebagai suntingan.
+            # persis (status ✔/usulan/otomatis), bukan menyimpannya sebagai suntingan.
             self._usulan_aktif = {"frame": p, "sebelum": self.kanvas._salin_poligon(),
                                   "berkas": self._potret_berkas_label(p), "usulan": None}
             return
@@ -6172,7 +6172,7 @@ class Studio(tk.Tk):
         urut_bawah = lambda daftar: sorted(daftar, key=lambda poly: -sum(p[1] for p in poly) / max(1, len(poly)))
         # Simpanan tertunda dituntaskan dulu, lalu berkas label sebelum usulan dipotret:
         # Ctrl+Z sampai ke poligon sebelum usulan memulihkan berkas itu persis
-        # (status ✔ diperiksa / 🤖 Claude / perlu dicek ikut kembali).
+        # (status ✔ diperiksa / 🤖 otomatis / perlu dicek ikut kembali).
         if self._autosave_setelah is not None:
             self.after_cancel(self._autosave_setelah)
             self.simpan_draft_label()
