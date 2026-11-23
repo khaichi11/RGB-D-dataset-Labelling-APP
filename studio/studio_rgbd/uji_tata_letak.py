@@ -55,8 +55,12 @@ def audit(lebar: int, tinggi: int, keluar: str) -> list[str]:
         return type(w).__name__
 
     laporan = []
-    for tab in (app.tab_rekam, app.tab_tinjau, app.tab_ekspor, app.tab_label, app.tab_uji, app.tab_uji_berkas, app.tab_split):
-        app.tabs.select(tab); jalan(1.0)
+    for tab, uji in ((app.tab_rekam, None), (app.tab_tinjau, None), (app.tab_label, None), (app.tab_split, None),
+                     (app.tab_uji_halaman, "kamera"), (app.tab_uji_halaman, "berkas")):
+        app.tabs.select(tab)
+        if uji:
+            app.pilih_uji(uji)
+        jalan(1.0)
         bx0, by0 = tab.winfo_rootx(), tab.winfo_rooty()
         bx1, by1 = bx0 + tab.winfo_width(), by0 + tab.winfo_height()
         stack = [tab]

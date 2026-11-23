@@ -63,7 +63,7 @@ if __package__:
     from . import salin_label, skala_ui
     from . import tempat_sampah as TS
     from .hitung_data import JendelaJumlahData, status_label
-    from .ui_bantu import tombol_menu, jadikan_modal, kolom_gulir
+    from .ui_bantu import tombol_menu, jadikan_modal, kolom_gulir, pasang_kabar
     from . import visual_depth, ir_selaras, sinkron, tema
     from . import sudut_kamera
     from .segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
@@ -83,7 +83,7 @@ else:
     from studio_rgbd import salin_label, skala_ui
     from studio_rgbd import tempat_sampah as TS
     from studio_rgbd.hitung_data import JendelaJumlahData, status_label
-    from studio_rgbd.ui_bantu import tombol_menu, jadikan_modal, kolom_gulir
+    from studio_rgbd.ui_bantu import tombol_menu, jadikan_modal, kolom_gulir, pasang_kabar
     from studio_rgbd import visual_depth, ir_selaras, sinkron, tema
     from studio_rgbd.segmentasi_rfdetr_depth import usulkan as usulkan_rfdetr_depth
     from studio_rgbd.segmentasi_convnext_depth import (hangatkan as hangatkan_convnext, panaskan_utas_ini,
@@ -2288,6 +2288,7 @@ class Studio(tk.Tk):
         self.satukan_potongan = BooleanVar(value=bool(preferensi.get("satukan_potongan", True)))
         self.tampil_sampah = BooleanVar(value=False)
         self._siapkan_root(); self._buat_ui()
+        self._kabar = pasang_kabar(self)          # info/peringatan/galat tampil di dalam jendela, bukan popup
         self.tabs.bind("<<NotebookTabChanged>>", self.ganti_tab)
         self.after(30, self._poll)
         self.after(120, self.muat_daftar)   # daftar tangga langsung terlihat saat aplikasi dibuka
@@ -2372,6 +2373,13 @@ class Studio(tk.Tk):
             for gaya in ("TCheckbutton", "TRadiobutton", "TLabel", "TFrame"):
                 s.configure(gaya, background=L(PANEL), foreground=T(INK))
 
+    def kabar(self, teks: str, jenis: str = "info", detik: float | None = None, aksi=None) -> None:
+        """Pemberitahuan di dalam jendela (tanpa popup); ``aksi`` = (teks tombol, fungsi), mis. Batalkan."""
+        k = getattr(self, "_kabar", None)
+        if k is None:
+            self.status.set(str(teks)); return
+        k.tampil(teks, jenis, detik, aksi)
+
     def card(self, parent, judul):
         b = tk.Frame(parent, bg=PANEL, highlightbackground="#E6DED8", highlightthickness=1, bd=0)
         tk.Label(b, text=judul.upper(), bg=PANEL, fg=ACCENT, font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=18, pady=(13, 2))
@@ -2407,26 +2415,42 @@ class Studio(tk.Tk):
         tk.Label(footer, textvariable=self.status, bg=PANEL, fg=MUTED,
                  font=("Segoe UI", 10), anchor="w").pack(side="left", fill="x", expand=True, pady=7, padx=(0, 12))
         self.tabs = ttk.Notebook(self); self.tabs.pack(fill="both", expand=True, padx=18, pady=(0, 14))
+        # Lima tab mengikuti alur kerja. Dulu tujuh: Ekspor Frame kini di bawah tab Tinjau (sesudah memotong
+        # rentang), dan uji kamera langsung + uji berkas kini satu tab Uji dengan pilihan sumber.
         self.tab_rekam = tk.Frame(self.tabs, bg=BG); self.tab_tinjau = tk.Frame(self.tabs, bg=BG)
-        self.tab_ekspor = tk.Frame(self.tabs, bg=BG); self.tab_label = tk.Frame(self.tabs, bg=BG)
-        self.tab_uji = tk.Frame(self.tabs, bg=BG); self.tab_uji_berkas = tk.Frame(self.tabs, bg=BG)
-        self.tab_split = tk.Frame(self.tabs, bg=BG)
-        self.tabs.add(self.tab_rekam, text="  1. Rekam  "); self.tabs.add(self.tab_tinjau, text="  2. Tinjau & Potong  ")
-        self.tabs.add(self.tab_ekspor, text="  3. Ekspor Frame  "); self.tabs.add(self.tab_label, text="  4. Label & Ukur  ")
-        # Tab 5 berbeda tujuan dari tab 1-4: bukan membuat dataset, melainkan
-        # MENGUJI model terlatih pada aliran kamera langsung. Dipisah supaya
-        # alur dataset tidak tercampur dengan alur pengujian.
-        self.tabs.add(self.tab_uji, text="  5. Uji Sistem Tangga  ")
-        # Tab 6 menguji model pada BERKAS, bukan aliran kamera. Dipisah dari
-        # tab 5 karena hasilnya dapat diulang persis dan karena itu dipakai
-        # membandingkan antar-model, sedangkan aliran kamera tidak pernah sama
-        # dua kali.
-        self.tabs.add(self.tab_uji_berkas, text="  6. Uji Model pada Berkas  ")
-        # Tab 7 membagi frame berlabel ke train/val/test; skrip latih membaca
-        # berkas yang sama lewat --split, jadi yang tampil di sini = yang dilatih.
-        self.tabs.add(self.tab_split, text="  7. Pilah & Split  ")
+        self.tab_label = tk.Frame(self.tabs, bg=BG); self.tab_split = tk.Frame(self.tabs, bg=BG)
+        self.tab_uji_halaman = tk.Frame(self.tabs, bg=BG)
+        self.tabs.add(self.tab_rekam, text="  1. Rekam  "); self.tabs.add(self.tab_tinjau, text="  2. Tinjau & Ekspor  ")
+        self.tabs.add(self.tab_label, text="  3. Label & Ukur  ")
+        # Tab Pilah & Split: frame yang dibuang dan pembagian train/val/test; skrip latih membaca berkas yang
+        # sama lewat --split/--kurasi, jadi yang tampil "dipakai" di sana = yang dilatih.
+        self.tabs.add(self.tab_split, text="  4. Pilah & Split  ")
+        self.tabs.add(self.tab_uji_halaman, text="  5. Uji Model  ")
+        self.mode_uji = StringVar(value="kamera")
+        kepala = tk.Frame(self.tab_uji_halaman, bg=BG); kepala.pack(fill="x", padx=24, pady=(12, 0))
+        tk.Label(kepala, text="Sumber uji", bg=BG, fg=MUTED).pack(side="left")
+        for nilai, teks in (("kamera", "📷 Kamera langsung"), ("berkas", "📁 Rekaman / berkas (bisa diulang persis)")):
+            tk.Radiobutton(kepala, text=teks, variable=self.mode_uji, value=nilai, indicatoron=False,
+                           command=self.pilih_uji, bg="#FFF9F4", selectcolor="#E8DDD5", activebackground="#E8DDD5",
+                           fg=INK, relief="flat", padx=12, pady=5).pack(side="left", padx=(8, 0))
+        self.tab_uji = tk.Frame(self.tab_uji_halaman, bg=BG)
+        self.tab_uji_berkas = tk.Frame(self.tab_uji_halaman, bg=BG)
         self.ui_rekam(); self.ui_tinjau(); self.ui_ekspor(); self.ui_label(); self.ui_uji()
         self.ui_uji_berkas(); self.ui_split()
+        self.pilih_uji()
+
+    def pilih_uji(self, mode: str | None = None) -> None:
+        """Tab Uji: tampilkan panel kamera langsung atau panel berkas (kamera dihentikan bila tidak tampil)."""
+        if mode:
+            self.mode_uji.set(mode)
+        kamera = self.mode_uji.get() == "kamera"
+        (self.tab_uji_berkas if kamera else self.tab_uji).pack_forget()
+        (self.tab_uji if kamera else self.tab_uji_berkas).pack(fill="both", expand=True)
+        if not kamera and getattr(self, "panel_uji", None) is not None and getattr(self.panel_uji, "jalan", False):
+            self.panel_uji.berhenti()
+
+    def _uji_kamera_tampil(self) -> bool:
+        return self.tabs.select() == str(self.tab_uji_halaman) and self.mode_uji.get() == "kamera"
 
     def ui_split(self):
         """Panel pembagian train/val/test dan push dataset ke Hugging Face."""
@@ -2547,7 +2571,7 @@ class Studio(tk.Tk):
             ("Hapus rekaman (ke Tempat sampah Studio)", self.hapus_sesi_permanen),
             ("♻ Tempat sampah Studio…", self.buka_tempat_sampah),
         ], width=100).pack(side="left", padx=(3, 0))
-        # Tandai rekaman sebagai data uji (split_dataset.json, sama dengan set TEST di tab 7).
+        # Tandai rekaman sebagai data uji (split_dataset.json, sama dengan set TEST di tab Pilah & Split).
         self.tombol_ringkas(i, "🧪 Data test: tandai / lepas", self.toggle_data_test, WARNA_DATA_TEST, "white",
                             width=220).pack(fill="x", pady=(3, 0))
         b, i = self.card(right, "Tinjau rekaman") ; b.pack(fill="both", expand=True)
@@ -2617,6 +2641,7 @@ class Studio(tk.Tk):
         self.tombol_ringkas(manual, "Awal = kini", self.tetapkan_awal_kini, "#E8DDD5", INK, width=84).pack(side="left", padx=(8, 2))
         self.tombol_ringkas(manual, "Akhir = kini", self.tetapkan_akhir_kini, "#E8DDD5", INK, width=84).pack(side="left", padx=2)
         self.tombol(bawah, "Simpan rentang potong (non-destruktif)", self.simpan_potong, GREEN).pack(fill="x", pady=(8, 0))
+        self.tab_ekspor = tk.Frame(bawah, bg=PANEL); self.tab_ekspor.pack(fill="x", pady=(6, 0))
 
     # ------------------------------------------------ catatan rekaman & scene
     def _ui_catatan_rekaman(self, induk) -> None:
@@ -2676,9 +2701,7 @@ class Studio(tk.Tk):
         baris = tk.Frame(i, bg=PANEL); baris.pack(fill="x", pady=(4, 0))
         self.tombol_ringkas(baris, "+ Scene dari awal–akhir potongan", self.tambah_scene, GREEN,
                             width=200).pack(side="left", fill="x", expand=True)
-        tombol_menu(self, baris, "⋯", [("Ganti nama scene", self.ganti_nama_scene),
-                                       ("Tangga scene ini…", self.tangga_scene),
-                                       ("Hapus scene", self.hapus_scene)], width=40).pack(side="left", padx=(3, 0))
+        tombol_menu(self, baris, "⋯", self._menu_scene, width=40).pack(side="left", padx=(3, 0))
 
     def _catatan_cache(self, sesi: Path) -> dict:
         """catatan.json per rekaman, dibaca ulang hanya bila berkasnya berubah (disk dataset lambat)."""
@@ -2719,7 +2742,7 @@ class Studio(tk.Tk):
         fg = ("#1F4E79" if uji else "#1A1A1A") if w else (WARNA_DATA_TEST if uji else INK)
         self.list_sesi.itemconfig(i, bg=w or "#FFF9F4", selectbackground=w or ACCENT_SOFT, fg=fg, selectforeground=fg)
 
-    # ---- data test: set rekaman pada split_dataset.json (satu sumber dengan tab 7. Split Dataset)
+    # ---- data test: set rekaman pada split_dataset.json (satu sumber dengan tab Pilah & Split)
     def _pustaka_split(self):
         panel = getattr(self, "panel_split", None)
         if panel is not None:
@@ -2780,7 +2803,7 @@ class Studio(tk.Tk):
                      + f" · tangga {CR.label_tangga(tid, daftar)}. Rekaman ini tidak dipakai melatih model.")
         try:
             if panel is not None:
-                panel._simpan()                     # tab 7 menghitung ulang saat dibuka (ganti_tab)
+                panel._simpan()                     # tab Pilah & Split menghitung ulang saat dibuka (ganti_tab)
             else:
                 sd.tulis(berkas, data)
         except Exception as e:                      # noqa: BLE001
@@ -2940,30 +2963,21 @@ class Studio(tk.Tk):
         kat = self.filter_sesi.get() if self.filter_sesi.get() in KATEGORI else "tangga_naik"
         self._jendela_kelompok = JendelaKelompokTangga(self, kat)
 
-    def tangga_scene(self) -> None:
-        """Tangga untuk scene terpilih (satu rekaman bisa melewati beberapa tangga)."""
+    def _menu_scene(self) -> list:
+        """Menu ⋯ scene: tangga scene dipilih langsung dari daftar (tanpa jendela dialog)."""
+        daftar = CR.baca_tangga(self.root_data)
+        item = [("Ganti nama scene…", self.ganti_nama_scene), ("Hapus scene", self.hapus_scene), None,
+                ("Tangga scene: ikut tangga rekaman", lambda: self.tangga_scene(""))]
+        item += [(f"Tangga scene: {CR.label_tangga(k, daftar)}", lambda k=k: self.tangga_scene(k)) for k in daftar]
+        return item
+
+    def tangga_scene(self, tid: str) -> None:
+        """Tangga untuk scene terpilih (satu rekaman bisa melewati beberapa tangga); "" = ikut tangga rekaman."""
         i = self._scene_terpilih()
         if i is None or not self.sesi:
-            messagebox.showinfo("Pilih scene", "Pilih scene di daftar dahulu.", parent=self); return
-        daftar = CR.baca_tangga(self.root_data)
-        if not daftar:
-            messagebox.showinfo("Belum ada tangga", "Buat tangga dahulu dengan tombol + Baru.", parent=self); return
-        dlg = tk.Toplevel(self); dlg.title("Tangga scene"); dlg.configure(bg=PANEL); dlg.transient(self)
-        tk.Label(dlg, text="Tangga untuk scene ini:", bg=PANEL, fg=INK).pack(padx=14, pady=(12, 4), anchor="w")
-        pilih = ttk.Combobox(dlg, state="readonly", width=34,
-                             values=["— ikut tangga rekaman —"] + [CR.label_tangga(k, daftar) for k in daftar])
-        sc = CR.baca(self.sesi)["scene"][i]
-        pilih.set(CR.label_tangga(sc.get("tangga"), daftar) if sc.get("tangga") else "— ikut tangga rekaman —")
-        pilih.pack(padx=14, fill="x")
-
-        def simpan():
-            tid = self._id_dari_label(pilih.get())
-            dlg.destroy()
-            self._ubah_catatan(lambda d: d["scene"][i].update(tangga=tid))
-        tk.Button(dlg, text="Simpan", command=simpan).pack(pady=10)
-        jadikan_modal(dlg, self)
-        dlg.wait_window()
-
+            self.kabar("Pilih scene di daftar dahulu.", "peringatan"); return
+        self._ubah_catatan(lambda d: d["scene"][i].update(tangga=tid))
+        self.kabar(f"Tangga scene diatur: {CR.label_tangga(tid, CR.baca_tangga(self.root_data)) if tid else 'ikut rekaman'}.")
     def atur_selesai(self) -> None:
         """Ceklis rekaman selesai; diperingatkan bila masih ada frame yang belum diperiksa."""
         if not self.sesi:
@@ -3135,15 +3149,20 @@ class Studio(tk.Tk):
         self.kotak_info_rekaman.config(bg=latar)
 
     def ui_ekspor(self):
-        f = tk.Frame(self.tab_ekspor, bg=BG); f.pack(fill="both", expand=True, padx=30, pady=28)
-        b, i = self.card(f, "Ekspor frame RGB-D untuk dataset dan label YOLO") ; b.pack(fill="x")
-        tk.Label(i, text="Ambil 1 frame setiap … frame sumber", bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w")
-        tk.Spinbox(i, from_=1, to=9999, textvariable=self.langkah_ekspor, width=8).grid(row=0, column=1, sticky="w", padx=10)
-        self.tombol(i, "Ekspor frame dari rentang pilihan", self.ekspor, GREEN).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(14, 4))
-        self.tombol(i, "Buat video MP4 rentang (opsional)", self.ekspor_video_rentang, BLUE).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 4))
-        self.tombol(i, "Terapkan interval: bersihkan & ekspor ulang", self.buang_frame_belum_dilabeli, "#F3D8D4", INK).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 4))
-        self.tombol(i, "Hapus semua hasil ekspor sesi ini", self.hapus_semua_ekspor, "#F3D8D4", INK).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 4))
-        self.label_ekspor = tk.Label(f, text="Belum ada ekspor dipilih.", bg=BG, fg=ACCENT, justify="left"); self.label_ekspor.pack(anchor="w", pady=(18, 0))
+        """Ekspor frame dari rentang pilihan; satu baris di bawah tab Tinjau (dulu tab tersendiri)."""
+        baris = tk.Frame(self.tab_ekspor, bg=PANEL); baris.pack(fill="x")
+        tk.Label(baris, text="Ekspor 1 frame tiap", bg=PANEL, fg=MUTED).pack(side="left")
+        tk.Spinbox(baris, from_=1, to=9999, textvariable=self.langkah_ekspor, width=5).pack(side="left", padx=4)
+        tk.Label(baris, text="frame", bg=PANEL, fg=MUTED).pack(side="left")
+        self.tombol_ringkas(baris, "⬇ Ekspor frame rentang ini", self.ekspor, BLUE, "white",
+                            width=190).pack(side="left", fill="x", expand=True, padx=(8, 0))
+        tombol_menu(self, baris, "⋯", [("Buat video MP4 rentang", self.ekspor_video_rentang),
+                                       ("Terapkan interval: bersihkan & ekspor ulang", self.buang_frame_belum_dilabeli),
+                                       ("Hapus semua hasil ekspor rekaman ini", self.hapus_semua_ekspor)],
+                    width=40).pack(side="left", padx=(3, 0))
+        self.label_ekspor = tk.Label(self.tab_ekspor, text="", bg=PANEL, fg=ACCENT, justify="left", anchor="w",
+                                     font=("Segoe UI", 9), wraplength=700)
+        self.label_ekspor.pack(fill="x")
 
     def ui_label(self):
         f = tk.Frame(self.tab_label, bg=BG); f.pack(fill="both", expand=True, padx=14, pady=14)
@@ -3263,7 +3282,7 @@ class Studio(tk.Tk):
         self.list_frame.bind("<Control-c>", lambda e: self._salin_frame_terpilih())
         self.list_frame.bind("<Control-C>", lambda e: self._salin_frame_terpilih(penuh=bool(e.state & 0x1)))
         self.tombol_ringkas(i, "Ekspor frame saat ini ke Label", self.ekspor_frame_kini_ke_label, GREEN, width=220).pack(fill="x", pady=(4, 0))
-        # Buang = sama dengan Del di tab 7 (frame_state.json di_sampah); memulihkan: tab 7, tampilan "dibuang".
+        # Buang = sama dengan Del di tab Pilah & Split (frame_state.json di_sampah); memulihkan: tab Pilah & Split, tampilan "dibuang".
         kelola = tk.Frame(i, bg=PANEL); kelola.pack(fill="x", pady=(4, 0))
         self.tombol_ringkas(kelola, "🗑 Buang frame (Del)", self.toggle_sampah_frame, "#F3D8D4", INK,
                             width=150).pack(side="left", fill="x", expand=True, padx=(0, 2))
@@ -3321,79 +3340,59 @@ class Studio(tk.Tk):
         for nilai, teks in ((-1, "sebelumnya"), (1, "berikutnya")):
             tk.Radiobutton(bilah_salin, text=teks, variable=self.frame_acuan, value=nilai, command=self.ganti_bayangan,
                            **sakelar).pack(side="left", padx=1)
-        tk.Scale(edit_i, from_=.1, to=.85, resolution=.05, orient="horizontal", variable=self.bayangan_alpha,
-                 command=lambda _: self.ganti_kekuatan_bayangan(), label="Kekuatan bayangan", bg=PANEL, fg=INK,
-                 highlightthickness=0, length=220).pack(fill="x")
-        tk.Checkbutton(edit_i, text="Garis label frame acuan (putus-putus)", variable=self.bayangan_label,
-                       command=self.ganti_bayangan, **cek).pack(anchor="w")
-        tk.Checkbutton(edit_i, text="Salinan mengikuti gerak kamera", variable=self.salin_selaras,
-                       command=self.simpan_preferensi, **cek).pack(anchor="w")
-        tk.Checkbutton(edit_i, text="Frame tanpa label langsung mulai dari label frame acuan",
-                       variable=self.salin_otomatis, command=self.simpan_preferensi, **cek).pack(anchor="w", pady=(0, 4))
-        tk.Scale(edit_i, from_=0, to=1.0, resolution=.05, orient="horizontal", variable=self.depth_alpha,
-                 command=lambda _: self.ganti_depth(), label="Overlay depth (1,0 = depth murni)", bg=PANEL, fg=INK,
-                 highlightthickness=0, length=220).pack(fill="x", pady=(2, 0))
-        tk.Checkbutton(edit_i, text="🌙 Inframerah sebagai latar (frame gelap)", variable=self.pakai_ir,
-                       bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
-                       command=self.ganti_latar_ir).pack(anchor="w", pady=(4, 0))
-        tk.Checkbutton(edit_i, text="📐 Garis lipatan 3-D: kuning = ujung tread, biru = pangkal riser",
-                       variable=self.garis_3d, bg=PANEL, fg=INK, selectcolor=PANEL, activebackground=PANEL,
-                       wraplength=250, justify="left", command=self.ganti_garis_3d).pack(anchor="w")
-        tk.Scale(edit_i, from_=0, to=1.0, resolution=.05, orient="horizontal", variable=self.warna_bidang,
-                 command=lambda _: self.ganti_warna_bidang(), label="Warna ketinggian (tiap anak tangga satu warna)",
-                 bg=PANEL, fg=INK, highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
-        baris_depth = tk.Frame(edit_i, bg=PANEL); baris_depth.pack(fill="x", pady=(0, 2))
-        tk.Label(baris_depth, text="Tampilan bantu", bg=PANEL, fg=MUTED).pack(side="left")
-        pilih_depth = ttk.Combobox(baris_depth, state="readonly", width=30,
-                                   values=list(visual_depth.MODE.values()))
+        # Yang sering dipakai tampil; sakelar jarang di menu "⋯ Opsi", penggeser jarang di "Pengaturan lanjutan".
+        baris_depth = tk.Frame(edit_i, bg=PANEL); baris_depth.pack(fill="x", pady=(4, 2))
+        tk.Label(baris_depth, text="Tampilan", bg=PANEL, fg=MUTED).pack(side="left")
+        pilih_depth = ttk.Combobox(baris_depth, state="readonly", width=24, values=list(visual_depth.MODE.values()))
         pilih_depth.set(visual_depth.MODE.get(self.depth_mode.get(), visual_depth.MODE["bidang"]))
         pilih_depth.pack(side="left", padx=4, fill="x", expand=True)
         pilih_depth.bind("<<ComboboxSelected>>", lambda _e: self.ganti_mode_depth(pilih_depth.get()))
-        tk.Label(edit_i, text="Frame gelap: Inframerah selaras atau Bidang + overlay 1,0 menampilkan anak tangga dari sensor IR/depth.",
-                 bg=PANEL, fg=MUTED, wraplength=300, justify="left", font=("Segoe UI", 8)).pack(anchor="w")
-        tk.Scale(edit_i, from_=0, to=0.85, resolution=.05, orient="horizontal", variable=self.mask_alpha,
-                 command=lambda _: self.ganti_opasitas_mask(), label="Opacity mask", bg=PANEL, fg=INK,
-                 highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
-        tk.Scale(edit_i, from_=0, to=1.0, resolution=.1, orient="horizontal", variable=self.kecerahan,
-                 command=lambda _: self.ganti_kecerahan(), label="Cerahkan (frame gelap/malam)", bg=PANEL, fg=INK,
-                 highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
-        tk.Scale(edit_i, from_=0, to=2.0, resolution=.1, orient="horizontal", variable=self.ketajaman,
-                 command=lambda _: self.ganti_ketajaman(), label="Pertajam (unsharp mask)", bg=PANEL, fg=INK,
-                 highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
-        tk.Scale(edit_i, from_=0, to=1.0, resolution=.1, orient="horizontal", variable=self.bantu_arah,
-                 command=lambda _: self.ganti_bantu_arah(),
-                 label="Pemandu riser/tread model RGB-D (biru tread, merah riser, garis kuning batas)", bg=PANEL, fg=INK,
-                 highlightthickness=0, length=220).pack(fill="x", pady=(1, 0))
-        alat_f = tk.Frame(edit_i, bg=PANEL); alat_f.pack(fill="x", pady=(4, 0))
-        zoom_f = tk.Frame(alat_f, bg=PANEL); zoom_f.pack(fill="x", pady=(2, 0))
-        for teks, perintah in (("🔍−  ( - )", lambda: self.zoom_tombol(1 / 1.25)),
-                               ("🔍+  ( + )", lambda: self.zoom_tombol(1.25)),
-                               ("⤢ Muat ( 0 )", self.muat_pas)):
-            tk.Button(zoom_f, text=teks, command=perintah, bg="#FFF9F4", fg=INK, relief="flat",
-                      font=("Segoe UI", 8), pady=4).pack(side="left", expand=True, fill="x", padx=1)
-        potong_f = tk.Frame(alat_f, bg=PANEL); potong_f.pack(fill="x", pady=(2, 0))
-        tk.Scale(potong_f, from_=2, to=120, resolution=1, orient="horizontal", variable=self.lebar_potong,
-                 command=lambda _: self.ganti_lebar_potong(), label="Lebar pita potong (px citra)  [ / ]",
-                 bg=PANEL, fg=INK, highlightthickness=0, length=220).pack(fill="x")
-        tk.Checkbutton(potong_f, text="Anak tangga yang terbelah tetap 1 mask",
-                       variable=self.satukan_potongan, command=self.ganti_satukan_potongan, bg=PANEL, fg=INK,
-                       selectcolor=PANEL, activebackground=PANEL, font=("Segoe UI", 8)).pack(anchor="w")
-        terap_f = tk.Frame(potong_f, bg=PANEL); terap_f.pack(fill="x", pady=(2, 0))
+        tombol_menu(self, baris_depth, "⋯ Opsi", [
+            ("Inframerah sebagai latar (frame gelap)", self.pakai_ir, self.ganti_latar_ir),
+            ("Garis lipatan 3-D (kuning = ujung tread, biru = pangkal riser)", self.garis_3d, self.ganti_garis_3d),
+            ("Garis label frame acuan (putus-putus)", self.bayangan_label, self.ganti_bayangan),
+            ("Salinan mengikuti gerak kamera", self.salin_selaras, self.simpan_preferensi),
+            ("Frame tanpa label langsung mulai dari label frame acuan", self.salin_otomatis, self.simpan_preferensi),
+            ("Anak tangga yang terbelah tetap 1 mask", self.satukan_potongan, self.ganti_satukan_potongan),
+            ("Magnet titik & garis", self.magnet_titik, self.ganti_magnet_titik),
+            ("Mode touchpad (gulir = geser, Ctrl+gulir = zoom)", self.mode_touchpad, self.ganti_mode_touchpad),
+            None,
+            ("⧉ Gabung mask terpilih  (M)", self.gabung_mask),
+            ("🧲 Rapikan semua titik", self.rapikan_magnet_semua),
+            ("⤢ Gambar pas layar  (0)", self.muat_pas),
+        ], width=80).pack(side="left", padx=(3, 0))
+        for var, perintah, teks, ke, res in (
+                (self.mask_alpha, self.ganti_opasitas_mask, "Opacity mask", 0.85, .05),
+                (self.kecerahan, self.ganti_kecerahan, "Cerahkan (frame gelap/malam)", 1.0, .1),
+                (self.depth_alpha, self.ganti_depth, "Overlay depth (1,0 = depth murni)", 1.0, .05)):
+            tk.Scale(edit_i, from_=0, to=ke, resolution=res, orient="horizontal", variable=var,
+                     command=lambda _, f=perintah: f(), label=teks, bg=PANEL, fg=INK, highlightthickness=0,
+                     length=220).pack(fill="x", pady=(1, 0))
+        kepala_lanjut = tk.Label(edit_i, text="▸ Pengaturan lanjutan", bg=PANEL, fg=ACCENT, cursor="hand2",
+                                 font=("Segoe UI", 9, "bold"))
+        kepala_lanjut.pack(anchor="w", pady=(4, 0))
+        lanjut = tk.Frame(edit_i, bg=PANEL)
+
+        def balik_lanjut(_e=None):
+            if lanjut.winfo_ismapped():
+                lanjut.pack_forget(); kepala_lanjut.config(text="▸ Pengaturan lanjutan")
+            else:
+                lanjut.pack(fill="x", after=kepala_lanjut); kepala_lanjut.config(text="▾ Pengaturan lanjutan")
+        kepala_lanjut.bind("<Button-1>", balik_lanjut)
+        for var, perintah, teks, dari, ke, res in (
+                (self.bayangan_alpha, self.ganti_kekuatan_bayangan, "Kekuatan bayangan (B)", .1, .85, .05),
+                (self.warna_bidang, self.ganti_warna_bidang, "Warna ketinggian (tiap anak tangga satu warna)", 0, 1.0, .05),
+                (self.ketajaman, self.ganti_ketajaman, "Pertajam (unsharp mask)", 0, 2.0, .1),
+                (self.bantu_arah, self.ganti_bantu_arah, "Pemandu riser/tread model RGB-D", 0, 1.0, .1),
+                (self.lebar_potong, self.ganti_lebar_potong, "Lebar pita potong (px citra)  [ / ]", 2, 120, 1)):
+            tk.Scale(lanjut, from_=dari, to=ke, resolution=res, orient="horizontal", variable=var,
+                     command=lambda _, f=perintah: f(), label=teks, bg=PANEL, fg=INK, highlightthickness=0,
+                     length=220).pack(fill="x", pady=(1, 0))
+        terap_f = tk.Frame(lanjut, bg=PANEL); terap_f.pack(fill="x", pady=(2, 0))
         self.tombol_ringkas(terap_f, "✂ Terapkan potongan (Enter)", self.terapkan_penghalang, "#F3D8D4", INK,
                             width=150).pack(side="left", fill="x", expand=True, padx=(0, 2))
         self.tombol_ringkas(terap_f, "Batal (Esc)", self.batal_penghalang, "#E8DDD5", INK,
                             width=70).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        self.tombol_ringkas(potong_f, "⧉ Gabung mask terpilih (M)", self.gabung_mask, "#E8DDD5", INK,
-                            width=220).pack(fill="x", pady=(2, 0))
-        tk.Checkbutton(alat_f, text="Mode touchpad: gulir = geser, Ctrl+gulir = zoom",
-                       variable=self.mode_touchpad, command=self.ganti_mode_touchpad, bg=PANEL, fg=INK,
-                       selectcolor=PANEL, activebackground=PANEL, font=("Segoe UI", 8)).pack(anchor="w")
-        magnet = tk.Frame(edit_i, bg=PANEL); magnet.pack(fill="x", pady=(1, 0))
-        tk.Checkbutton(magnet, text="Magnet titik & garis", variable=self.magnet_titik,
-                       command=self.ganti_magnet_titik, bg=PANEL, fg=INK, selectcolor=PANEL,
-                       activebackground=PANEL).pack(side="left")
-        self.tombol_ringkas(magnet, "🧲 Rapikan semua", self.rapikan_magnet_semua,
-                             "#E8DDD5", INK, width=138).pack(side="right")
         self.tombol(otomatis_i, "✨ Rekomendasi tangga: ConvNeXt RGB-D", self.usulkan_segmentasi, GREEN).pack(fill="x", pady=(8, 2))
         self.tombol(otomatis_i, "⚡ Batch auto-label frame baru", self.batch_auto_label, BLUE).pack(fill="x", pady=(4, 2))
         tk.Label(otomatis_i, text="X lalu tarik = blok hapus (atau Ctrl+tarik) • C lalu tarik sepanjang "
@@ -3648,7 +3647,7 @@ class Studio(tk.Tk):
         self._sesi_dari_split = None
         # Uji realtime memakai kamera secara eksklusif; hentikan begitu pengguna
         # pindah ke tab lain agar device tidak diperebutkan dengan preview/rekam.
-        if self.tabs.select() != str(self.tab_uji) and getattr(self, 'panel_uji', None) is not None:
+        if not self._uji_kamera_tampil() and getattr(self, 'panel_uji', None) is not None:
             if getattr(self.panel_uji, 'jalan', False):
                 self.panel_uji.berhenti()
         pada_rekam = self.tabs.select() == str(self.tab_rekam)
@@ -3917,7 +3916,7 @@ class Studio(tk.Tk):
         if not self.winfo_exists(): return
         # Uji realtime memakai kamera secara eksklusif; hentikan begitu pengguna
         # pindah ke tab lain agar device tidak diperebutkan dengan preview/rekam.
-        if self.tabs.select() != str(self.tab_uji) and getattr(self, 'panel_uji', None) is not None:
+        if not self._uji_kamera_tampil() and getattr(self, 'panel_uji', None) is not None:
             if getattr(self.panel_uji, 'jalan', False):
                 self.panel_uji.berhenti()
         pada_rekam = self.tabs.select() == str(self.tab_rekam)
@@ -5034,7 +5033,7 @@ class Studio(tk.Tk):
         self.list_frame.delete(0,"end")
         for p in semua:
             state = baca_json(p / "frame_state.json", {"di_sampah": False})
-            if state.get("di_sampah", False): continue        # dibuang: dipulihkan di tab 7 (tampilan "dibuang")
+            if state.get("di_sampah", False): continue        # dibuang: dipulihkan di tab Pilah & Split (tampilan "dibuang")
             self.frame_paths.append(p)
             self.list_frame.insert("end", self._teks_item_frame(p, "", catatan_sesi))
             self._warnai_item_frame(len(self.frame_paths) - 1, p)
@@ -6080,19 +6079,16 @@ class Studio(tk.Tk):
         return "break"
 
     def toggle_sampah_frame(self):
-        """Buang frame terpilih (frame_state.json di_sampah, sama dengan Del di tab 7) lalu lanjut ke berikutnya.
+        """Buang frame terpilih (frame_state.json di_sampah, sama dengan Del di tab Pilah & Split) lalu lanjut ke berikutnya.
 
         Baris yang dibuang dihapus langsung dari daftar; daftar tidak dimuat ulang dari disk (dulu setiap
         buang membaca ulang status dan label semua frame rekaman, terasa lambat pada rekaman panjang).
-        Memulihkan: tab 7. Pilah & Split, tampilan "dibuang".
+        Memulihkan: tab Pilah & Split, tampilan "dibuang".
         """
         pilihan = [self.frame_paths[i] for i in self.list_frame.curselection() if i < len(self.frame_paths)]
         target = pilihan or ([self.label_path] if self.label_path else [])
         if not target:
             messagebox.showinfo("Pilih frame", "Pilih frame yang ingin dibuang.", parent=self)
-            return
-        if len(target) > 1 and not messagebox.askyesno("Buang frame", f"Buang {len(target)} frame terpilih?\n"
-                                                       "Bisa dipulihkan di tab 7 (tampilan 'dibuang').", parent=self):
             return
         if self._autosave_setelah is not None:          # suntingan yang menunggu autosave disimpan dulu
             self.after_cancel(self._autosave_setelah)
@@ -6111,8 +6107,15 @@ class Studio(tk.Tk):
         self.label_path = None
         if self.frame_paths:
             self._pilih_indeks_frame(min(indeks[-1] if indeks else 0, len(self.frame_paths) - 1))
-        jumlah = f"{len(target)} frame" if len(target) > 1 else "Frame"
-        self.status.set(f"{jumlah} dibuang, lanjut ke frame berikutnya. Pulihkan di tab 7 (tampilan 'dibuang').")
+        def batal():
+            for f in target:
+                state = baca_json(f / "frame_state.json", {"di_sampah": False})
+                state["di_sampah"] = False
+                tulis_json(f / "frame_state.json", state)
+            self.muat_frame(lanjut_ke=min(indeks) if indeks else 0)
+            self.kabar(f"{len(target)} frame dikembalikan.")
+        self.kabar(f"{len(target)} frame dibuang, lanjut ke frame berikutnya." if len(target) > 1 else
+                   f"{target[0].name} dibuang, lanjut ke frame berikutnya.", aksi=("↶ Batalkan", batal))
     def usulkan_segmentasi(self):
         """Isi kanvas dengan usulan tapakan/riser hasil hitungan depth.
 

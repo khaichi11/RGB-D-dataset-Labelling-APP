@@ -393,7 +393,7 @@ class TabSplit:
                     teks = (f"Tarik selesai: {isi['frame_baru']} frame baru, {isi['label_diperbarui']} label "
                             f"diperbarui dari HF, {isi['label_lokal_lebih_baru']} label lokal lebih baru dipertahankan.")
                     self.ringkas.config(text=teks)
-                    messagebox.showinfo("Hugging Face", teks + "\n\nPilih rekamannya di tab 2. Tinjau untuk melabel.")
+                    messagebox.showinfo("Hugging Face", teks + "\n\nPilih rekamannya di tab Tinjau untuk melabel.")
                     self.muat_ulang()
                     self.studio.muat_daftar()
                 elif jenis == "hf_selesai":
@@ -626,15 +626,15 @@ class TabSplit:
             rek = self.tree.get_children(sel[0])
             teks = (f"🪜 {CR.label_tangga(tid, self.daftar_tangga)}" + (f" — {info['lokasi']}" if info.get("lokasi") else "")
                     + f"\n{len(rek)} rekaman: " + ", ".join(x.split("::")[-1][-15:] for x in rek)) if tid else \
-                "Frame yang belum diberi tangga. Isi Tangga fisik di tab 2. Tinjau."
+                "Frame yang belum diberi tangga. Isi Tangga fisik di tab Tinjau."
             self.info_rek.config(text=teks, bg=PANEL); return
         r = sel[0].split("::")[-1] if sel[0].startswith("tg::") else sel[0].split("::")[0]
         c = self.catatan.get(r) or {}
-        teks = ("📍 " + c["catatan"]) if c.get("catatan") else "Belum ada catatan (isi di tab 2. Tinjau)."
+        teks = ("📍 " + c["catatan"]) if c.get("catatan") else "Belum ada catatan (isi di tab Tinjau)."
         if c.get("tangga"):
             teks = f"🪜 {CR.label_tangga(c['tangga'], self.daftar_tangga)}\n" + teks
         if not c.get("selesai"):
-            teks = "Belum ✔ di tab 2. Tinjau: frame rekaman ini tidak dipakai melatih.\n" + teks
+            teks = "Belum ✔ di tab Tinjau: frame rekaman ini tidak dipakai melatih.\n" + teks
         self.info_rek.config(text=teks, bg=CR.WARNA.get(CR.warna_rekaman(c, self.daftar_tangga)) or PANEL)
 
     # ------------------------------------------------------------ daftar frame (strip)
@@ -664,6 +664,13 @@ class TabSplit:
         self._awal = -1
         self._fokus(j if j is not None else 0, sinkron_pohon=j is None)
 
+    def _tab_aktif(self) -> bool:
+        induk = getattr(self, "induk", None)
+        try:
+            return induk is not None and self.studio.tabs.select() == str(induk)
+        except (AttributeError, tk.TclError):
+            return False
+
     def _kini(self) -> Fr | None:
         return self.daftar[self.i] if 0 <= self.i < len(self.daftar) else None
 
@@ -674,7 +681,10 @@ class TabSplit:
             self._jangkar = self.i
         f = self._kini()
         if f is not None:
-            self.studio._frame_dari_split = f.d          # tab Label membuka frame yang sama
+            if self._tab_aktif():
+                # Hanya saat pemakai menelusuri di tab ini: tab Label lalu membuka frame yang sama. Dulu fokus awal
+                # saat Studio dibuka ikut dikirim, sehingga tab Label pindah sendiri ke rekaman lain.
+                self.studio._frame_dari_split = f.d
             if sinkron_pohon:
                 self._sorot_pohon(f)
         self._gambar()
@@ -690,7 +700,8 @@ class TabSplit:
             self.tree.selection_set(iid)
             self.tree.see(iid)
             self._tampil_catatan()
-            self.studio._sesi_dari_split = self.akar / f.r
+            if self._tab_aktif():
+                self.studio._sesi_dari_split = self.akar / f.r
             self._sesi_awal = f.r
         finally:
             self.induk.after_idle(lambda: setattr(self, "_abaikan_pilih_pohon", False))
@@ -735,7 +746,7 @@ class TabSplit:
         k = self._n_slot()
         if not n:
             c.create_text(10, (TH + 30) // 2, anchor="w", fill="#BBBBBB",
-                          text="Tidak ada frame. Ganti 'Tampilkan', atau ✔ rekaman di tab 2. Tinjau.")
+                          text="Tidak ada frame. Ganti 'Tampilkan', atau ✔ rekaman di tab Tinjau.")
             return
         if not (self._awal <= self.i < self._awal + k):
             self._awal = max(0, min(self.i - k // 3, n - k))
@@ -914,12 +925,11 @@ class TabSplit:
         indeks = sorted(self.pilih) if len(self.pilih) > 1 else [self.i]
         frames = [self.daftar[j] for j in indeks if j < len(self.daftar)]
         pulihkan = all(self._status(f) != "pakai" for f in frames)
-        if len(frames) > 1 and not messagebox.askyesno(
-                "Pilah frame", f"{'Pulihkan' if pulihkan else 'Buang'} {len(frames)} frame terpilih?"):
-            return
         self._ubah(frames, buang=not pulihkan)
-        self.ringkas.config(text=f"{len(frames)} frame " + ("dipulihkan." if pulihkan else
-                                                            "dibuang (Del lagi memulihkan; tampilan 'dibuang')."))
+        if len(frames) > 1:                              # tanpa popup konfirmasi: bisa dibatalkan dari pemberitahuan
+            self._kabar_batal(f"{len(frames)} frame {'dipulihkan' if pulihkan else 'dibuang'}.", frames, pulihkan)
+        else:
+            self.ringkas.config(text=f"{frames[0].d.name} " + ("dipulihkan." if pulihkan else "dibuang (Del lagi memulihkan)."))
         if len(frames) == 1 and not pulihkan and self.i + 1 < len(self.daftar):
             self._fokus(self.i + 1)                      # lanjut ke frame berikutnya, seperti tab Label
         else:
@@ -969,16 +979,18 @@ class TabSplit:
         per_rek: dict[str, int] = {}
         for f in frames:
             per_rek[f.r[-15:]] = per_rek.get(f.r[-15:], 0) + 1
-        rinci = ", ".join(f"{r} {n}" for r, n in sorted(per_rek.items(), key=lambda x: -x[1])[:8])
-        if not messagebox.askyesno("Pilah frame", f"{'Pulihkan' if pulihkan else 'Buang'} {len(frames)} frame "
-                                   f"'{filt}'?\n\n{rinci}\n\nBerkas tidak dihapus; bisa dikembalikan lewat "
-                                   "tampilan 'dibuang'."):
-            return
+        rinci = ", ".join(f"{r[-6:]} {n}" for r, n in sorted(per_rek.items(), key=lambda x: -x[1])[:5])
         self._ubah(frames, buang=not pulihkan)
-        self.ringkas.config(text=f"{len(frames)} frame {'dipulihkan' if pulihkan else 'dibuang'}.")
         self._fokus(self.i)
-        if not pulihkan and messagebox.askyesno("Versi data", "Simpan keadaan ini sebagai versi data baru sekarang?"):
-            self.buka_versi()
+        self._kabar_batal(f"{len(frames)} frame '{filt}' {'dipulihkan' if pulihkan else 'dibuang'} ({rinci}). "
+                          "Simpan sebagai versi data lewat ⋯ Lainnya bila perlu.", frames, pulihkan)
+
+    def _kabar_batal(self, teks: str, frames: list[Fr], pulihkan: bool) -> None:
+        def batal():
+            self._ubah(frames, buang=pulihkan)
+            self._fokus(self.i, pertahankan_pilih=True)
+            self.studio.kabar(f"Dibatalkan: {len(frames)} frame dikembalikan seperti semula.")
+        self.studio.kabar(teks, aksi=("↶ Batalkan", batal))
 
     def _simpan_kurasi_nanti(self) -> None:
         if self._jadwal_kurasi is not None:
@@ -997,10 +1009,8 @@ class TabSplit:
         frames = [f.d for r in self.rekaman for f in self.semua.get(r, []) if not f.sampah]
         if not frames:
             messagebox.showinfo("Periksa ulang", "Tidak ada frame siap latih (rekaman ✔ dengan label terperiksa)."); return
-        if not messagebox.askyesno("Periksa ulang", f"Periksa ulang {len(frames)} frame (frame hampir kembar, depth "
-                                   "kosong, potongan mask kecil, hasil model CV)?\nBerjalan di latar, beberapa menit. "
-                                   "Keputusan manual tetap dipakai."):
-            return
+        self.studio.kabar(f"Periksa ulang {len(frames)} frame berjalan di latar (beberapa menit); keputusan manual "
+                          "tetap dipakai. Hasilnya muncul di 'perlu dicek'.")
         self._sibuk = True
         dice = KU.dice_cv_dari(akar_aplikasi() / BERKAS_CV)
 
@@ -1040,7 +1050,7 @@ class TabSplit:
         rek = sorted({r for iid in pilih for r in self._rekaman_iid(iid)})
         belum = [r for r in rek if not (self.catatan.get(r) or {}).get("selesai")]
         if belum:
-            self.ringkas.config(text=f"Set disimpan. {len(belum)} rekaman belum ✔ di tab 2. Tinjau (tidak dilatih).")
+            self.ringkas.config(text=f"Set disimpan. {len(belum)} rekaman belum ✔ di tab Tinjau (tidak dilatih).")
 
     def _terapkan_set(self, frames: list[Fr], s: str | None) -> None:
         """Rekaman yang seluruh framenya terpilih diberi set rekaman; selebihnya pengecualian per frame."""
@@ -1245,11 +1255,8 @@ class TabSplit:
         n = sum(hitung.values())
         if not n:
             messagebox.showinfo("Bagi otomatis", "Tidak ada frame yang dipakai."); return
-        ringkas = "\n".join(f"  {LABEL_SET[k]}: {hitung[k]} frame ({hitung[k] / n * 100:.0f}%, target {rasio[k] * 100:.0f}%)"
-                           for k in self.sd.SET)
-        if not messagebox.askyesno("Bagi otomatis", f"Bagi {n} frame per tangga/rekaman/scene:\n\n{ringkas}\n\n"
-                                   "Pembagian sekarang akan diganti. Lanjut?"):
-            return
+        ringkas = " · ".join(f"{LABEL_SET[k]} {hitung[k]} ({hitung[k] / n * 100:.0f}%)" for k in self.sd.SET)
+        lama = {"rekaman": dict(self.data["rekaman"]), "frame": dict(self.data["frame"])}
         per_frame = {f.k: (f, rencana[gid]) for gid, fr in self._grup() for f in fr}
         per_rek: dict[str, dict[str, int]] = {}
         for f, k in per_frame.values():
@@ -1265,6 +1272,15 @@ class TabSplit:
         self._isi_tree()
         self._gambar()
         self._perbarui_ringkas()
+
+        def batal():
+            self.data["rekaman"], self.data["frame"] = lama["rekaman"], lama["frame"]
+            self._simpan()
+            self._isi_tree()
+            self._gambar()
+            self._perbarui_ringkas()
+            self.studio.kabar("Pembagian dikembalikan seperti sebelum Bagi otomatis.")
+        self.studio.kabar(f"Dibagi otomatis: {ringkas}.", aksi=("↶ Batalkan", batal))
 
     # ------------------------------------------------------------ aksi lain
     def buka_di_label(self) -> None:
@@ -1310,7 +1326,7 @@ class TabSplit:
 
     def _salin(self, teks: str, judul: str) -> None:
         self.studio.clipboard_clear(); self.studio.clipboard_append(teks); self.studio.update_idletasks()
-        messagebox.showinfo(judul, "Disalin ke papan klip. Tempel di terminal:\n\n" + teks)
+        self.studio.kabar(f"{judul} disalin ke papan klip; tempel di terminal.")
 
     def salin_latih(self) -> None:
         self._salin(self._perintah_latih(), "Perintah latih")

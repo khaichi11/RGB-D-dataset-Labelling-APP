@@ -4,15 +4,15 @@ Dipakai jendela "📊 Jumlah data" (tab Tinjau) dan dari baris perintah::
 
     cd kode && .venv/bin/python -m studio_rgbd.hitung_data [--selesai] [--kategori tangga_naik] [--csv]
 
-Definisinya sama dengan yang dipakai pelatihan dan tab Split Dataset:
+Definisinya sama dengan yang dipakai pelatihan dan tab Pilah & Split:
 
 - status frame = penanda daftar frame Studio (:func:`status_label`);
 - "siap latih" = ``frame_bersih`` skrip latih (``rgbd_convnext.data.dataset_d435``):
   berkas wajib lengkap dan tidak di tempat sampah;
 - "siap latih, diperiksa" = ``frame_bersih(hanya_diperiksa=True)``, bawaan tab
-  Split Dataset ("Hanya label yang sudah divalidasi manual");
+  Pilah & Split ("Hanya label yang sudah divalidasi manual");
 - train/val/test: dari ``split_dataset.json`` bila sudah ada, selain itu
-  perkiraan pembagian per blok frame 70/15/15 tab Split Dataset (awal rekaman
+  perkiraan pembagian per blok frame 70/15/15 tab Pilah & Split (awal rekaman
   train, tengah val, akhir test). Hanya rekaman bertanda ✔ di tab Tinjau yang
   dipakai melatih (``frame_bersih(hanya_selesai=True)``); rekaman lain 0.
 """
@@ -37,7 +37,7 @@ except ImportError:
 BERKAS_WAJIB = ("color_raw.png", "depth_aligned_to_color.npy", "mask_objek.png", "mask_acuan.png")
 STATUS = ("diperiksa", "claude", "claude_cek", "claude_kosong", "usulan", "")
 SET = ("train", "val", "test")
-RASIO_BAWAAN = {"train": 0.70, "val": 0.15, "test": 0.15}       # tab Split Dataset, 70/15/15
+RASIO_BAWAAN = {"train": 0.70, "val": 0.15, "test": 0.15}       # tab Pilah & Split, 70/15/15
 
 
 def _json(p: Path) -> dict:
@@ -63,7 +63,7 @@ def status_label(frame: Path) -> str:
 
 
 def _bagi_blok(n: int, rasio: dict) -> dict:
-    """Pembagian per blok frame tab Split Dataset (``_rencana_blok``) untuk n frame satu rekaman."""
+    """Pembagian per blok frame tab Pilah & Split (``_rencana_blok``) untuk n frame satu rekaman."""
     a = round(n * rasio["train"])
     b = a + round(n * rasio["val"])
     return {"train": a, "val": b - a, "test": n - b}
@@ -171,7 +171,7 @@ class JendelaJumlahData(tk.Toplevel):
         tk.Label(self, textvariable=self.ringkas, bg=BG, fg=INK, justify="left", anchor="w",
                  font=("Segoe UI", 10, "bold")).pack(fill="x", padx=12, pady=(4, 2))
         tk.Label(self, text="Siap latih = berkas lengkap, bukan sampah (sama dengan skrip latih). Siap latih ✔ = hanya "
-                            "label yang sudah diperiksa manual, bawaan tab Split Dataset. Train/Val/Test hanya dari rekaman ✔ "
+                            "label yang sudah diperiksa manual, bawaan tab Pilah & Split. Train/Val/Test hanya dari rekaman ✔ "
                             "(rekaman lain tidak dilatih), dari split_dataset.json bila sudah dibuat, selain itu "
                             "perkiraan per blok 70/15/15. "
                             "Klik judul kolom untuk mengurutkan; klik dua kali baris untuk membuka rekamannya.",

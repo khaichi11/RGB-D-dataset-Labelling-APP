@@ -196,8 +196,10 @@ def jalankan(keluar: str) -> int:
             jalan(0.5)
     else:
         print("  (objek tab Pilah & Split tidak ditemukan; dilewati)")
-    for tab in (app.tab_rekam, app.tab_ekspor, app.tab_uji, app.tab_uji_berkas):
-        langkah(f"buka tab {app.tabs.tab(tab, 'text').strip()}", lambda tab=tab: app.tabs.select(tab), 0.8)
+    langkah("buka tab Rekam", lambda: app.tabs.select(app.tab_rekam), 0.8)
+    for mode in ("kamera", "berkas", "kamera"):
+        langkah(f"buka tab Uji ({mode})", lambda mode=mode: (app.tabs.select(app.tab_uji_halaman), app.pilih_uji(mode)), 0.8)
+    langkah("pemberitahuan dalam jendela", lambda: app.kabar("uji pemberitahuan", aksi=("↶ Batalkan", lambda: None)), 0.3)
     jalan(1.0)
     try:
         app.destroy()

@@ -11,13 +11,15 @@ sudah dipecahkan ada di tabel "Catatan integrasi dan jejak masalah"
 | tab | berkas utama | pendukung |
 |---|---|---|
 | 1. Rekam | `studio_dataset_rgbd.py` (`tab_rekam`) | `kamera_rgbd.py`, `resolusi_kamera.py`, `uji_depth_dinding.py` (tombol "Uji depth dinding") |
-| 2. Tinjau & Potong | `studio_dataset_rgbd.py` (`tab_tinjau`) | `catatan_rekaman.py`, `kelompok_tangga.py` (jendela 🪜 Banyak…, berisi `atribut_tangga.py`), `sinkron.py`, `tempat_sampah.py`, `hitung_data.py`; tindakan jarang di menu `ui_bantu.tombol_menu` (⋯ Lainnya) |
-| 3. Ekspor Frame | `studio_dataset_rgbd.py` (`_ekspor_worker`) | `sinkron.py`, `ir_selaras.py` |
-| 4. Label & Ukur | `studio_dataset_rgbd.py` (`KanvasLabel`) | `segmentasi_convnext_depth.py` (usulan label), `visual_depth.py`, `ir_selaras.py`, `qa_label.py`, `panel_ukuran.py`, `pemutar_ukur.py`, `ukuran_meteran.py` |
-| 5. Uji Sistem Tangga | `uji_realtime.py` | `daftar_model.py` (pilihan model), rgbd_convnext `paralel.py`/`sumber.py` |
-| 6. Uji Model pada Berkas | `uji_berkas.py` | `daftar_model.py` |
-| 7. Pilah & Split | `tab_split.py` (strip frame + pratinjau, pohon rekaman, kalkulator) | `kurasi.py` (Periksa ulang), `qa_label.py` (versi tanda), `jendela_versi.py` (Versi data) |
+| 2. Tinjau & Ekspor | `studio_dataset_rgbd.py` (`tab_tinjau`; baris ekspor `ui_ekspor` di bawah rentang potong) | `catatan_rekaman.py`, `kelompok_tangga.py` (jendela 🪜 Banyak…, berisi `atribut_tangga.py`), `sinkron.py`, `ir_selaras.py`, `tempat_sampah.py`, `hitung_data.py`; tindakan jarang di menu `ui_bantu.tombol_menu` (⋯ Lainnya) |
+| 3. Label & Ukur | `studio_dataset_rgbd.py` (`KanvasLabel`) | `segmentasi_convnext_depth.py` (usulan label), `visual_depth.py`, `ir_selaras.py`, `panel_ukuran.py`, `pemutar_ukur.py`, `ukuran_meteran.py`; sakelar tampilan di menu "⋯ Opsi", penggeser jarang di "Pengaturan lanjutan" |
+| 4. Pilah & Split | `tab_split.py` (strip frame + pratinjau, pohon rekaman, kalkulator) | `kurasi.py` (Periksa ulang), `qa_label.py` (versi tanda), `jendela_versi.py` (Versi data) |
+| 5. Uji Model | `uji_realtime.py` (sumber kamera) / `uji_berkas.py` (sumber berkas), dipilih `Studio.pilih_uji` | `daftar_model.py`, rgbd_convnext `paralel.py`/`sumber.py` |
 | Hugging Face | `unggah_hf.py` (dataset) | model: `model/aplikasi_tangga/skrip/utama/unggah_model_hf.py` |
+
+Pemberitahuan: `messagebox.showinfo/showwarning/showerror` jendela utama dialihkan ke pita di dalam jendela
+(`ui_bantu.Kabar`, `pasang_kabar`, `Studio.kabar`; bisa membawa tombol "↶ Batalkan"). Popup ya/tidak hanya untuk
+tindakan yang tidak bisa dibatalkan (hapus rekaman/ekspor, push HF, dsb.).
 
 ## Gejala -> letak
 
