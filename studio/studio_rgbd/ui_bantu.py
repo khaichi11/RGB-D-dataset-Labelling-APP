@@ -64,3 +64,28 @@ def jadikan_modal(dlg: tk.Toplevel, induk) -> None:
         pass
     dlg.lift()
     dlg.focus_force()
+
+
+def tombol_menu(studio, induk, teks: str, item: list, width: int = 110, warna: str = "#E8DDD5",
+                fg: str = "#382D29"):
+    """Satu tombol yang membuka menu: tindakan yang jarang dipakai tetap ada tanpa memenuhi panel.
+
+    ``item``: ``(teks, perintah)``, ``(teks, BooleanVar, perintah)`` untuk centang, atau ``None`` untuk garis.
+    """
+    menu = tk.Menu(induk, tearoff=False)
+    for it in item:
+        if it is None:
+            menu.add_separator()
+        elif len(it) == 3:
+            menu.add_checkbutton(label=it[0], variable=it[1], command=it[2])
+        else:
+            menu.add_command(label=it[0], command=it[1])
+
+    def buka():
+        try:
+            menu.tk_popup(tombol.winfo_rootx(), tombol.winfo_rooty() + tombol.winfo_height())
+        finally:
+            menu.grab_release()
+    tombol = studio.tombol_ringkas(induk, teks, buka, warna, fg, width=width)
+    tombol.menu = menu
+    return tombol

@@ -1,6 +1,6 @@
 """Jendela "Kelompokkan tangga": tandai rekaman yang merekam tangga fisik yang sama.
 
-Dibuka dari kartu catatan tab Tinjau (tombol "Kelompokkan…"). Semua rekaman
+Dibuka dari kartu catatan tab Tinjau (tombol "🪜 Banyak…"). Semua rekaman
 satu kategori tampil sebagai kartu bergambar, urut waktu rekam. Gambarnya frame
 ekspor berlabel dengan poligon terbanyak (frame paling jelas memperlihatkan
 tangga); frame gelap memakai citra IR bila ada, atau dicerahkan.
@@ -29,8 +29,10 @@ from PIL import Image, ImageTk
 
 try:
     from . import catatan_rekaman as CR
+    from .atribut_tangga import AtributTangga
 except ImportError:
     import catatan_rekaman as CR
+    from atribut_tangga import AtributTangga
 
 BG, PANEL, INK, MUTED, LINE, ACCENT, GREEN = ("#F3EEE7", "#FFFDFC", "#382D29", "#786962", "#DED2C8",
                                              "#754C3B", "#6B8B63")
@@ -151,6 +153,11 @@ class JendelaKelompokTangga(tk.Toplevel):
         baris.pack(fill="x", pady=(4, 0))
         self._tombol(baris, "Ganti nama", self.ganti_nama, lebar=140).pack(side="left", fill="x", expand=True)
         self._tombol(baris, "↻ Muat ulang", self.muat, lebar=140).pack(side="left", fill="x", expand=True, padx=(4, 0))
+        # Atribut tangga terpilih (dulu di kartu catatan tab Tinjau dan tab Split; kini hanya di sini).
+        tk.Label(isi, text="Atribut tangga terpilih", bg=PANEL, fg=INK, font=("Segoe UI", 10, "bold")).pack(
+            anchor="w", pady=(10, 0))
+        self.atribut = AtributTangga(isi, self.akar, sesudah=self._atribut_berubah, bg=PANEL, fg_muted=MUTED)
+        self.atribut.pack(fill="x", pady=(2, 0))
         tk.Label(isi, text="Tangga yang sama di train dan test membuat angka uji terlalu optimis. Rekaman yang "
                            "melewati beberapa tangga: atur per scene di tab Tinjau.",
                  bg=PANEL, fg=MUTED, wraplength=290, justify="left", font=("Segoe UI", 8)).pack(anchor="w", pady=(8, 0))
@@ -275,8 +282,14 @@ class JendelaKelompokTangga(tk.Toplevel):
         sel = self.daftar.curselection()
         return self._daftar_id[sel[0]] if sel and sel[0] < len(getattr(self, "_daftar_id", [])) else None
 
+    def _atribut_berubah(self) -> None:
+        for p in self.sesi:
+            if hasattr(self.studio, "_segarkan_item_sesi"):
+                self.studio._segarkan_item_sesi(p)
+
     def _klik_tangga(self) -> None:
         tid = self._tid_terpilih()
+        self.atribut.tampilkan(tid)
         if tid:
             self.pilih = {p for p in self.sesi if CR.baca(p).get("tangga") == tid}
             self._segarkan()

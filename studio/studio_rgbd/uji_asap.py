@@ -87,8 +87,13 @@ def jalankan(keluar: str) -> int:
     while getattr(app, "_sinkron_jalan", None) and time.time() - t0 < 180:
         jalan(0.5)
     print("  info rekaman:", app.info_progres.cget("text").replace("\n", " / ")[:300], flush=True)
-    langkah("warna stabilo", lambda: app.atur_warna_sesi("hijau"))
-    langkah("hapus stabilo", lambda: app.atur_warna_sesi(None))
+    langkah("data test (dialog dijawab otomatis)", app.toggle_data_test, 0.3)
+    langkah("jendela kelompok tangga", app.buka_kelompok_tangga, 1.5)
+    jk = getattr(app, "_jendela_kelompok", None)
+    if jk is not None and jk.winfo_exists():
+        if jk.daftar.size():
+            langkah("kelompok: klik tangga", lambda: (jk.daftar.selection_set(0), jk._klik_tangga()), 0.5)
+        langkah("kelompok: tutup", jk.destroy, 0.3)
     # ---------------------------------------------------------------- Label
     app.tabs.select(app.tab_label)
     jalan(0.5)
@@ -150,29 +155,47 @@ def jalankan(keluar: str) -> int:
         for j in (0, len(app.frame_paths) // 2, len(app.frame_paths) - 1):
             if app.frame_paths:
                 langkah(f"sesi {i} frame {j}", lambda j=j: app._pilih_indeks_frame(j), 0.4)
-    # Split: QA label beberapa frame, kalkulator, pratinjau.
-    ts0 = getattr(app, "panel_split", None)
-    if ts0 is not None:
-        app.tabs.select(app.tab_split)
-        jalan(1.5)
-        langkah("split periksa label", ts0.periksa_label, 2.0)
-        for mode in ("grup", "blok"):                       # dialog konfirmasi dijawab "tidak"
-            langkah(f"split bagi otomatis {mode}", lambda mode=mode: ts0.bagi_otomatis(mode), 0.5)
-        t0 = time.time()
-        while getattr(ts0, "_sibuk", False) and time.time() - t0 < 300:
-            jalan(0.5)
-    # ---------------------------------------------------------------- Split
+    # ---------------------------------------------------------------- Pilah & Split
     app.tabs.select(app.tab_split)
     jalan(2.0)
     ts = getattr(app, "panel_split", None)
     if ts is not None:
-        langkah("split muat ulang", ts.muat_ulang, 3.0)
-        langkah("split ringkasan CSV", ts.ringkasan_csv, 0.5)
+        t0 = time.time()
+        while getattr(ts, "_sibuk", False) and time.time() - t0 < 120:
+            jalan(0.3)
+        for filt in ("semua", "perlu dicek", "saran buang", "dibuang", "latar (tanpa mask)", "semua"):
+            langkah(f"pilah tampilkan {filt}", lambda filt=filt: (ts.filter.set(filt), ts._isi_daftar()), 0.3)
+        print(f"  pilah: {len(ts.daftar)} frame, rekaman {len(ts.rekaman)}", flush=True)
+        # Waktu tiap aksi (tanpa jeda): panah dan Del harus terasa seketika.
+        def ukur(nama, f, ulang=10):
+            t0 = time.perf_counter()
+            for _ in range(ulang):
+                ts._geser_terakhir = 0.0
+                f()
+                app.update_idletasks()
+            print(f"  waktu {nama}: {(time.perf_counter() - t0) / ulang * 1000:.0f} ms", flush=True)
+        if ts.daftar:
+            ukur("panah kanan", lambda: ts.geser(1))
+            ukur("panah kiri", lambda: ts.geser(-1))
+            awal = next((j for j, f in enumerate(ts.daftar) if ts._status(f) == "pakai"), 0)
+            f_uji = ts.daftar[awal]
+            ukur("Del (buang lalu pulihkan)", lambda: (ts._fokus(awal), ts.buang_pulihkan(), ts._fokus(awal),
+                                                       ts.buang_pulihkan()), ulang=4)
+            import json as _json
+            if f_uji.sampah or _json.loads((f_uji.d / "frame_state.json").read_text()).get("di_sampah"):
+                GALAT.append(f"pilah: {f_uji.k} masih dibuang setelah buang lalu pulihkan")
+        langkah("pilah K label benar", lambda: (ts.filter.set("perlu dicek"), ts._isi_daftar(), ts.tandai_ok()), 0.3)
+        langkah("pilah buang semua yang tampil (dijawab tidak)", ts.buang_semua_tampil, 0.3)
+        langkah("pilah bagi otomatis (dijawab tidak)", ts.bagi_otomatis, 0.5)
+        langkah("pilah per tangga", lambda: (ts.per_tangga.set(True), ts._isi_tree()), 0.5)
+        langkah("pilah per rekaman", lambda: (ts.per_tangga.set(False), ts._isi_tree()), 0.5)
+        langkah("pilah muat ulang", ts.muat_ulang, 3.0)
+        langkah("pilah ringkasan CSV", ts.ringkasan_csv, 0.5)
         t0 = time.time()
         while getattr(ts, "_sibuk", False) and time.time() - t0 < 120:
             jalan(0.5)
     else:
-        print("  (objek tab Split tidak ditemukan; dilewati)")
+        print("  (objek tab Pilah & Split tidak ditemukan; dilewati)")
     for tab in (app.tab_rekam, app.tab_ekspor, app.tab_uji, app.tab_uji_berkas):
         langkah(f"buka tab {app.tabs.tab(tab, 'text').strip()}", lambda tab=tab: app.tabs.select(tab), 0.8)
     jalan(1.0)
