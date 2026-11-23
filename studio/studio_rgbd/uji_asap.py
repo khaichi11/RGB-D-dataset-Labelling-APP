@@ -163,7 +163,7 @@ def jalankan(keluar: str) -> int:
         t0 = time.time()
         while getattr(ts, "_sibuk", False) and time.time() - t0 < 120:
             jalan(0.3)
-        for filt in ("semua", "perlu dicek", "saran buang", "dibuang", "latar (tanpa mask)", "semua"):
+        for filt in ("semua", "perlu dicek", "model gagal", "dibuang", "latar (tanpa mask)", "semua"):
             langkah(f"pilah tampilkan {filt}", lambda filt=filt: (ts.filter.set(filt), ts._isi_daftar()), 0.3)
         print(f"  pilah: {len(ts.daftar)} frame, rekaman {len(ts.rekaman)}", flush=True)
         # Waktu tiap aksi (tanpa jeda): panah dan Del harus terasa seketika.

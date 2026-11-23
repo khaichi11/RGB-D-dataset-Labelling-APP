@@ -6,7 +6,7 @@ disisihkan kurasi otomatis (``kurasi.json``, mis. hampir kembar dengan frame seb
 sebagai "dibuang otomatis"; memulihkannya mencatat keputusan manual kurasi.
 
 Daftar "perlu dicek" adalah gabungan pemeriksaan label (``qa_label.json``) dan "perlu dilihat"
-kurasi (model CV, depth kosong, potongan mask kecil); saran buang di urutan teratas. Satu daftar
+kurasi (model CV, depth kosong, potongan mask kecil); "model gagal" di urutan teratas. Satu daftar
 frame mencakup semua rekaman siap latih (✔ di tab 2); klik rekaman di pohon melompat ke framenya.
 
 Pembagian disimpan di ``<dataset>/studio_rgbd/split_dataset.json`` dan dibaca skrip latih lewat
@@ -56,7 +56,7 @@ WARNA_STATUS = {"pakai": "#1E8E3E", "cek": "#E8710A", "buang": "#C5221F", "otoma
 TEKS_STATUS = {"pakai": "DIPAKAI", "cek": "PERLU DICEK", "buang": "DIBUANG", "otomatis": "DIBUANG OTOMATIS"}
 RISER_RGB, TREAD_RGB = (255, 90, 90), (90, 169, 255)       # sama dengan kanvas label
 TW, TH = 160, 90                                           # ukuran gambar kecil di strip
-FILTER = ("perlu dicek", "saran buang", "semua", "dibuang", "latar (tanpa mask)")
+FILTER = ("perlu dicek", "model gagal", "semua", "dibuang", "latar (tanpa mask)")
 BERKAS_CV = "runs/cv_data6023_20261120/hasil_cv.json"     # Dice out-of-fold terakhir untuk "perlu dilihat"
 
 
@@ -267,9 +267,8 @@ class TabSplit:
             ("Kelompokkan rekaman per tangga fisik", self.per_tangga, self._isi_tree),
             ("Hanya label yang sudah divalidasi manual", self.hanya_diperiksa, self.muat_ulang),
         ], width=110).pack(side="right")
-        self.btn_massal = st.tombol_ringkas(kepala, "🗑 Buang semua yang tampil", self.buang_semua_tampil,
-                                            "#F3D8D4", INK, width=190)
-        self.btn_massal.pack(side="right", padx=(0, 4))
+        self.btn_massal = st.tombol_ringkas(kepala, "♻ Pulihkan semua yang tampil", self.buang_semua_tampil,
+                                            "#E8DDD5", INK, width=200)
         kepala2 = tk.Frame(i, bg=PANEL); kepala2.pack(fill="x", pady=(6, 0))
         self.judul = tk.Label(kepala2, text="", bg=PANEL, fg=INK, font=("Segoe UI", 10, "bold"))
         self.judul.pack(side="left")
@@ -648,7 +647,7 @@ class TabSplit:
         if filt == "perlu dicek":
             daftar = [f for f in semua if self._status(f) == "pakai" and (self._saran(f) == "buang" or self._alasan(f))]
             daftar.sort(key=lambda f: (self._saran(f) != "buang", skor(f)))
-        elif filt == "saran buang":
+        elif filt == "model gagal":                 # qa_label "saran: buang": kedua model CV hampir tidak cocok
             daftar = sorted((f for f in semua if self._saran(f) == "buang"), key=skor)
         elif filt == "dibuang":
             daftar = [f for f in semua if self._status(f) != "pakai"]
@@ -658,9 +657,12 @@ class TabSplit:
             daftar = semua
         self.daftar = daftar
         j = next((n for n, f in enumerate(daftar) if f.k == kunci), None) if kunci else None
-        massal = filt in ("perlu dicek", "saran buang", "dibuang") and bool(daftar)
-        self.btn_massal.configure(text="♻ Pulihkan semua yang tampil" if filt == "dibuang" else "🗑 Buang semua yang tampil",
-                                  state="normal" if massal else "disabled")
+        # Tombol massal hanya memulihkan. Membuang massal menurut ketidakcocokan model sengaja tidak ada: pemeriksaan
+        # 23 Nov menunjukkan sebagian besar frame "model gagal" berlabel benar (tangga kecil/jauh/buram, contoh sulit).
+        if filt == "dibuang" and daftar:
+            self.btn_massal.pack(side="right", padx=(0, 4))
+        else:
+            self.btn_massal.pack_forget()
         self._awal = -1
         self._fokus(j if j is not None else 0, sinkron_pohon=j is None)
 
@@ -772,7 +774,7 @@ class TabSplit:
                 c.create_rectangle(x + 5, 7, x + TW - 1, TH + 1, outline="#FFD54F", width=2)
             if j == self.i:
                 c.create_rectangle(x - 1, 1, x + 5 + TW, 7 + TH, outline="#FFD54F", width=1)
-            ket = {"buang": "DIBUANG", "otomatis": "otomatis", "cek": "BUANG?" if self._saran(f) == "buang" else "cek"}
+            ket = {"buang": "DIBUANG", "otomatis": "otomatis", "cek": "model gagal" if self._saran(f) == "buang" else "cek"}
             c.create_text(x + 2, TH + 9, anchor="nw", fill=warna if tampak != "pakai" else "#DDDDDD",
                           font=("Segoe UI", 8, "bold"),
                           text=f"{f.r[-6:]} {f.d.name[-6:]}" + (f"  {ket[tampak]}" if tampak in ket else ""))
@@ -799,7 +801,9 @@ class TabSplit:
             teks = ("Disisihkan otomatis (" + "; ".join(self.kur.get("frame", {}).get(f.k, {}).get("alasan", []))
                     + "): tidak dilatih. Del memulihkan bila frame ini memang perlu.")
         elif self._saran(f) == "buang":
-            teks = f"🗑 Saran buang: {alasan}. Perbaiki labelnya (Enter → tab Label) bila bisa, atau Del untuk membuang."
+            teks = (f"⚠ Model gagal di frame ini ({alasan}). Sering ini contoh sulit dengan label benar (tangga kecil, "
+                    "jauh, terpotong, buram) → K, tetap dipakai. Label salah → Enter perbaiki. Del hanya bila labelnya "
+                    "salah total atau gambarnya tak berguna.")
         elif alasan:
             teks = f"🔎 Perlu dicek: {alasan}. Label benar → biarkan (→ frame berikutnya); salah → Enter; tak berguna → Del."
         else:
@@ -970,8 +974,8 @@ class TabSplit:
 
     def buang_semua_tampil(self) -> None:
         filt = self.filter.get()
-        if filt not in ("perlu dicek", "saran buang", "dibuang"):
-            return                                       # "semua"/"latar": terlalu luas untuk sekali tekan
+        if filt != "dibuang":
+            return                                       # hanya memulihkan massal; membuang tetap per frame (Del)
         pulihkan = filt == "dibuang"
         frames = [f for f in self.daftar if (self._status(f) != "pakai") == pulihkan]
         if not frames:
