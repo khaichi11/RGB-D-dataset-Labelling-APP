@@ -1,6 +1,6 @@
 """Kurasi dataset latih: buang frame yang hampir kembar atau buram, tandai yang perlu dilihat.
 
-Peran: dipakai tab Split (jendela "Kurasi dataset") dan skrip latih (``--kurasi``).
+Peran: dipakai tab 7 Pilah & Split (⋯ Lainnya → Periksa ulang; frame "dibuang otomatis") dan skrip latih (``--kurasi``).
 
 Frame diekspor tiap ~0,33 detik dari video, jadi saat kamera diam puluhan frame
 berturut-turut hampir sama: menambah jumlah tanpa menambah variasi, dan membuat

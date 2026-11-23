@@ -1,4 +1,4 @@
-"""Kotak atribut tangga fisik: lokasi, luar/dalam ruang, dan bahan (dipakai tab Tinjau dan Split).
+"""Kotak atribut tangga fisik: lokasi, luar/dalam ruang, dan bahan (di jendela Kelompokkan tangga, 🪜 Banyak…).
 
 Lokasi menentukan pembagian latih/uji yang adil (satu bangunan utuh di latih atau
 di uji). Luar/dalam dan bahan dicatat untuk melaporkan hasil per kondisi.
