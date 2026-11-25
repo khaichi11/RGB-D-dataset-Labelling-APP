@@ -1,6 +1,7 @@
 """Pembantu tata letak Tk yang dipakai beberapa tab Studio."""
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from tkinter import ttk
 
@@ -86,13 +87,35 @@ def tombol_menu(studio, induk, teks: str, item: list, width: int = 110, warna: s
                 menu.add_command(label=it[0], command=it[1])
     isi()
 
+    def tutup(_e=None):
+        if menu.winfo_ismapped():
+            menu.unpost()
+
+    def tutup_klik(e):
+        if e.widget is not tombol:                      # tombol menjalankan perintahnya saat ditekan (Button-1)
+            tutup()
+
     def buka():
+        if menu.winfo_ismapped():
+            tutup()                                     # klik tombolnya lagi = tutup menu
+            return
         if callable(item):
             isi()                                       # isi berubah (mis. daftar tangga): bangun ulang saat dibuka
-        try:
-            menu.tk_popup(tombol.winfo_rootx(), tombol.winfo_rooty() + tombol.winfo_height())
-        finally:
-            menu.grab_release()
+        x, y = tombol.winfo_rootx(), tombol.winfo_rooty() + tombol.winfo_height()
+        if sys.platform == "win32":
+            try:
+                menu.tk_popup(x, y)                     # Windows: modal, kembali sesudah menu ditutup
+            finally:
+                menu.grab_release()
+        else:
+            # Linux (X11/Xwayland): tk_popup tidak modal. grab_release() langsung sesudahnya (pola Windows) melepas
+            # grab selagi menu masih terbuka, sehingga klik di luar tidak menutupnya dan menu "macet" di layar.
+            menu.tk_popup(x, y)
+    # Cadangan bila grab gagal (Xwayland): klik di mana pun di jendela, Esc, atau jendela berpindah menutup menu.
+    akar = induk.winfo_toplevel()
+    akar.bind("<Button-1>", tutup_klik, add="+")
+    akar.bind("<Unmap>", tutup, add="+")
+    menu.bind("<Escape>", tutup)
     tombol = studio.tombol_ringkas(induk, teks, buka, warna, fg, width=width)
     tombol.menu = menu
     return tombol
