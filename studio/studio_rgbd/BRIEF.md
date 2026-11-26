@@ -25,6 +25,7 @@ tindakan yang tidak bisa dibatalkan (hapus rekaman/ekspor, push HF, dsb.).
 
 | gejala | lihat dulu |
 |---|---|
+| Uji Model: nomor/ukuran anak tangga beda dari video uji resmi (mis. #1 lalu #3) | `uji_realtime._spek`: rekaman dibaca dari frame 0 seperti `ukuran_sesi` dan `bukti/final_d435/video_uji/video_uji.py` (dulu `lewati` 20: pelacak mulai dari keadaan lain); model bawaan sama (`akhir_baru/deployment_penuh.pt`, FP16 + graf) |
 | Uji Model: video tampak dipercepat / melompat, nomor anak tangga beda dari video uji | `uji_realtime.py` `_spek`/`_loop`: rekaman selalu dibaca tanpa membuang frame (`waktu_nyata` librealsense mati); centang "laju asli" menahan tiap frame menurut cap waktu rekaman (tertinggal = acuan digeser, tidak dikejar; sesudah jeda acuan diulang). Dulu mode "seperti kamera" membuang 22-36 % frame saat Studio tertinggal (27 Nov) |
 | Uji Model: jeda, mundur/maju per frame, zoom, gambar terlalu kecil | `uji_realtime.py`: riwayat 900 frame terakhir (JPEG, `_riwayat`), `jeda`/`langkah`/`_lihat`/`_geser_riwayat`; saat jeda pekerja tertahan di `_loop` (pipeline paralel hanya tertahan antrean), ▶ di frame terbaru memproses satu frame (`_maju_satu`); `_gambar_ulang` mengepaskan frame ke panel (boleh diperbesar), roda tetikus zoom di kursor, seret geser, klik ganda pas layar; Spasi/←/→ sesudah gambar diklik |
 | Tab Uji tidak menampilkan kamera / "device busy" | `uji_realtime.py` (pesan di kanvas), rgbd_convnext `sumber.alir_kamera` (coba ulang 5x); tutup program lain yang memakai D435 |
