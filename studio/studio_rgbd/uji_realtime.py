@@ -367,7 +367,9 @@ class UjiRealtime:
             # rekaman. Dulu laju asli = waktu nyata librealsense, yang membuang frame bila Studio tertinggal
             # (27 Nov: 22-36 % frame terbuang, video tampak dipercepat, pelacak melihat lompatan, jeda
             # membuang rekaman yang lewat).
-            sumber = {"jenis": "rekaman", "jalur": atur["rekaman"], "lewati": 20, "maks": 0, "waktu_nyata": False}
+            # lewati 0 = sama dengan pengukuran resmi (ukuran_sesi, video uji): dengan 20 frame awal dilewati pelacak
+            # mulai dari keadaan lain dan penomoran bisa berbeda (Raden Wijaya malam frame 66: #1 lalu #3, 27 Nov).
+            sumber = {"jenis": "rekaman", "jalur": atur["rekaman"], "lewati": 0, "maks": 0, "waktu_nyata": False}
         return sumber, mesin, gpu
 
     def _loop(self, atur: dict) -> None:
