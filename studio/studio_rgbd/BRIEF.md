@@ -25,6 +25,7 @@ tindakan yang tidak bisa dibatalkan (hapus rekaman/ekspor, push HF, dsb.).
 
 | gejala | lihat dulu |
 |---|---|
+| Uji Model: jeda, mundur/maju per frame, zoom, gambar terlalu kecil | `uji_realtime.py`: riwayat 900 frame terakhir (JPEG, `_riwayat`), `jeda`/`langkah`/`_lihat`/`_geser_riwayat`; saat jeda pekerja tertahan di `_loop` (pipeline paralel hanya tertahan antrean), ▶ di frame terbaru memproses satu frame (`_maju_satu`); `_gambar_ulang` mengepaskan frame ke panel (boleh diperbesar), roda tetikus zoom di kursor, seret geser, klik ganda pas layar; Spasi/←/→ sesudah gambar diklik |
 | Tab Uji tidak menampilkan kamera / "device busy" | `uji_realtime.py` (pesan di kanvas), rgbd_convnext `sumber.alir_kamera` (coba ulang 5x); tutup program lain yang memakai D435 |
 | Model yang dipakai salah / tidak muncul di daftar | `daftar_model.py`, `segmentasi_convnext_depth.pilih_bobot_usulan`; checkpoint `runs/` tidak masuk Git |
 | Usulan label buruk | `segmentasi_convnext_depth.py`; checklist di PANDUAN |
