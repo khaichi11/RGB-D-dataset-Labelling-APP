@@ -100,6 +100,15 @@ class UjiRealtime:
         self._ada_frame = False
         self._sudah_diingatkan = False
         self._simpanan = None
+        # Tinjau ulang: frame terakhir disimpan (JPEG) agar bisa dijeda, dimundurkan, dan diperbesar.
+        self._riwayat = collections.deque(maxlen=900)   # (jpeg, teks laju, teks tahap, teks ukuran), ~30 s
+        self._posisi = None                # indeks riwayat yang sedang dilihat; None = ikuti frame terbaru
+        self._jeda = False                 # pekerja menahan pipeline (rekaman berhenti dibaca)
+        self._maju_satu = False            # saat jeda: proses satu frame lagi
+        self._zoom, self._pusat = 1.0, None
+        self._gambar_kini = None           # BGR yang sedang tampil (untuk gambar ulang saat zoom/geser/ubah ukuran)
+        self._seret = None
+        self._atur_geser = False
 
         # Bawaan = model pengusul Studio (dulu rujukan lama final_d435, 5 rekaman latih).
         self._label_model, self._jalur_model, bawaan = label_dan_jalur()
@@ -149,8 +158,33 @@ class UjiRealtime:
 
         b, i = self._kartu(kiri, "Tampilan (mekanisme perintah tangga)")
         b.pack(fill="both", expand=True)
-        self.kanvas = tk.Label(i, bg="#111111")
+        self.kanvas = tk.Canvas(i, bg="#111111", highlightthickness=0, takefocus=1)
         self.kanvas.pack(fill="both", expand=True)
+        self._id_gambar = self.kanvas.create_image(0, 0, anchor="nw")
+        self.kanvas.bind("<Configure>", lambda e: self._gambar_ulang())
+        self.kanvas.bind("<Button-1>", self._mulai_seret)
+        self.kanvas.bind("<B1-Motion>", self._seret_gambar)
+        self.kanvas.bind("<Double-Button-1>", lambda e: self.pas_layar())
+        self.kanvas.bind("<Button-4>", lambda e: self._zoom_di(e, 1.25))
+        self.kanvas.bind("<Button-5>", lambda e: self._zoom_di(e, 0.8))
+        self.kanvas.bind("<MouseWheel>", lambda e: self._zoom_di(e, 1.25 if e.delta > 0 else 0.8))
+        self.kanvas.bind("<space>", lambda e: self.jeda())
+        self.kanvas.bind("<Left>", lambda e: self.langkah(-1))
+        self.kanvas.bind("<Right>", lambda e: self.langkah(1))
+        bar = tk.Frame(i, bg=PANEL)
+        bar.pack(fill="x", pady=(6, 0))
+        self.btn_jeda = self._tombol(bar, "⏸  Jeda", self.jeda, "#E8DDD5", INK)
+        self.btn_jeda.pack(side="left", padx=(0, 4))
+        self._tombol(bar, "◀", lambda: self.langkah(-1), "#E8DDD5", INK).pack(side="left", padx=2)
+        self._tombol(bar, "▶", lambda: self.langkah(1), "#E8DDD5", INK).pack(side="left", padx=2)
+        self._tombol(bar, "Pas layar", self.pas_layar, "#E8DDD5", INK).pack(side="right")
+        self.posisi_teks = tk.StringVar(value="")
+        tk.Label(bar, textvariable=self.posisi_teks, bg=PANEL, fg=MUTED, font=("Segoe UI", 9)).pack(side="right", padx=8)
+        self.geser = ttk.Scale(i, from_=0, to=0, orient="horizontal", command=self._geser_riwayat)
+        self.geser.pack(fill="x", pady=(4, 0))
+        tk.Label(i, text="Spasi = jeda/lanjut · ← → = mundur/maju satu frame · roda tetikus = zoom · seret = geser · "
+                         "klik ganda = pas layar (klik gambar dulu agar tombol keyboard aktif)",
+                 bg=PANEL, fg=MUTED, font=("Segoe UI", 8), anchor="w").pack(fill="x")
 
         b, i = self._kartu(kanan, "Model")
         b.pack(fill="x")
@@ -292,6 +326,9 @@ class UjiRealtime:
                 "rekaman": self.rekaman.get(), "waktu_nyata": bool(self.waktu_nyata.get()),
                 "simpan": bool(self.simpan.get())}
         self.jalan = True
+        self._riwayat.clear()
+        self._posisi, self._jeda, self._maju_satu = None, False, False
+        self.btn_jeda.configure(text="⏸  Jeda")
         self._terbaru, self._galat, self._status_baru = None, None, None
         self.fps.set("memuat model dan memanaskan graf CUDA…")
         self.statistik.set("-")
@@ -369,8 +406,15 @@ class UjiRealtime:
                 teks_fps = (f"{satu_detik} frame/detik · frame {n} · terlewat {terlewat.jumlah}\n"
                             f"latensi median {np.median(lat):.1f} ms · maks {lat.max():.1f} ms")
                 tahap = "\n".join(f"{k:<13s} {np.median(v):6.2f} ms" for k, v in ms.items() if k != "latensi")
+                ok, jpg = cv2.imencode(".jpg", h.tampilan, [cv2.IMWRITE_JPEG_QUALITY, 90])
                 with self._kunci:
                     self._terbaru = (h.tampilan, teks_fps, tahap, self._teks_ukuran(h))
+                    if ok:
+                        self._riwayat.append((jpg, teks_fps, tahap, self._terbaru[3]))
+                # Jeda: pipeline ditahan di sini (rekaman berhenti dibaca; kamera membuang frame yang tertinggal).
+                while self._jeda and self.jalan and not self._maju_satu:
+                    time.sleep(0.03)
+                self._maju_satu = False
         except Exception as e:                                   # galat pipeline ditampilkan, Studio tetap hidup
             baris = [b for b in str(e).strip().splitlines() if b.strip()]
             self._galat = f"{type(e).__name__}: {baris[-1][:300] if baris else ''}"
@@ -405,13 +449,20 @@ class UjiRealtime:
     def _segarkan(self) -> None:
         with self._kunci:
             terbaru, self._terbaru = self._terbaru, None
-        if terbaru is not None:
+        if terbaru is not None and self._posisi is not None:
+            self._ada_frame = True                               # sedang meninjau riwayat: tampilan tidak diganti
+            self._perbarui_geser()
+        elif terbaru is not None:
             self._ada_frame = True
+            self._perbarui_geser()
             tampilan, teks_fps, tahap, ukuran = terbaru
             self.fps.set(teks_fps)
             self.statistik.set(tahap)
             self.ukuran.set(ukuran)
             self._tampilkan(tampilan)
+            if self._jeda:                                       # frame hasil "maju satu" saat jeda
+                self._posisi = len(self._riwayat) - 1
+                self._perbarui_geser()
         if self._status_baru:
             self.status.set(self._status_baru)
             self._status_baru = None
@@ -451,17 +502,132 @@ class UjiRealtime:
         for k, b in enumerate(baris):
             cv2.putText(img, b.encode("ascii", "replace").decode(), (24, 48 + 30 * k), cv2.FONT_HERSHEY_SIMPLEX,
                         0.62, warna, 1, cv2.LINE_AA)
+        self._zoom, self._pusat = 1.0, None
         self._tampilkan(img)
 
     def _tampilkan(self, bgr: np.ndarray) -> None:
+        self._gambar_kini = bgr
+        self._gambar_ulang()
+
+    def _gambar_ulang(self) -> None:
+        """Gambar frame sekarang: pas dengan panel (boleh diperbesar), lalu zoom dan geser."""
+        bgr = self._gambar_kini
+        if bgr is None:
+            return
         try:
             from PIL import Image, ImageTk
         except Exception:
             return
-        lebar = max(320, self.kanvas.winfo_width())
-        tinggi = max(240, self.kanvas.winfo_height())
-        skala = min(1.0, lebar / bgr.shape[1], tinggi / bgr.shape[0])
-        kecil = cv2.resize(bgr, None, fx=skala, fy=skala, interpolation=cv2.INTER_AREA) if skala < 1 else bgr
-        img = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(kecil, cv2.COLOR_BGR2RGB)))
+        lebar, tinggi = max(320, self.kanvas.winfo_width()), max(240, self.kanvas.winfo_height())
+        h, w = bgr.shape[:2]
+        s = min(lebar / w, tinggi / h) * self._zoom
+        if self._pusat is None or self._zoom <= 1.0:
+            self._pusat = [w / 2, h / 2]
+        cx = min(max(self._pusat[0], lebar / (2 * s)), w - lebar / (2 * s)) if lebar / s < w else w / 2
+        cy = min(max(self._pusat[1], tinggi / (2 * s)), h - tinggi / (2 * s)) if tinggi / s < h else h / 2
+        self._pusat = [cx, cy]
+        x0, x1 = max(0, int(cx - lebar / (2 * s))), min(w, int(np.ceil(cx + lebar / (2 * s))))
+        y0, y1 = max(0, int(cy - tinggi / (2 * s))), min(h, int(np.ceil(cy + tinggi / (2 * s))))
+        potong = bgr[y0:y1, x0:x1]
+        tw, th = max(1, int(round(potong.shape[1] * s))), max(1, int(round(potong.shape[0] * s)))
+        cara = cv2.INTER_AREA if s < 1 else (cv2.INTER_NEAREST if s >= 3 else cv2.INTER_LINEAR)
+        img = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(cv2.resize(potong, (tw, th), interpolation=cara),
+                                                              cv2.COLOR_BGR2RGB)))
         self.foto = img                       # tahan referensi; tanpa ini gambar dikumpulkan GC
-        self.kanvas.configure(image=img)
+        self.kanvas.coords(self._id_gambar, (lebar - tw) // 2, (tinggi - th) // 2)
+        self.kanvas.itemconfigure(self._id_gambar, image=img)
+
+    def _zoom_di(self, e, faktor: float) -> None:
+        if self._gambar_kini is None:
+            return
+        lama = self._zoom
+        self._zoom = float(min(8.0, max(1.0, self._zoom * faktor)))
+        if self._pusat is not None and self._zoom != lama:
+            lebar, tinggi = max(320, self.kanvas.winfo_width()), max(240, self.kanvas.winfo_height())
+            h, w = self._gambar_kini.shape[:2]
+            s_lama = min(lebar / w, tinggi / h) * lama
+            # titik di bawah kursor tetap di bawah kursor
+            px = self._pusat[0] + (e.x - lebar / 2) / s_lama
+            py = self._pusat[1] + (e.y - tinggi / 2) / s_lama
+            s_baru = s_lama * self._zoom / lama
+            self._pusat = [px - (e.x - lebar / 2) / s_baru, py - (e.y - tinggi / 2) / s_baru]
+        self._gambar_ulang()
+
+    def _mulai_seret(self, e) -> None:
+        self.kanvas.focus_set()
+        self._seret = (e.x, e.y)
+
+    def _seret_gambar(self, e) -> None:
+        if self._seret is None or self._gambar_kini is None or self._zoom <= 1.0:
+            return
+        lebar, tinggi = max(320, self.kanvas.winfo_width()), max(240, self.kanvas.winfo_height())
+        h, w = self._gambar_kini.shape[:2]
+        s = min(lebar / w, tinggi / h) * self._zoom
+        self._pusat[0] -= (e.x - self._seret[0]) / s
+        self._pusat[1] -= (e.y - self._seret[1]) / s
+        self._seret = (e.x, e.y)
+        self._gambar_ulang()
+
+    def pas_layar(self) -> None:
+        self._zoom, self._pusat = 1.0, None
+        self._gambar_ulang()
+
+    def jeda(self) -> None:
+        """Jeda/lanjut. Saat jeda, pipeline ditahan dan riwayat frame bisa ditinjau."""
+        if not self._riwayat:
+            return
+        self._jeda = not self._jeda
+        if self._jeda:
+            self._posisi = len(self._riwayat) - 1
+            self.btn_jeda.configure(text="▶  Lanjut")
+        else:
+            self._posisi = None
+            self.btn_jeda.configure(text="⏸  Jeda")
+        self._perbarui_geser()
+
+    def langkah(self, arah: int) -> None:
+        """Mundur/maju satu frame. Maju dari frame terbaru saat jeda memproses satu frame baru."""
+        if not self._riwayat:
+            return
+        if not self._jeda and (self.jalan or (self.thread is not None and self.thread.is_alive())):
+            self.jeda()
+        akhir = len(self._riwayat) - 1
+        pos = akhir if self._posisi is None else self._posisi
+        if arah > 0 and pos >= akhir:
+            if self.jalan:
+                self._maju_satu = True                   # pekerja memproses satu frame, lalu tertahan lagi
+                self._posisi = None                      # _segarkan menampilkan frame baru itu
+            return
+        self._lihat(max(0, min(akhir, pos + arah)))
+
+    def _lihat(self, i: int) -> None:
+        with self._kunci:
+            if not self._riwayat:
+                return
+            i = max(0, min(len(self._riwayat) - 1, i))
+            jpg, teks_fps, tahap, ukuran = self._riwayat[i]
+        self._posisi = i
+        self.fps.set(teks_fps)
+        self.statistik.set(tahap)
+        self.ukuran.set(ukuran)
+        self._tampilkan(cv2.imdecode(jpg, cv2.IMREAD_COLOR))
+        self._perbarui_geser()
+
+    def _geser_riwayat(self, nilai) -> None:
+        if self._atur_geser or (self._posisi is None and not self._jeda and self.jalan):
+            return                                      # saat berjalan, penggeser hanya penunjuk
+        i = int(round(float(nilai)))
+        if i != self._posisi:
+            self._lihat(i)
+
+    def _perbarui_geser(self) -> None:
+        n = len(self._riwayat)
+        pos = n - 1 if self._posisi is None else self._posisi
+        self._atur_geser = True                         # set() memanggil command; jangan dianggap geseran pemakai
+        try:
+            self.geser.configure(to=max(0, n - 1))
+            self.geser.set(max(0, pos))
+        finally:
+            self._atur_geser = False
+        if n:
+            self.posisi_teks.set(f"frame {pos + 1} dari {n} terakhir" + ("  (jeda)" if self._jeda else ""))
