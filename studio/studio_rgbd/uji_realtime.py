@@ -211,7 +211,7 @@ class UjiRealtime:
             side="left", fill="x", expand=True, padx=(0, 2))
         self._tombol(baris, "Pilih rekaman…", self.pilih_rekaman, "#E8DDD5", INK).pack(
             side="left", fill="x", expand=True, padx=(2, 0))
-        self._centang(i, "Putar seperti kamera (laju asli rekaman, frame yang tertinggal dibuang)",
+        self._centang(i, "Putar pada laju asli rekaman (semua frame diproses, tidak ada yang dibuang)",
                       self.waktu_nyata)
 
         b, i = self._kartu(kanan, "Kendali")
@@ -363,8 +363,11 @@ class UjiRealtime:
         if atur["sumber"] == "kamera":
             sumber = {"jenis": "kamera", "lewati": 30, "maks": 0}
         else:
-            sumber = {"jenis": "rekaman", "jalur": atur["rekaman"], "lewati": 20, "maks": 0,
-                      "waktu_nyata": atur["waktu_nyata"]}
+            # Rekaman selalu dibaca tanpa membuang frame. "Laju asli" ditahan di _loop menurut cap waktu
+            # rekaman. Dulu laju asli = waktu nyata librealsense, yang membuang frame bila Studio tertinggal
+            # (27 Nov: 22-36 % frame terbuang, video tampak dipercepat, pelacak melihat lompatan, jeda
+            # membuang rekaman yang lewat).
+            sumber = {"jenis": "rekaman", "jalur": atur["rekaman"], "lewati": 20, "maks": 0, "waktu_nyata": False}
         return sumber, mesin, gpu
 
     def _loop(self, atur: dict) -> None:
@@ -385,7 +388,10 @@ class UjiRealtime:
                 self._simpanan = dasar.with_suffix(".mp4")
             mesin_teks = "GPU FP16 + graf CUDA" if mesin.get("graf") else ("GPU FP32" if gpu else "CPU FP32")
             self._status_baru = (f"Berjalan: {mesin_teks}, sumber {nama}"
-                                 f"{' (seperti kamera)' if sumber.get('waktu_nyata') else ' (secepatnya)'}.")
+                                 f"{' (laju asli)' if atur['waktu_nyata'] and sumber['jenis'] == 'rekaman' else ''}"
+                                 f"{' (secepatnya)' if not atur['waktu_nyata'] and sumber['jenis'] == 'rekaman' else ''}.")
+            tahan_laju = atur["waktu_nyata"] and sumber["jenis"] == "rekaman"
+            acuan = None                                     # (detik dinding, detik rekaman) penahan laju
             tiba = collections.deque(maxlen=600)
             ms = collections.defaultdict(lambda: collections.deque(maxlen=JENDELA_STAT))
             terlewat, n = PenghitungTerlewat(), 0
@@ -411,9 +417,22 @@ class UjiRealtime:
                     self._terbaru = (h.tampilan, teks_fps, tahap, self._teks_ukuran(h))
                     if ok:
                         self._riwayat.append((jpg, teks_fps, tahap, self._terbaru[3]))
+                # Laju asli: tahan sampai waktu dinding menyusul cap waktu rekaman. Bila tertinggal (pipeline lebih
+                # lambat dari rekaman) acuan digeser, tidak dikejar, sehingga tidak pernah tampak dipercepat.
+                if tahan_laju:
+                    sekarang = time.perf_counter()
+                    if acuan is None or sekarang - (acuan[0] + h.waktu - acuan[1]) > 0.25 or h.waktu < acuan[1]:
+                        acuan = (sekarang, h.waktu)
+                    while self.jalan and not self._jeda:
+                        sisa = acuan[0] + (h.waktu - acuan[1]) - time.perf_counter()
+                        if sisa <= 0:
+                            break
+                        time.sleep(min(sisa, 0.02))
                 # Jeda: pipeline ditahan di sini (rekaman berhenti dibaca; kamera membuang frame yang tertinggal).
-                while self._jeda and self.jalan and not self._maju_satu:
-                    time.sleep(0.03)
+                if self._jeda:
+                    while self._jeda and self.jalan and not self._maju_satu:
+                        time.sleep(0.03)
+                    acuan = None                                 # lanjut dari sini, tanpa mengejar waktu jeda
                 self._maju_satu = False
         except Exception as e:                                   # galat pipeline ditampilkan, Studio tetap hidup
             baris = [b for b in str(e).strip().splitlines() if b.strip()]
