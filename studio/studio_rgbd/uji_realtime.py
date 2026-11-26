@@ -109,6 +109,9 @@ class UjiRealtime:
         self._gambar_kini = None           # BGR yang sedang tampil (untuk gambar ulang saat zoom/geser/ubah ukuran)
         self._seret = None
         self._atur_geser = False
+        # Hentikan lalu Mulai lagi pada rekaman + model yang sama: lanjut dari frame terakhir, bukan dari awal.
+        self._lanjut = None                # {'kunci': (rekaman, bobot, presisi, laju asli), 'frame': n}
+        self._frame_akhir = 0
 
         # Bawaan = model pengusul Studio (dulu rujukan lama final_d435, 5 rekaman latih).
         self._label_model, self._jalur_model, bawaan = label_dan_jalur()
@@ -218,6 +221,11 @@ class UjiRealtime:
         b.pack(fill="x", pady=(10, 0))
         self.btn_mulai = self._tombol(i, "▶  Mulai", self.toggle, GREEN)
         self.btn_mulai.pack(fill="x", pady=2)
+        # Muncul hanya bila ada jalannya yang dihentikan di tengah dan bisa dilanjutkan.
+        self.btn_awal = self._tombol(i, "↺  Mulai dari awal", self.mulai_dari_awal, "#E8DDD5", INK)
+        self._kendali = i
+        for v in (self.rekaman, self.bobot, self.presisi, self.sumber, self.waktu_nyata, self.simpan):
+            v.trace_add("write", lambda *_: self._atur_tombol_mulai())
         self._centang(i, "Simpan video + JSON ukuran ke aplikasi_tangga/keluaran/", self.simpan)
 
         b, i = self._kartu(kanan, "Laju, latensi, waktu per tahap")
@@ -325,30 +333,63 @@ class UjiRealtime:
         atur = {"bobot": bobot, "presisi": self.presisi.get(), "sumber": self.sumber.get(),
                 "rekaman": self.rekaman.get(), "waktu_nyata": bool(self.waktu_nyata.get()),
                 "simpan": bool(self.simpan.get())}
+        dari = self._frame_lanjut()
+        atur["lanjut_dari"] = dari
         self.jalan = True
-        self._riwayat.clear()
+        self._lanjut, self._frame_akhir = None, 0
+        if not dari:
+            self._riwayat.clear()                    # lanjut: riwayat frame sebelum berhenti tetap bisa ditinjau
         self._posisi, self._jeda, self._maju_satu = None, False, False
         self.btn_jeda.configure(text="⏸  Jeda")
         self._terbaru, self._galat, self._status_baru = None, None, None
         self.fps.set("memuat model dan memanaskan graf CUDA…")
         self.statistik.set("-")
         self.ukuran.set("-")
-        self.status.set("Memulai…")
+        self.status.set(f"Melanjutkan dari frame {dari}…" if dari else "Memulai…")
         self.btn_mulai.configure(text="■  Hentikan", bg=RED)
+        self.btn_awal.pack_forget()
         self._t_mulai, self._ada_frame, self._sudah_diingatkan = time.monotonic(), False, False
         asal = "kamera D435" if atur["sumber"] == "kamera" else Path(atur["rekaman"]).parent.parent.name
         self._pesan(f"Memuat model dan memanaskan graf CUDA…\nSumber: {asal}\n\n"
-                    "Gambar biasanya muncul 7-10 detik setelah Mulai.")
+                    + (f"Melanjutkan: frame 1-{dari} diproses ulang tanpa ditampilkan agar pelacak sama persis,\n"
+                       f"lalu tampilan lanjut dari frame {dari + 1}." if dari else
+                       "Gambar biasanya muncul 7-10 detik setelah Mulai."))
         self.thread = threading.Thread(target=self._loop, args=(atur,), daemon=True)
         self.thread.start()
         self.induk.after(50, self._segarkan)
 
     def berhenti(self) -> None:
         self.jalan = False
+        self._atur_tombol_mulai()
+
+    def _kunci_lanjut(self) -> tuple:
+        return (self.rekaman.get(), self.bobot.get(), self.presisi.get(), bool(self.waktu_nyata.get()))
+
+    def _frame_lanjut(self) -> int:
+        """Frame terakhir jalannya yang dihentikan, bila Mulai sekarang boleh melanjutkannya; 0 = dari awal."""
+        l = self._lanjut
+        if (l is None or self.sumber.get() != "rekaman" or bool(self.simpan.get())
+                or l["kunci"] != self._kunci_lanjut()):
+            return 0
+        return int(l["frame"])
+
+    def _atur_tombol_mulai(self) -> None:
         try:
-            self.btn_mulai.configure(text="▶  Mulai", bg=GREEN)
+            if self.jalan:
+                return
+            dari = self._frame_lanjut() if not (self.thread is not None and self.thread.is_alive()) else 0
+            self.btn_mulai.configure(text=f"▶  Lanjutkan dari frame {dari}" if dari else "▶  Mulai", bg=GREEN)
+            if dari:
+                self.btn_awal.pack(in_=self._kendali, fill="x", pady=2, after=self.btn_mulai)
+            else:
+                self.btn_awal.pack_forget()
         except Exception:
             pass
+
+    def mulai_dari_awal(self) -> None:
+        self._lanjut = None
+        self._atur_tombol_mulai()
+        self.mulai()
 
     # -------------------------------------------------------------- pekerja
 
@@ -397,9 +438,19 @@ class UjiRealtime:
             tiba = collections.deque(maxlen=600)
             ms = collections.defaultdict(lambda: collections.deque(maxlen=JENDELA_STAT))
             terlewat, n = PenghitungTerlewat(), 0
+            dari = int(atur.get("lanjut_dari") or 0)
+            habis = False
             for h in jalankan_paralel(sumber, mesin, render=True, judul=f"Studio: {nama}"):
                 if not self.jalan:
                     break
+                self._frame_akhir = h.nomor
+                if h.nomor <= dari:
+                    # Menyusul frame yang sudah dilihat sebelum Hentikan: diproses (pelacak sama persis) tanpa
+                    # ditampilkan, ditahan laju, atau disimpan.
+                    if h.nomor % 15 == 0 or h.nomor == dari:
+                        self._status_baru = (f"Menyusul frame {h.nomor} dari {dari}…" if h.nomor < dari
+                                             else f"Lanjut dari frame {dari + 1}.")
+                    continue
                 sekarang = time.perf_counter()
                 n += 1
                 tiba.append(sekarang)
@@ -436,6 +487,8 @@ class UjiRealtime:
                         time.sleep(0.03)
                     acuan = None                                 # lanjut dari sini, tanpa mengejar waktu jeda
                 self._maju_satu = False
+            else:
+                habis = self.jalan                               # rekaman habis (bukan dihentikan pemakai)
         except Exception as e:                                   # galat pipeline ditampilkan, Studio tetap hidup
             baris = [b for b in str(e).strip().splitlines() if b.strip()]
             self._galat = f"{type(e).__name__}: {baris[-1][:300] if baris else ''}"
@@ -447,6 +500,10 @@ class UjiRealtime:
                 self._galat = self._galat or f"video: {e}"
             if berkas_json is not None:
                 berkas_json.close()
+            if (atur["sumber"] == "rekaman" and not atur["simpan"] and not self._galat
+                    and not locals().get("habis", False) and self._frame_akhir > 0):
+                self._lanjut = {"kunci": (atur["rekaman"], str(atur["bobot"]), atur["presisi"], atur["waktu_nyata"]),
+                                "frame": self._frame_akhir}
             self.jalan = False
 
     @staticmethod
@@ -509,7 +566,8 @@ class UjiRealtime:
         self.berhenti()
         if not self.status.get().startswith("Berhenti karena galat"):
             simpan = self._simpanan
-            self.status.set(f"Selesai.{f' Video dan JSON: {simpan}' if simpan else ''}")
+            self.status.set(f"Dihentikan di frame {self._lanjut['frame']}; 'Lanjutkan' meneruskan dari situ."
+                            if self._lanjut else f"Selesai.{f' Video dan JSON: {simpan}' if simpan else ''}")
         self._simpanan = None
 
     def _pesan(self, teks: str, warna=(210, 210, 210)) -> None:
